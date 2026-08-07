@@ -1,0 +1,64 @@
+# Yorùbá Heritage World Virtual — local development / VPS deployment foundation
+#
+# Secrets are interpolated from the local .env file (never committed).
+# Copy .env.example to .env first. No Redis by design (TECHNICAL_CANON.md §3.1).
+#
+# Common usage:
+#   docker compose up -d db     # database only; run the app on the host with `bun run dev`
+#   docker compose up --build   # full stack (production-style app build + database)
+
+name: yoruba-heritage-world-virtual
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    environment:
+      NODE_ENV: production
+      APP_PORT: 3000
+      DATABASE_HOST: db
+      DATABASE_PORT: 3306
+      DATABASE_USER: ${DATABASE_USER:?set in .env}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?set in .env}
+      DATABASE_NAME: ${DATABASE_NAME:?set in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # A dedicated worker service (database-backed job queue, canon §21) will be
+  # added in a later approved stage. It will reuse this image with a different
+  # command, e.g.:
+  #
+  # worker:
+  #   build: .
+  #   command: ["bun", "run", "worker"]
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    command:
+      - '--character-set-server=utf8mb4'
+      - '--collation-server=utf8mb4_unicode_ci'
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DATABASE_ROOT_PASSWORD:?set in .env}
+      MARIADB_DATABASE: ${DATABASE_NAME:?set in .env}
+      MARIADB_USER: ${DATABASE_USER:?set in .env}
+      MARIADB_PASSWORD: ${DATABASE_PASSWORD:?set in .env}
+    ports:
+      - '${DATABASE_PORT:-3306}:3306'
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  db_data:

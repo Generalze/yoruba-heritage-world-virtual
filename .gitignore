@@ -1,0 +1,37 @@
+# --- Dependencies ---
+node_modules/
+
+# --- Environment / secrets ---
+# Never commit real credentials, API keys, or production configuration.
+# Only .env.example (placeholders) belongs in Git.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Build outputs ---
+dist/
+dist-ssr/
+.output/
+.nitro/
+.tanstack/
+.vinxi/
+.wrangler/
+*.local
+
+# --- Test / coverage ---
+coverage/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Editors / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Local database data (if ever mounted locally) ---
+db-data/
