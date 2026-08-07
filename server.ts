@@ -7,7 +7,9 @@
  * fetch handler. Run `bun run build` first, then `bun run start`.
  */
 import { statSync } from 'node:fs'
-import { join, normalize } from 'node:path'
+import { join } from 'node:path'
+
+import { resolveContainedPath } from './src/lib/static-files'
 
 // @ts-expect-error — compiled server bundle exists only after `bun run build`
 import serverEntryModule from './dist/server/server.js'
@@ -20,14 +22,8 @@ const clientDir = join(import.meta.dir, 'dist', 'client')
 const port = Number(process.env.APP_PORT ?? process.env.PORT ?? 3000)
 
 function findStaticFile(pathname: string): string | undefined {
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(pathname)
-  } catch {
-    return undefined
-  }
-  const candidate = normalize(join(clientDir, decoded))
-  if (!candidate.startsWith(clientDir)) return undefined
+  const candidate = resolveContainedPath(clientDir, pathname)
+  if (!candidate) return undefined
   try {
     if (statSync(candidate).isFile()) return candidate
   } catch {

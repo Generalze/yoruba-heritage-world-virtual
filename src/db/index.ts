@@ -27,7 +27,9 @@ export function getPool(): mysql.Pool {
     password: env.DATABASE_PASSWORD,
     database: env.DATABASE_NAME,
     charset: 'utf8mb4_unicode_ci',
-    connectionLimit: 10,
+    // Cost-conscious VPS start (canon §2): 5 pooled connections are
+    // sufficient for the foundation; raise only when load justifies it.
+    connectionLimit: 5,
     connectTimeout: 5_000,
   })
   return pool

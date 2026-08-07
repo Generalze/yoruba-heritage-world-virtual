@@ -29,6 +29,8 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/server.ts ./server.ts
+# server.ts imports the static-path containment helper at runtime
+COPY --from=build /app/src/lib ./src/lib
 
 EXPOSE 3000
 USER bun
