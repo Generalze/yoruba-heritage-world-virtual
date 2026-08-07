@@ -85,18 +85,38 @@ Health check: `GET http://localhost:3000/api/health` reports application and dat
 
 Useful scripts:
 
-| Command               | Purpose                            |
-| --------------------- | ---------------------------------- |
-| `bun run dev`         | Development server (port 3000)     |
-| `bun run build`       | Production build (`dist/`)         |
-| `bun run start`       | Run the production build with Bun  |
-| `bun run typecheck`   | Generate routes + TypeScript check |
-| `bun run lint`        | ESLint                             |
-| `bun run test`        | Unit tests (`bun test`)            |
-| `bun run db:generate` | Generate Drizzle migrations        |
-| `bun run db:migrate`  | Apply migrations to the database   |
+| Command               | Purpose                             |
+| --------------------- | ----------------------------------- |
+| `bun run dev`         | Development server (port 3000)      |
+| `bun run build`       | Production build (`dist/`)          |
+| `bun run start`       | Run the production build with Bun   |
+| `bun run typecheck`   | Generate routes + TypeScript check  |
+| `bun run lint`        | ESLint                              |
+| `bun run test`        | Unit tests (`bun test`)             |
+| `bun run db:generate` | Generate Drizzle migrations         |
+| `bun run db:migrate`  | Apply migrations to the database    |
+| `bun run db:seed`     | Seed roles/permissions (idempotent) |
 
 Full stack via Docker (production-style): `docker compose up --build`.
+
+### Authentication development notes
+
+After starting the database, run migrations and the RBAC seed once:
+
+```bash
+bun run db:migrate
+bun run db:seed
+```
+
+- Registration/login live at `/register` and `/login`; the authenticated
+  dashboard is at `/dashboard`.
+- Sessions are server-side: the browser holds only an opaque token in an
+  HttpOnly cookie, the database stores a SHA-256 hash of it. No
+  `SESSION_SECRET` is needed at this stage, so none exists in `.env`.
+- The seed creates roles and permissions only — never users or
+  passwords. Register through the UI to create a local account.
+- `bun test` includes database integration tests and requires the local
+  MariaDB container to be running with migrations applied.
 
 ## Development Principles
 
