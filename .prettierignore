@@ -1,0 +1,12 @@
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+# Locked governing document — must not be modified, even by formatting
+TECHNICAL_CANON.md
+src/routeTree.gen.ts
+migrations
+dist
+.output
+.tanstack
+.nitro

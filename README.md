@@ -12,18 +12,18 @@ The platform is currently being designed and developed before deployment to a pr
 
 The platform will provide:
 
-* User registration and private spiritual profiles
-* Yorùbá deity profiles
-* Sacred House profiles and services
-* Sacred House appointment booking
-* Secure online payments
-* Personalised 90–120 second Recorded Prayer Rooms
-* Realistic AI-assisted spiritual visuals
-* Approved recorded prayer audio and controlled TTS
-* Daily spiritual subscriptions
-* Offerings and thanksgiving services
-* Administrative content approval
-* Roles, permissions and audit logs
+- User registration and private spiritual profiles
+- Yorùbá deity profiles
+- Sacred House profiles and services
+- Sacred House appointment booking
+- Secure online payments
+- Personalised 90–120 second Recorded Prayer Rooms
+- Realistic AI-assisted spiritual visuals
+- Approved recorded prayer audio and controlled TTS
+- Daily spiritual subscriptions
+- Offerings and thanksgiving services
+- Administrative content approval
+- Roles, permissions and audit logs
 
 ## Personalised Prayer Video System
 
@@ -65,20 +65,53 @@ The Technical Canon defines the project's architecture, video-generation system,
 
 Changes that conflict with the Technical Canon should not be implemented unless the canon is deliberately reviewed and updated.
 
+## Getting Started (Development)
+
+Prerequisites: [Bun](https://bun.sh) 1.3+, [Docker](https://www.docker.com/) (for the local database).
+
+```bash
+# 1. Configure environment (placeholders only — never commit .env)
+cp .env.example .env   # then fill in your local values
+
+# 2. Start the local MariaDB database
+docker compose up -d db
+
+# 3. Install dependencies and run the app
+bun install
+bun run dev            # http://localhost:3000
+```
+
+Health check: `GET http://localhost:3000/api/health` reports application and database status.
+
+Useful scripts:
+
+| Command               | Purpose                            |
+| --------------------- | ---------------------------------- |
+| `bun run dev`         | Development server (port 3000)     |
+| `bun run build`       | Production build (`dist/`)         |
+| `bun run start`       | Run the production build with Bun  |
+| `bun run typecheck`   | Generate routes + TypeScript check |
+| `bun run lint`        | ESLint                             |
+| `bun run test`        | Unit tests (`bun test`)            |
+| `bun run db:generate` | Generate Drizzle migrations        |
+| `bun run db:migrate`  | Apply migrations to the database   |
+
+Full stack via Docker (production-style): `docker compose up --build`.
+
 ## Development Principles
 
-* GitHub-first development
-* VPS-ready architecture
-* Cost-conscious development
-* MySQL / MariaDB database
-* Background processing for video generation
-* Remotion + FFmpeg for final video assembly
-* Kling for selected realistic generated scenes
-* OpenArt for approved visual-asset development
-* Private media storage
-* AI provider abstraction
-* Sacred and cultural content approval before publication
-* AI must not independently invent prayers, rituals, doctrine, or spiritual instructions
+- GitHub-first development
+- VPS-ready architecture
+- Cost-conscious development
+- MySQL / MariaDB database
+- Background processing for video generation
+- Remotion + FFmpeg for final video assembly
+- Kling for selected realistic generated scenes
+- OpenArt for approved visual-asset development
+- Private media storage
+- AI provider abstraction
+- Sacred and cultural content approval before publication
+- AI must not independently invent prayers, rituals, doctrine, or spiritual instructions
 
 ## Development Phases
 
@@ -98,4 +131,4 @@ Membership, community, and expanded subscription services.
 
 **Yorùbá Heritage World Virtual**
 
-*A digital home for Yorùbá prayer, ancestral connection and sacred cultural practice.*
+_A digital home for Yorùbá prayer, ancestral connection and sacred cultural practice._
