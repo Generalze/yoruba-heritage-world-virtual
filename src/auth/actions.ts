@@ -1,7 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
-import { getRequestHeader, getRequestIP } from '@tanstack/react-start/server'
 
-import { env } from '@/lib/env'
+import { requestContext } from '@/server/request-context'
 import {
   clearSessionCookie,
   getSessionCookie,
@@ -10,7 +9,6 @@ import {
 import { getAuthenticatedUser } from './guards'
 import { loginUser, logoutUser, registerUser } from './service'
 import { loginInputSchema, registerInputSchema } from './validation'
-import type { RequestContext } from './service'
 import type { SafeUser } from './session'
 
 /**
@@ -26,16 +24,6 @@ import type { SafeUser } from './session'
 export interface AuthActionResult {
   ok: boolean
   error?: string
-}
-
-function requestContext(): RequestContext {
-  // X-Forwarded-For is honored only behind an explicitly trusted proxy
-  // (TRUST_PROXY=true); otherwise the socket address is authoritative
-  // so clients cannot spoof their IP (rate limiting, audit logs).
-  return {
-    ipAddress: getRequestIP({ xForwardedFor: env.TRUST_PROXY }) ?? null,
-    userAgent: getRequestHeader('user-agent') ?? null,
-  }
 }
 
 export const registerFn = createServerFn({ method: 'POST' })

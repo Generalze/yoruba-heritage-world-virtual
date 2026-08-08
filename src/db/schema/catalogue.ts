@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   int,
@@ -9,6 +10,8 @@ import {
   uniqueIndex,
   varchar,
 } from 'drizzle-orm/mysql-core'
+
+import { users } from './users'
 
 /**
  * Spiritual-domain catalogue (Phase One, Step 3; canon §25 domains:
@@ -56,6 +59,18 @@ export const deities = mysqlTable(
     profileStatus: mysqlEnum('profile_status', CATALOGUE_STATUSES)
       .notNull()
       .default('DRAFT'),
+    // Approval trail (canon §30): who approved the current content and
+    // when. Cleared whenever content changes after approval. Kept as
+    // SET NULL so the trail's row survives account deletion (full
+    // history also lands in audit_logs).
+    approvedBy: bigint('approved_by', {
+      mode: 'number',
+      unsigned: true,
+    }).references(() => users.id, { onDelete: 'set null' }),
+    approvedAt: timestamp('approved_at'),
+    // Reviewer's reason when a submission is returned to DRAFT;
+    // cleared on the next submission.
+    reviewNote: varchar('review_note', { length: 500 }),
     sortOrder: int('sort_order').notNull().default(0),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -77,6 +92,12 @@ export const sacredHouses = mysqlTable(
     slug: varchar('slug', { length: 100 }).notNull(),
     shortDescription: varchar('short_description', { length: 1000 }),
     status: mysqlEnum('status', CATALOGUE_STATUSES).notNull().default('DRAFT'),
+    approvedBy: bigint('approved_by', {
+      mode: 'number',
+      unsigned: true,
+    }).references(() => users.id, { onDelete: 'set null' }),
+    approvedAt: timestamp('approved_at'),
+    reviewNote: varchar('review_note', { length: 500 }),
     sortOrder: int('sort_order').notNull().default(0),
     active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -171,6 +192,12 @@ export const services = mysqlTable(
     serviceStatus: mysqlEnum('service_status', CATALOGUE_STATUSES)
       .notNull()
       .default('DRAFT'),
+    approvedBy: bigint('approved_by', {
+      mode: 'number',
+      unsigned: true,
+    }).references(() => users.id, { onDelete: 'set null' }),
+    approvedAt: timestamp('approved_at'),
+    reviewNote: varchar('review_note', { length: 500 }),
     durationMinutes: int('duration_minutes', { unsigned: true }),
     priceMinor: int('price_minor', { unsigned: true }),
     currency: varchar('currency', { length: 3 }),
