@@ -12,8 +12,15 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as OlodumareRouteImport } from './routes/olodumare'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
+import { Route as DeitiesIndexRouteImport } from './routes/deities.index'
+import { Route as DeitiesSlugRouteImport } from './routes/deities.$slug'
+import { Route as SacredHousesIndexRouteImport } from './routes/sacred-houses.index'
+import { Route as SacredHousesSlugRouteImport } from './routes/sacred-houses.$slug'
+import { Route as ServicesIndexRouteImport } from './routes/services.index'
+import { Route as ServicesSlugRouteImport } from './routes/services.$slug'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -30,6 +37,11 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OlodumareRoute = OlodumareRouteImport.update({
+  id: '/olodumare',
+  path: '/olodumare',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RegisterRoute = RegisterRouteImport.update({
   id: '/register',
   path: '/register',
@@ -40,43 +52,138 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DeitiesIndexRoute = DeitiesIndexRouteImport.update({
+  id: '/deities/',
+  path: '/deities/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeitiesSlugRoute = DeitiesSlugRouteImport.update({
+  id: '/deities/$slug',
+  path: '/deities/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SacredHousesIndexRoute = SacredHousesIndexRouteImport.update({
+  id: '/sacred-houses/',
+  path: '/sacred-houses/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SacredHousesSlugRoute = SacredHousesSlugRouteImport.update({
+  id: '/sacred-houses/$slug',
+  path: '/sacred-houses/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServicesIndexRoute = ServicesIndexRouteImport.update({
+  id: '/services/',
+  path: '/services/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ServicesSlugRoute = ServicesSlugRouteImport.update({
+  id: '/services/$slug',
+  path: '/services/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
+  '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
+  '/deities/$slug': typeof DeitiesSlugRoute
+  '/sacred-houses/$slug': typeof SacredHousesSlugRoute
+  '/services/$slug': typeof ServicesSlugRoute
+  '/deities/': typeof DeitiesIndexRoute
+  '/sacred-houses/': typeof SacredHousesIndexRoute
+  '/services/': typeof ServicesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
+  '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
+  '/deities/$slug': typeof DeitiesSlugRoute
+  '/sacred-houses/$slug': typeof SacredHousesSlugRoute
+  '/services/$slug': typeof ServicesSlugRoute
+  '/deities': typeof DeitiesIndexRoute
+  '/sacred-houses': typeof SacredHousesIndexRoute
+  '/services': typeof ServicesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
+  '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
+  '/deities/$slug': typeof DeitiesSlugRoute
+  '/sacred-houses/$slug': typeof SacredHousesSlugRoute
+  '/services/$slug': typeof ServicesSlugRoute
+  '/deities/': typeof DeitiesIndexRoute
+  '/sacred-houses/': typeof SacredHousesIndexRoute
+  '/services/': typeof ServicesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard' | '/login' | '/register' | '/api/health'
+  fullPaths:
+    | '/'
+    | '/dashboard'
+    | '/login'
+    | '/olodumare'
+    | '/register'
+    | '/api/health'
+    | '/deities/$slug'
+    | '/sacred-houses/$slug'
+    | '/services/$slug'
+    | '/deities/'
+    | '/sacred-houses/'
+    | '/services/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/login' | '/register' | '/api/health'
-  id: '__root__' | '/' | '/dashboard' | '/login' | '/register' | '/api/health'
+  to:
+    | '/'
+    | '/dashboard'
+    | '/login'
+    | '/olodumare'
+    | '/register'
+    | '/api/health'
+    | '/deities/$slug'
+    | '/sacred-houses/$slug'
+    | '/services/$slug'
+    | '/deities'
+    | '/sacred-houses'
+    | '/services'
+  id:
+    | '__root__'
+    | '/'
+    | '/dashboard'
+    | '/login'
+    | '/olodumare'
+    | '/register'
+    | '/api/health'
+    | '/deities/$slug'
+    | '/sacred-houses/$slug'
+    | '/services/$slug'
+    | '/deities/'
+    | '/sacred-houses/'
+    | '/services/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRoute
   LoginRoute: typeof LoginRoute
+  OlodumareRoute: typeof OlodumareRoute
   RegisterRoute: typeof RegisterRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  DeitiesSlugRoute: typeof DeitiesSlugRoute
+  SacredHousesSlugRoute: typeof SacredHousesSlugRoute
+  ServicesSlugRoute: typeof ServicesSlugRoute
+  DeitiesIndexRoute: typeof DeitiesIndexRoute
+  SacredHousesIndexRoute: typeof SacredHousesIndexRoute
+  ServicesIndexRoute: typeof ServicesIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -102,6 +209,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/olodumare': {
+      id: '/olodumare'
+      path: '/olodumare'
+      fullPath: '/olodumare'
+      preLoaderRoute: typeof OlodumareRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/register': {
       id: '/register'
       path: '/register'
@@ -116,6 +230,48 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/deities/': {
+      id: '/deities/'
+      path: '/deities'
+      fullPath: '/deities/'
+      preLoaderRoute: typeof DeitiesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/deities/$slug': {
+      id: '/deities/$slug'
+      path: '/deities/$slug'
+      fullPath: '/deities/$slug'
+      preLoaderRoute: typeof DeitiesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sacred-houses/': {
+      id: '/sacred-houses/'
+      path: '/sacred-houses'
+      fullPath: '/sacred-houses/'
+      preLoaderRoute: typeof SacredHousesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sacred-houses/$slug': {
+      id: '/sacred-houses/$slug'
+      path: '/sacred-houses/$slug'
+      fullPath: '/sacred-houses/$slug'
+      preLoaderRoute: typeof SacredHousesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/services/': {
+      id: '/services/'
+      path: '/services'
+      fullPath: '/services/'
+      preLoaderRoute: typeof ServicesIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/services/$slug': {
+      id: '/services/$slug'
+      path: '/services/$slug'
+      fullPath: '/services/$slug'
+      preLoaderRoute: typeof ServicesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -123,8 +279,15 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRoute,
   LoginRoute: LoginRoute,
+  OlodumareRoute: OlodumareRoute,
   RegisterRoute: RegisterRoute,
   ApiHealthRoute: ApiHealthRoute,
+  DeitiesSlugRoute: DeitiesSlugRoute,
+  SacredHousesSlugRoute: SacredHousesSlugRoute,
+  ServicesSlugRoute: ServicesSlugRoute,
+  DeitiesIndexRoute: DeitiesIndexRoute,
+  SacredHousesIndexRoute: SacredHousesIndexRoute,
+  ServicesIndexRoute: ServicesIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
