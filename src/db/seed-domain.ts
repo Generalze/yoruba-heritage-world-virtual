@@ -7,6 +7,7 @@ import {
   sacredHouseFocusAreas,
   sacredHouseMembers,
   sacredHouses,
+  sacredHouseBookingSettings,
   services,
   spiritualInterests,
 } from '@/db/schema'
@@ -386,6 +387,16 @@ export async function seedDomain(): Promise<void> {
         })
         .onDuplicateKeyUpdate({ set: { sortOrder: (i + 1) * 10 } })
     }
+  }
+
+  // Default booking settings for each House: booking_enabled stays
+  // FALSE — seeding never opens a House for appointments, and no
+  // working hours are ever seeded. Admins configure real values.
+  for (const houseId of houseIdByCode.values()) {
+    await db
+      .insert(sacredHouseBookingSettings)
+      .values({ sacredHouseId: houseId })
+      .onDuplicateKeyUpdate({ set: { sacredHouseId: houseId } })
   }
 
   for (const [i, link] of APPROVED_DEITY_HOUSE_LINKS.entries()) {

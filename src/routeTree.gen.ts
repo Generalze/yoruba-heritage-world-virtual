@@ -27,8 +27,12 @@ import { Route as SacredHousesIndexRouteImport } from './routes/sacred-houses.in
 import { Route as SacredHousesSlugRouteImport } from './routes/sacred-houses.$slug'
 import { Route as ServicesIndexRouteImport } from './routes/services.index'
 import { Route as ServicesSlugRouteImport } from './routes/services.$slug'
+import { Route as AdminAppointmentsIndexRouteImport } from './routes/admin.appointments.index'
+import { Route as AdminAppointmentsIdRouteImport } from './routes/admin.appointments.$id'
 import { Route as AdminCatalogueIndexRouteImport } from './routes/admin.catalogue.index'
 import { Route as AdminCatalogueReviewRouteImport } from './routes/admin.catalogue.review'
+import { Route as AdminSchedulingIndexRouteImport } from './routes/admin.scheduling.index'
+import { Route as AdminSchedulingHouseIdRouteImport } from './routes/admin.scheduling.$houseId'
 import { Route as AdminCatalogueDeitiesIndexRouteImport } from './routes/admin.catalogue.deities.index'
 import { Route as AdminCatalogueDeitiesIdRouteImport } from './routes/admin.catalogue.deities.$id'
 import { Route as AdminCatalogueDeitiesNewRouteImport } from './routes/admin.catalogue.deities.new'
@@ -129,6 +133,16 @@ const ServicesSlugRoute = ServicesSlugRouteImport.update({
   path: '/services/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminAppointmentsIndexRoute = AdminAppointmentsIndexRouteImport.update({
+  id: '/appointments/',
+  path: '/appointments/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAppointmentsIdRoute = AdminAppointmentsIdRouteImport.update({
+  id: '/appointments/$id',
+  path: '/appointments/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminCatalogueIndexRoute = AdminCatalogueIndexRouteImport.update({
   id: '/catalogue/',
   path: '/catalogue/',
@@ -137,6 +151,16 @@ const AdminCatalogueIndexRoute = AdminCatalogueIndexRouteImport.update({
 const AdminCatalogueReviewRoute = AdminCatalogueReviewRouteImport.update({
   id: '/catalogue/review',
   path: '/catalogue/review',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSchedulingIndexRoute = AdminSchedulingIndexRouteImport.update({
+  id: '/scheduling/',
+  path: '/scheduling/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSchedulingHouseIdRoute = AdminSchedulingHouseIdRouteImport.update({
+  id: '/scheduling/$houseId',
+  path: '/scheduling/$houseId',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminCatalogueDeitiesIndexRoute =
@@ -212,8 +236,12 @@ export interface FileRoutesByFullPath {
   '/profile/': typeof ProfileIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
+  '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/admin/appointments/': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/scheduling/': typeof AdminSchedulingIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -242,8 +270,12 @@ export interface FileRoutesByTo {
   '/profile': typeof ProfileIndexRoute
   '/sacred-houses': typeof SacredHousesIndexRoute
   '/services': typeof ServicesIndexRoute
+  '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/admin/appointments': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue': typeof AdminCatalogueIndexRoute
+  '/admin/scheduling': typeof AdminSchedulingIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -274,8 +306,12 @@ export interface FileRoutesById {
   '/profile/': typeof ProfileIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
+  '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/admin/appointments/': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/scheduling/': typeof AdminSchedulingIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -307,8 +343,12 @@ export interface FileRouteTypes {
     | '/profile/'
     | '/sacred-houses/'
     | '/services/'
+    | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/scheduling/$houseId'
+    | '/admin/appointments/'
     | '/admin/catalogue/'
+    | '/admin/scheduling/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -337,8 +377,12 @@ export interface FileRouteTypes {
     | '/profile'
     | '/sacred-houses'
     | '/services'
+    | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/scheduling/$houseId'
+    | '/admin/appointments'
     | '/admin/catalogue'
+    | '/admin/scheduling'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -368,8 +412,12 @@ export interface FileRouteTypes {
     | '/profile/'
     | '/sacred-houses/'
     | '/services/'
+    | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/scheduling/$houseId'
+    | '/admin/appointments/'
     | '/admin/catalogue/'
+    | '/admin/scheduling/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -529,6 +577,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ServicesSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/appointments/': {
+      id: '/admin/appointments/'
+      path: '/appointments'
+      fullPath: '/admin/appointments/'
+      preLoaderRoute: typeof AdminAppointmentsIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/appointments/$id': {
+      id: '/admin/appointments/$id'
+      path: '/appointments/$id'
+      fullPath: '/admin/appointments/$id'
+      preLoaderRoute: typeof AdminAppointmentsIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/catalogue/': {
       id: '/admin/catalogue/'
       path: '/catalogue'
@@ -541,6 +603,20 @@ declare module '@tanstack/react-router' {
       path: '/catalogue/review'
       fullPath: '/admin/catalogue/review'
       preLoaderRoute: typeof AdminCatalogueReviewRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/scheduling/': {
+      id: '/admin/scheduling/'
+      path: '/scheduling'
+      fullPath: '/admin/scheduling/'
+      preLoaderRoute: typeof AdminSchedulingIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/scheduling/$houseId': {
+      id: '/admin/scheduling/$houseId'
+      path: '/scheduling/$houseId'
+      fullPath: '/admin/scheduling/$houseId'
+      preLoaderRoute: typeof AdminSchedulingHouseIdRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/catalogue/deities/': {
@@ -611,8 +687,12 @@ declare module '@tanstack/react-router' {
 
 interface AdminRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminAppointmentsIdRoute: typeof AdminAppointmentsIdRoute
   AdminCatalogueReviewRoute: typeof AdminCatalogueReviewRoute
+  AdminSchedulingHouseIdRoute: typeof AdminSchedulingHouseIdRoute
+  AdminAppointmentsIndexRoute: typeof AdminAppointmentsIndexRoute
   AdminCatalogueIndexRoute: typeof AdminCatalogueIndexRoute
+  AdminSchedulingIndexRoute: typeof AdminSchedulingIndexRoute
   AdminCatalogueDeitiesIdRoute: typeof AdminCatalogueDeitiesIdRoute
   AdminCatalogueDeitiesNewRoute: typeof AdminCatalogueDeitiesNewRoute
   AdminCatalogueSacredHousesIdRoute: typeof AdminCatalogueSacredHousesIdRoute
@@ -626,8 +706,12 @@ interface AdminRouteChildren {
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
+  AdminAppointmentsIdRoute: AdminAppointmentsIdRoute,
   AdminCatalogueReviewRoute: AdminCatalogueReviewRoute,
+  AdminSchedulingHouseIdRoute: AdminSchedulingHouseIdRoute,
+  AdminAppointmentsIndexRoute: AdminAppointmentsIndexRoute,
   AdminCatalogueIndexRoute: AdminCatalogueIndexRoute,
+  AdminSchedulingIndexRoute: AdminSchedulingIndexRoute,
   AdminCatalogueDeitiesIdRoute: AdminCatalogueDeitiesIdRoute,
   AdminCatalogueDeitiesNewRoute: AdminCatalogueDeitiesNewRoute,
   AdminCatalogueSacredHousesIdRoute: AdminCatalogueSacredHousesIdRoute,

@@ -21,6 +21,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@js-temporal/polyfill": "^0.5.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "^0.10.9",
     "@tanstack/react-router": "^1.170.23",

@@ -56,6 +56,22 @@ function AdminLayout() {
                 Review Queue
               </Link>
             ) : null}
+            {admin.permissions.includes('availability.manage') ? (
+              <Link
+                to="/admin/scheduling"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Scheduling
+              </Link>
+            ) : null}
+            {admin.permissions.includes('appointments.view') ? (
+              <Link
+                to="/admin/appointments"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Appointments
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}
