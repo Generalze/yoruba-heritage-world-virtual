@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 
 import { getDb } from '@/db'
 import { permissions, rolePermissions, roles, userRoles } from '@/db/schema'
+import type { DbClient } from '@/db'
 
 /**
  * RBAC foundation (stage spec §15–§17).
@@ -84,8 +85,10 @@ export const DEFAULT_REGISTRATION_ROLE: RoleCode = 'USER'
 export async function assignRoleToUser(
   userId: number,
   roleCode: RoleCode,
+  // Pass a transaction client to make the assignment atomic with
+  // surrounding writes (registration does this).
+  db: DbClient = getDb(),
 ): Promise<void> {
-  const db = getDb()
   const roleRows = await db
     .select({ id: roles.id })
     .from(roles)

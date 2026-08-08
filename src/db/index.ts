@@ -40,6 +40,12 @@ export function getDb() {
   return db
 }
 
+export type Db = ReturnType<typeof getDb>
+/** The client handed to db.transaction() callbacks. */
+export type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0]
+/** Accepts either the root database or an in-flight transaction. */
+export type DbClient = Db | DbTransaction
+
 /**
  * Lightweight connectivity probe used by the health-check endpoint.
  * Never throws and never exposes credentials.

@@ -117,6 +117,9 @@ bun run db:seed
   passwords. Register through the UI to create a local account.
 - `bun test` includes database integration tests and requires the local
   MariaDB container to be running with migrations applied.
+- Client IPs are read from the socket by default. Set `TRUST_PROXY=true`
+  only when deploying behind a trusted reverse proxy that overwrites
+  `X-Forwarded-For`.
 
 ## Development Principles
 

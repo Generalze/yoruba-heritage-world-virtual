@@ -56,12 +56,21 @@ export async function registerUser(
 
   let userId: number
   try {
-    const result = await db.insert(users).values({
-      email: input.email,
-      passwordHash,
-      preferredName: input.preferredName,
+    // User creation and the mandatory USER role grant are one
+    // transaction: registration can never leave an orphan account
+    // without its role (e.g. if the seed is missing, everything rolls
+    // back).
+    userId = await db.transaction(async (tx) => {
+      const result = await tx.insert(users).values({
+        email: input.email,
+        passwordHash,
+        preferredName: input.preferredName,
+      })
+      const id = result[0].insertId
+      // Public registration only ever grants the basic USER role.
+      await assignRoleToUser(id, DEFAULT_REGISTRATION_ROLE, tx)
+      return id
     })
-    userId = result[0].insertId
   } catch (error) {
     if (isDuplicateKeyError(error)) {
       // Unique-email constraint is the source of truth; a concurrent or
@@ -70,9 +79,6 @@ export async function registerUser(
     }
     throw error
   }
-
-  // Public registration only ever grants the basic USER role.
-  await assignRoleToUser(userId, DEFAULT_REGISTRATION_ROLE)
 
   await recordAuditEvent({
     actorUserId: userId,

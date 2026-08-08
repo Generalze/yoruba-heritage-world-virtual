@@ -3,7 +3,7 @@ import { eq, inArray } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/mysql2/migrator'
 
 import { getDb, getPool } from '@/db'
-import { auditLogs, sessions, users } from '@/db/schema'
+import { auditLogs, roles, sessions, users } from '@/db/schema'
 import { seedRbac } from '@/db/seed'
 import { AUDIT_ACTIONS, recordAuditEvent } from '@/auth/audit'
 import { ForbiddenError, requirePermission } from '@/auth/guards'
@@ -337,5 +337,42 @@ describe('audit log sanitization (end to end)', () => {
         : (row!.metadataJson as Record<string, unknown>)
     expect(metadata).toEqual({ reason: 'ok-to-keep' })
     expect(JSON.stringify(metadata)).not.toContain('must-not-appear')
+  })
+})
+
+describe('registration atomicity', () => {
+  it('rolls back the user row when the USER role grant cannot complete', async () => {
+    const email = uniqueEmail()
+    // Simulate a missing/broken seed: no USER role to grant.
+    await getDb().delete(roles).where(eq(roles.code, 'USER'))
+    try {
+      let thrown: unknown = null
+      try {
+        await registerUser(
+          { email, preferredName: 'Atomic', password: PASSPHRASE },
+          ctx,
+        )
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(Error)
+
+      // The transaction must have rolled back — no orphan account.
+      const orphans = await getDb()
+        .select()
+        .from(users)
+        .where(eq(users.email, email))
+      expect(orphans.length).toBe(0)
+    } finally {
+      await seedRbac()
+    }
+
+    // With the seed restored, the same email registers cleanly.
+    const retry = await registerUser(
+      { email, preferredName: 'Atomic', password: PASSPHRASE },
+      ctx,
+    )
+    expect(retry.ok).toBe(true)
+    if (retry.ok) createdUserIds.push(retry.user.id)
   })
 })

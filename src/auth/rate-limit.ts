@@ -25,7 +25,13 @@ export class FixedWindowRateLimiter {
     private readonly maxAttempts: number,
     private readonly windowMs: number,
     private readonly now: () => number = Date.now,
+    private readonly maxBuckets: number = 10_000,
   ) {}
+
+  /** Current number of tracked buckets — never exceeds maxBuckets. */
+  get size(): number {
+    return this.buckets.size
+  }
 
   private bucketFor(key: string): AttemptBucket | undefined {
     const bucket = this.buckets.get(key)
@@ -46,10 +52,31 @@ export class FixedWindowRateLimiter {
     const bucket = this.bucketFor(key)
     if (bucket) {
       bucket.count += 1
-    } else {
-      if (this.buckets.size >= 10_000) this.prune()
-      this.buckets.set(key, { count: 1, windowStartedAt: this.now() })
+      return
     }
+    // Hard cap: prune expired buckets first; if the map is still full,
+    // evict the oldest window so the newest failure is always tracked
+    // and memory is strictly bounded. Never fail-open by refusing to
+    // record, and never grow past maxBuckets.
+    if (this.buckets.size >= this.maxBuckets) {
+      this.prune()
+      while (this.buckets.size >= this.maxBuckets && this.buckets.size > 0) {
+        this.evictOldest()
+      }
+    }
+    this.buckets.set(key, { count: 1, windowStartedAt: this.now() })
+  }
+
+  private evictOldest(): void {
+    let oldestKey: string | undefined
+    let oldestStart = Infinity
+    for (const [key, bucket] of this.buckets) {
+      if (bucket.windowStartedAt < oldestStart) {
+        oldestStart = bucket.windowStartedAt
+        oldestKey = key
+      }
+    }
+    if (oldestKey !== undefined) this.buckets.delete(oldestKey)
   }
 
   clear(key: string): void {

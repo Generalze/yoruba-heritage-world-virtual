@@ -15,6 +15,14 @@ export const envSchema = z.object({
     .enum(['development', 'test', 'production'])
     .default('development'),
   APP_PORT: z.coerce.number().int().positive().default(3000),
+  /**
+   * Explicit proxy trust. X-Forwarded-For is client-controlled unless a
+   * trusted reverse proxy sets it, so it is IGNORED by default — an
+   * attacker must not be able to spoof their IP to evade rate limiting
+   * or pollute audit logs. Set to true only when the app runs behind
+   * the VPS reverse proxy that overwrites the header.
+   */
+  TRUST_PROXY: z.stringbool().default(false),
   DATABASE_HOST: z.string().min(1).default('127.0.0.1'),
   DATABASE_PORT: z.coerce.number().int().positive().default(3306),
   DATABASE_USER: z.string().min(1).default('yhwv'),

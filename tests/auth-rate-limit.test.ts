@@ -67,4 +67,52 @@ describe('FixedWindowRateLimiter', () => {
     expect(limiter.isBlocked('old')).toBe(false)
     expect(limiter.isBlocked('new')).toBe(false)
   })
+
+  it('enforces a hard bucket cap by evicting the oldest window', () => {
+    const clock = makeClock(1_000)
+    const limiter = new FixedWindowRateLimiter(1, 60_000, clock.now, 3)
+
+    limiter.recordFailure('a')
+    clock.advance(1_000)
+    limiter.recordFailure('b')
+    clock.advance(1_000)
+    limiter.recordFailure('c')
+    expect(limiter.size).toBe(3)
+    expect(limiter.isBlocked('a')).toBe(true)
+
+    // Cap reached with no expired buckets: the oldest ('a') is evicted
+    // so the newest failure is still tracked and size never grows.
+    clock.advance(1_000)
+    limiter.recordFailure('d')
+    expect(limiter.size).toBe(3)
+    expect(limiter.isBlocked('d')).toBe(true)
+    expect(limiter.isBlocked('a')).toBe(false)
+    expect(limiter.isBlocked('b')).toBe(true)
+  })
+
+  it('never exceeds the cap under sustained many-key flooding', () => {
+    const clock = makeClock(1_000)
+    const limiter = new FixedWindowRateLimiter(1, 60_000, clock.now, 3)
+
+    for (let i = 0; i < 50; i++) {
+      limiter.recordFailure(`flood-${i}`)
+      clock.advance(10)
+    }
+    expect(limiter.size).toBe(3)
+    // The newest keys are the ones still tracked.
+    expect(limiter.isBlocked('flood-49')).toBe(true)
+  })
+
+  it('existing buckets keep counting at the cap without eviction', () => {
+    const clock = makeClock(1_000)
+    const limiter = new FixedWindowRateLimiter(3, 60_000, clock.now, 2)
+
+    limiter.recordFailure('a')
+    limiter.recordFailure('b')
+    limiter.recordFailure('a')
+    limiter.recordFailure('a')
+    expect(limiter.size).toBe(2)
+    expect(limiter.isBlocked('a')).toBe(true)
+    expect(limiter.isBlocked('b')).toBe(false)
+  })
 })
