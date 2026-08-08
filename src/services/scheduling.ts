@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { z } from 'zod'
 
 import { getDb } from '@/db'
+import type { DbClient } from '@/db'
 import {
   sacredHouseAvailability,
   sacredHouseAvailabilityExceptions,
@@ -158,6 +159,29 @@ export async function getOrCreateBookingSettings(houseId: number) {
   ).at(0)!
 }
 
+/**
+ * THE House scheduling lock. Every mutation of a House's scheduling
+ * state (settings, windows, exceptions) and every interval allocation
+ * (reserve, reschedule, confirm) acquires this row with
+ * SELECT … FOR UPDATE as the FIRST statement of its transaction —
+ * one serialization discipline for everything scheduling-related.
+ * Callers must ensure the settings row exists (getOrCreateBookingSettings)
+ * before locking, because FOR UPDATE on a missing row locks nothing.
+ */
+export async function lockHouseScheduling(
+  tx: DbClient,
+  houseId: number,
+): Promise<void> {
+  const rows = await tx
+    .select({ id: sacredHouseBookingSettings.sacredHouseId })
+    .from(sacredHouseBookingSettings)
+    .where(eq(sacredHouseBookingSettings.sacredHouseId, houseId))
+    .for('update')
+  if (rows.length === 0) {
+    throw new SchedulingError('Sacred House scheduling is not initialized.')
+  }
+}
+
 export async function updateBookingSettings(
   actorId: number,
   ctx: RequestContext,
@@ -166,10 +190,13 @@ export async function updateBookingSettings(
 ): Promise<void> {
   await requirePermission(actorId, 'availability.manage')
   await getOrCreateBookingSettings(houseId)
-  await getDb()
-    .update(sacredHouseBookingSettings)
-    .set(input)
-    .where(eq(sacredHouseBookingSettings.sacredHouseId, houseId))
+  await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, houseId)
+    await tx
+      .update(sacredHouseBookingSettings)
+      .set(input)
+      .where(eq(sacredHouseBookingSettings.sacredHouseId, houseId))
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'availability.settings_updated',
@@ -187,13 +214,14 @@ export async function updateBookingSettings(
 // --- Weekly windows ---------------------------------------------------------
 
 async function assertNoWindowOverlap(
+  db: DbClient,
   houseId: number,
   dayOfWeek: number,
   start: string,
   end: string,
   ignoreId?: number,
 ): Promise<void> {
-  const rows = await getDb()
+  const rows = await db
     .select()
     .from(sacredHouseAvailability)
     .where(
@@ -225,22 +253,27 @@ export async function addAvailabilityWindow(
   input: z.infer<typeof availabilityWindowSchema>,
 ): Promise<number> {
   await requirePermission(actorId, 'availability.manage')
-  await assertHouseExists(houseId)
-  await assertNoWindowOverlap(
-    houseId,
-    input.dayOfWeek,
-    input.startLocalTime,
-    input.endLocalTime,
-  )
-  const result = await getDb()
-    .insert(sacredHouseAvailability)
-    .values({
+  await getOrCreateBookingSettings(houseId)
+  // Overlap check and insert run under the House scheduling lock so
+  // two concurrent admins cannot both observe the old state and create
+  // overlapping active windows.
+  const id = await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, houseId)
+    await assertNoWindowOverlap(
+      tx,
+      houseId,
+      input.dayOfWeek,
+      input.startLocalTime,
+      input.endLocalTime,
+    )
+    const result = await tx.insert(sacredHouseAvailability).values({
       sacredHouseId: houseId,
       dayOfWeek: input.dayOfWeek,
       startLocalTime: input.startLocalTime + ':00',
       endLocalTime: input.endLocalTime + ':00',
     })
-  const id = result[0].insertId
+    return result[0].insertId
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'availability.window_created',
@@ -265,27 +298,42 @@ export async function setAvailabilityWindowActive(
   active: boolean,
 ): Promise<void> {
   await requirePermission(actorId, 'availability.manage')
-  const row = (
+  const preRead = (
     await getDb()
       .select()
       .from(sacredHouseAvailability)
       .where(eq(sacredHouseAvailability.id, windowId))
       .limit(1)
   ).at(0)
-  if (!row) throw new SchedulingError('Availability window not found.')
-  if (active) {
-    await assertNoWindowOverlap(
-      row.sacredHouseId,
-      row.dayOfWeek,
-      row.startLocalTime,
-      row.endLocalTime,
-      row.id,
-    )
-  }
-  await getDb()
-    .update(sacredHouseAvailability)
-    .set({ active })
-    .where(eq(sacredHouseAvailability.id, windowId))
+  if (!preRead) throw new SchedulingError('Availability window not found.')
+  await getOrCreateBookingSettings(preRead.sacredHouseId)
+
+  const row = await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, preRead.sacredHouseId)
+    const current = (
+      await tx
+        .select()
+        .from(sacredHouseAvailability)
+        .where(eq(sacredHouseAvailability.id, windowId))
+        .limit(1)
+    ).at(0)
+    if (!current) throw new SchedulingError('Availability window not found.')
+    if (active) {
+      await assertNoWindowOverlap(
+        tx,
+        current.sacredHouseId,
+        current.dayOfWeek,
+        current.startLocalTime,
+        current.endLocalTime,
+        current.id,
+      )
+    }
+    await tx
+      .update(sacredHouseAvailability)
+      .set({ active })
+      .where(eq(sacredHouseAvailability.id, windowId))
+    return current
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: active
@@ -308,10 +356,10 @@ export async function addAvailabilityException(
   input: z.infer<typeof exceptionSchema>,
 ): Promise<number> {
   await requirePermission(actorId, 'availability.manage')
-  await assertHouseExists(houseId)
-  const result = await getDb()
-    .insert(sacredHouseAvailabilityExceptions)
-    .values({
+  await getOrCreateBookingSettings(houseId)
+  const id = await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, houseId)
+    const result = await tx.insert(sacredHouseAvailabilityExceptions).values({
       sacredHouseId: houseId,
       localDate: input.localDate,
       type: input.type,
@@ -320,7 +368,8 @@ export async function addAvailabilityException(
       endLocalTime: input.type === 'CLOSED' ? null : `${input.endLocalTime}:00`,
       label: input.label || null,
     })
-  const id = result[0].insertId
+    return result[0].insertId
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'availability.exception_created',
@@ -347,9 +396,13 @@ export async function removeAvailabilityException(
       .limit(1)
   ).at(0)
   if (!row) throw new SchedulingError('Exception not found.')
-  await getDb()
-    .delete(sacredHouseAvailabilityExceptions)
-    .where(eq(sacredHouseAvailabilityExceptions.id, exceptionId))
+  await getOrCreateBookingSettings(row.sacredHouseId)
+  await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, row.sacredHouseId)
+    await tx
+      .delete(sacredHouseAvailabilityExceptions)
+      .where(eq(sacredHouseAvailabilityExceptions.id, exceptionId))
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'availability.exception_removed',

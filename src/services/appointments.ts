@@ -1,11 +1,13 @@
-import { and, desc, eq, gt, gte, inArray, lt, lte, or, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, gte, lt, lte, or, sql } from 'drizzle-orm'
 
 import { getDb } from '@/db'
+import type { DbClient } from '@/db'
 import {
   appointmentRepresentatives,
   appointments,
   sacredHouseAvailability,
   sacredHouseAvailabilityExceptions,
+  sacredHouseBookingSettings,
   sacredHouseMembers,
   sacredHouses,
   services,
@@ -27,6 +29,7 @@ import {
 } from '@/lib/schedule-time'
 import {
   getOrCreateBookingSettings,
+  lockHouseScheduling,
   mergeIntervals,
   subtractInterval,
 } from './scheduling'
@@ -88,9 +91,10 @@ export interface BookableService {
  */
 export async function loadBookableService(
   serviceId: number,
+  db: DbClient = getDb(),
 ): Promise<BookableService> {
   const row = (
-    await getDb()
+    await db
       .select({ service: services, house: sacredHouses })
       .from(services)
       .innerJoin(sacredHouses, eq(services.sacredHouseId, sacredHouses.id))
@@ -153,11 +157,27 @@ interface HouseScheduleConfig {
   }>
 }
 
-async function loadScheduleConfig(
+/**
+ * Plain schedule-config reads against the given client. When called
+ * with a transaction that already holds the House scheduling lock,
+ * this reads the CURRENT serialized state (the locking read opens the
+ * transaction, so later reads see the latest committed data).
+ */
+async function readScheduleConfig(
   houseId: number,
+  db: DbClient,
 ): Promise<HouseScheduleConfig> {
-  const settings = await getOrCreateBookingSettings(houseId)
-  const windows = await getDb()
+  const settings = (
+    await db
+      .select()
+      .from(sacredHouseBookingSettings)
+      .where(eq(sacredHouseBookingSettings.sacredHouseId, houseId))
+      .limit(1)
+  ).at(0)
+  if (!settings) {
+    throw new AppointmentError('Sacred House scheduling is not initialized.')
+  }
+  const windows = await db
     .select({
       dayOfWeek: sacredHouseAvailability.dayOfWeek,
       startLocalTime: sacredHouseAvailability.startLocalTime,
@@ -170,7 +190,7 @@ async function loadScheduleConfig(
         eq(sacredHouseAvailability.active, true),
       ),
     )
-  const exceptions = await getDb()
+  const exceptions = await db
     .select({
       localDate: sacredHouseAvailabilityExceptions.localDate,
       type: sacredHouseAvailabilityExceptions.type,
@@ -180,6 +200,13 @@ async function loadScheduleConfig(
     .from(sacredHouseAvailabilityExceptions)
     .where(eq(sacredHouseAvailabilityExceptions.sacredHouseId, houseId))
   return { settings, windows, exceptions }
+}
+
+async function loadScheduleConfig(
+  houseId: number,
+): Promise<HouseScheduleConfig> {
+  await getOrCreateBookingSettings(houseId)
+  return readScheduleConfig(houseId, getDb())
 }
 
 /** Open minute-intervals for one House-local date after exceptions. */
@@ -353,32 +380,19 @@ export async function createReservation(
     )
   }
 
-  const bookable = await loadBookableService(input.serviceId)
-  const config = await loadScheduleConfig(bookable.sacredHouseId)
-  const tz = config.settings.schedulingTimezone
+  // Fast-fail pre-checks; everything structural is re-validated
+  // authoritatively under the House lock below.
+  const preBookable = await loadBookableService(input.serviceId)
+  await getOrCreateBookingSettings(preBookable.sacredHouseId)
 
   const startMs = sqlToUtcMs(input.startsAtUtc)
   if (Number.isNaN(startMs)) throw new AppointmentError('Invalid start time.')
-  const local = utcMsToLocal(tz, startMs)
-  const candidates = await structuralSlots(
-    bookable,
-    config,
-    local.date,
-    local.date,
-    nowMs,
-  )
   const requestedStartSql = utcMsToSql(startMs)
-  if (!candidates.some((slot) => slot.startsAtUtc === requestedStartSql)) {
-    throw new AppointmentError('That time is not available.')
-  }
-  const endSql = utcMsToSql(startMs + bookable.durationMinutes * 60_000)
   const nowSql = utcMsToSql(nowMs)
-  const expiresSql = utcMsToSql(
-    nowMs + config.settings.reservationHoldMinutes * 60_000,
-  )
 
-  // Snapshot the user's timezone at reservation time. Eligibility
-  // guarantees a stored timezone exists; 'UTC' is a defensive fallback.
+  // Snapshot the user's timezone at reservation time. Eligibility just
+  // validated one exists; if a concurrent profile change removed it,
+  // FAIL CLOSED — never silently snapshot UTC.
   const profileRow = (
     await getDb()
       .select({ timezone: userProfiles.timezone })
@@ -386,7 +400,12 @@ export async function createReservation(
       .where(eq(userProfiles.userId, userId))
       .limit(1)
   ).at(0)
-  const userTimezone = profileRow?.timezone ?? 'UTC'
+  if (!profileRow?.timezone) {
+    throw new AppointmentError(
+      'Your profile timezone is missing. Update your profile and try again.',
+    )
+  }
+  const userTimezone = profileRow.timezone
 
   const publicId = crypto.randomUUID()
   const note = input.privateRequestNote?.trim() || null
@@ -394,47 +413,75 @@ export async function createReservation(
     throw new AppointmentError('The request note is too long.')
   }
 
-  const appointmentId = await getDb().transaction(async (tx) => {
-    // House concurrency lock: serializes all interval allocation.
-    await tx.execute(
-      sql`SELECT sacred_house_id FROM sacred_house_booking_settings WHERE sacred_house_id = ${bookable.sacredHouseId} FOR UPDATE`,
-    )
-    const conflicts = await tx
-      .select({ id: appointments.id })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.sacredHouseId, bookable.sacredHouseId),
-          lt(appointments.startsAtUtc, endSql),
-          gt(appointments.endsAtUtc, requestedStartSql),
-          BLOCKING(nowSql),
-        ),
+  const { appointmentId, endSql, expiresSql } = await getDb().transaction(
+    async (tx) => {
+      // House concurrency lock: serializes interval allocation AND
+      // schedule-configuration changes for this House.
+      await lockHouseScheduling(tx, preBookable.sacredHouseId)
+
+      // Authoritative revalidation under the lock: bookability,
+      // booking_enabled, availability windows, exceptions, lead/advance
+      // limits and slot alignment against CURRENT serialized state.
+      const bookable = await loadBookableService(input.serviceId, tx)
+      const config = await readScheduleConfig(bookable.sacredHouseId, tx)
+      const tz = config.settings.schedulingTimezone
+      const local = utcMsToLocal(tz, startMs)
+      const candidates = await structuralSlots(
+        bookable,
+        config,
+        local.date,
+        local.date,
+        nowMs,
       )
-      .limit(1)
-    if (conflicts.length > 0) {
-      throw new AppointmentError('That time has just been taken.')
-    }
-    const inserted = await tx.insert(appointments).values({
-      publicId,
-      userId,
-      serviceId: bookable.serviceId,
-      sacredHouseId: bookable.sacredHouseId,
-      status: 'PENDING_PAYMENT',
-      startsAtUtc: requestedStartSql,
-      endsAtUtc: endSql,
-      userTimezone,
-      houseTimezone: tz,
-      reservationExpiresAt: expiresSql,
-      serviceNameSnapshot: bookable.serviceName,
-      serviceCodeSnapshot: bookable.serviceCode,
-      houseNameSnapshot: bookable.houseName,
-      durationMinutesSnapshot: bookable.durationMinutes,
-      priceMinorSnapshot: bookable.priceMinor,
-      currencySnapshot: bookable.currency,
-      privateRequestNote: note,
-    })
-    return inserted[0].insertId
-  })
+      if (!candidates.some((slot) => slot.startsAtUtc === requestedStartSql)) {
+        throw new AppointmentError('That time is not available.')
+      }
+      const end = utcMsToSql(startMs + bookable.durationMinutes * 60_000)
+      const holdExpiresSql = utcMsToSql(
+        nowMs + config.settings.reservationHoldMinutes * 60_000,
+      )
+
+      const conflicts = await tx
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(
+          and(
+            eq(appointments.sacredHouseId, bookable.sacredHouseId),
+            lt(appointments.startsAtUtc, end),
+            gt(appointments.endsAtUtc, requestedStartSql),
+            BLOCKING(nowSql),
+          ),
+        )
+        .limit(1)
+      if (conflicts.length > 0) {
+        throw new AppointmentError('That time has just been taken.')
+      }
+      const inserted = await tx.insert(appointments).values({
+        publicId,
+        userId,
+        serviceId: bookable.serviceId,
+        sacredHouseId: bookable.sacredHouseId,
+        status: 'PENDING_PAYMENT',
+        startsAtUtc: requestedStartSql,
+        endsAtUtc: end,
+        userTimezone,
+        houseTimezone: tz,
+        reservationExpiresAt: holdExpiresSql,
+        serviceNameSnapshot: bookable.serviceName,
+        serviceCodeSnapshot: bookable.serviceCode,
+        houseNameSnapshot: bookable.houseName,
+        durationMinutesSnapshot: bookable.durationMinutes,
+        priceMinorSnapshot: bookable.priceMinor,
+        currencySnapshot: bookable.currency,
+        privateRequestNote: note,
+      })
+      return {
+        appointmentId: inserted[0].insertId,
+        endSql: end,
+        expiresSql: holdExpiresSql,
+      }
+    },
+  )
 
   await recordAuditEvent({
     actorUserId: userId,
@@ -443,8 +490,8 @@ export async function createReservation(
     entityId: String(appointmentId),
     metadata: {
       publicId,
-      sacredHouseId: bookable.sacredHouseId,
-      serviceId: bookable.serviceId,
+      sacredHouseId: preBookable.sacredHouseId,
+      serviceId: preBookable.serviceId,
       startsAtUtc: requestedStartSql,
       endsAtUtc: endSql,
     },
@@ -479,26 +526,82 @@ async function loadAppointment(id: number) {
  * Future payment layer calls this after VERIFIED payment. It is never
  * exposed through any public server function — no user or admin action
  * can confirm an appointment in Step 5.
+ *
+ * Confirmation solidifies the interval as a blocking appointment, so
+ * it participates in the SAME per-House lock discipline as reservation
+ * allocation: lock the House, re-read the appointment under the lock,
+ * and only then transition. A hold whose expiry has passed can never
+ * confirm — its interval may already have been reallocated to someone
+ * else, and confirming it would create two confirmed overlaps.
  */
 export async function confirmReservation(
   appointmentId: number,
   ctx: RequestContext,
   nowMs: number = Date.now(),
 ): Promise<void> {
-  const row = await loadAppointment(appointmentId)
-  if (row.status !== 'PENDING_PAYMENT') {
-    throw new AppointmentError('Only pending reservations can be confirmed.')
-  }
-  if (
-    !row.reservationExpiresAt ||
-    row.reservationExpiresAt <= utcMsToSql(nowMs)
-  ) {
-    throw new AppointmentError('This reservation has expired.')
-  }
-  await getDb()
-    .update(appointments)
-    .set({ status: 'CONFIRMED', reservationExpiresAt: null })
-    .where(eq(appointments.id, appointmentId))
+  // Pre-read only to learn the House for lock ordering; authoritative
+  // state is re-read under the lock — never the stale object.
+  const preRead = await loadAppointment(appointmentId)
+  await getOrCreateBookingSettings(preRead.sacredHouseId)
+
+  await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, preRead.sacredHouseId)
+    // Re-sample the clock AFTER acquiring the lock: pre-lock latency
+    // (pool waits, lock queues) must never make an already-expired
+    // hold look live. The caller-injected nowMs can only tighten the
+    // check (max), never loosen it.
+    const inLockNowSql = utcMsToSql(Math.max(nowMs, Date.now()))
+    const row = (
+      await tx
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, appointmentId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!row) throw new AppointmentError('Appointment not found.')
+    if (row.status !== 'PENDING_PAYMENT') {
+      throw new AppointmentError('Only pending reservations can be confirmed.')
+    }
+    if (!row.reservationExpiresAt || row.reservationExpiresAt <= inLockNowSql) {
+      throw new AppointmentError('This reservation has expired.')
+    }
+    // Defensive overlap re-check: an unexpired hold's interval cannot
+    // have been reallocated, so a conflict here means invariants broke
+    // upstream — refuse rather than double-book.
+    const conflicts = await tx
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.sacredHouseId, row.sacredHouseId),
+          lt(appointments.startsAtUtc, row.endsAtUtc),
+          gt(appointments.endsAtUtc, row.startsAtUtc),
+          BLOCKING(inLockNowSql),
+          sql`${appointments.id} != ${appointmentId}`,
+        ),
+      )
+      .limit(1)
+    if (conflicts.length > 0) {
+      throw new AppointmentError(
+        'This reservation can no longer be confirmed — its time has been reallocated.',
+      )
+    }
+    const result = await tx
+      .update(appointments)
+      .set({ status: 'CONFIRMED', reservationExpiresAt: null })
+      .where(
+        and(
+          eq(appointments.id, appointmentId),
+          eq(appointments.status, 'PENDING_PAYMENT'),
+          gt(appointments.reservationExpiresAt, inLockNowSql),
+        ),
+      )
+    if (result[0].affectedRows !== 1) {
+      throw new AppointmentError('Only pending reservations can be confirmed.')
+    }
+  })
+
   await recordAuditEvent({
     actorUserId: null,
     action: 'appointment.confirmed',
@@ -510,7 +613,13 @@ export async function confirmReservation(
   })
 }
 
-/** Marks stale PENDING_PAYMENT rows EXPIRED (lazy cleanup helper). */
+/**
+ * Marks stale PENDING_PAYMENT rows EXPIRED (lazy cleanup helper). The
+ * UPDATE itself is a guarded compare-and-set re-requiring the
+ * stale-pending condition, so a row that meanwhile became CONFIRMED
+ * (or reached any other state) is never overwritten. Audits only rows
+ * that actually transitioned.
+ */
 export async function expireStaleReservations(
   nowMs: number = Date.now(),
 ): Promise<number> {
@@ -524,26 +633,30 @@ export async function expireStaleReservations(
         lte(appointments.reservationExpiresAt, nowSql),
       ),
     )
-  if (stale.length === 0) return 0
-  await getDb()
-    .update(appointments)
-    .set({ status: 'EXPIRED' })
-    .where(
-      inArray(
-        appointments.id,
-        stale.map((row) => row.id),
-      ),
-    )
-  for (const row of stale) {
-    await recordAuditEvent({
-      actorUserId: null,
-      action: 'appointment.expired',
-      entityType: 'appointment',
-      entityId: String(row.id),
-      metadata: { from: 'PENDING_PAYMENT', to: 'EXPIRED' },
-    })
+  let expired = 0
+  for (const candidate of stale) {
+    const result = await getDb()
+      .update(appointments)
+      .set({ status: 'EXPIRED' })
+      .where(
+        and(
+          eq(appointments.id, candidate.id),
+          eq(appointments.status, 'PENDING_PAYMENT'),
+          lte(appointments.reservationExpiresAt, nowSql),
+        ),
+      )
+    if (result[0].affectedRows === 1) {
+      expired += 1
+      await recordAuditEvent({
+        actorUserId: null,
+        action: 'appointment.expired',
+        entityType: 'appointment',
+        entityId: String(candidate.id),
+        metadata: { from: 'PENDING_PAYMENT', to: 'EXPIRED' },
+      })
+    }
   }
-  return stale.length
+  return expired
 }
 
 export interface CancelActor {
@@ -586,7 +699,11 @@ export async function cancelAppointment(
     }
   }
 
-  await getDb()
+  // Atomic compare-and-set pinned to the exact validated basis
+  // (status AND start time): if a concurrent transition or reschedule
+  // intervened after the read above, zero rows match and the
+  // cancellation is refused instead of overwriting the newer state.
+  const result = await getDb()
     .update(appointments)
     .set({
       status: 'CANCELLED',
@@ -594,7 +711,18 @@ export async function cancelAppointment(
       cancelledByUserId: actor.userId,
       cancellationReason: reason?.trim().slice(0, 500) || null,
     })
-    .where(eq(appointments.id, appointmentId))
+    .where(
+      and(
+        eq(appointments.id, appointmentId),
+        eq(appointments.status, row.status),
+        eq(appointments.startsAtUtc, row.startsAtUtc),
+      ),
+    )
+  if (result[0].affectedRows !== 1) {
+    throw new AppointmentError(
+      'This appointment changed while cancelling. Please refresh and try again.',
+    )
+  }
 
   await recordAuditEvent({
     actorUserId: actor.userId,
@@ -611,6 +739,18 @@ export async function cancelAppointment(
   })
 }
 
+/**
+ * Reschedules a CONFIRMED appointment. The authoritative appointment
+ * state, ownership, cutoff, destination validity and reschedule_count
+ * are all re-read and validated UNDER the House lock — a stale
+ * pre-lock read can never modify a record that meanwhile became
+ * CANCELLED/COMPLETED/NO_SHOW.
+ *
+ * Admin override applies to the reschedule CUTOFF only. Admin does NOT
+ * bypass booking_enabled, availability windows, exceptions, alignment,
+ * duration fit, minimum lead or maximum advance — structural
+ * validation always uses the real `nowMs`.
+ */
 export async function rescheduleAppointment(
   actor: CancelActor,
   ctx: RequestContext,
@@ -618,57 +758,68 @@ export async function rescheduleAppointment(
   newStartsAtUtc: string,
   nowMs: number = Date.now(),
 ): Promise<void> {
-  const row = await loadAppointment(appointmentId)
-
+  // Pre-read only for lock ordering (House id); authoritative state is
+  // re-read under the lock.
+  const preRead = await loadAppointment(appointmentId)
   if (actor.isOperator) {
     await requirePermission(actor.userId, 'appointments.manage')
-  } else if (row.userId !== actor.userId) {
-    throw new AppointmentError('Appointment not found.')
   }
+  await getOrCreateBookingSettings(preRead.sacredHouseId)
 
-  if (row.status !== 'CONFIRMED') {
-    throw new AppointmentError(
-      'Only confirmed appointments can be rescheduled. Release and rebook a pending reservation instead.',
-    )
-  }
-
-  const settings = await getOrCreateBookingSettings(row.sacredHouseId)
-  if (!actor.isOperator) {
-    const cutoffMs =
-      sqlToUtcMs(row.startsAtUtc) - settings.rescheduleCutoffMinutes * 60_000
-    if (nowMs > cutoffMs) {
-      throw new AppointmentError(
-        'This appointment is too close to its start time to reschedule online. Please contact support.',
-      )
-    }
-  }
-
-  const bookable = await loadBookableService(row.serviceId)
-  const config = await loadScheduleConfig(row.sacredHouseId)
   const startMs = sqlToUtcMs(newStartsAtUtc)
   if (Number.isNaN(startMs)) throw new AppointmentError('Invalid start time.')
   const newStartSql = utcMsToSql(startMs)
-  const newEndSql = utcMsToSql(startMs + row.durationMinutesSnapshot * 60_000)
-
-  // Users must pick a fully valid structural slot; operators may place
-  // inside lead/advance limits but still within open availability.
-  const local = utcMsToLocal(config.settings.schedulingTimezone, startMs)
-  const candidates = await structuralSlots(
-    bookable,
-    config,
-    local.date,
-    local.date,
-    actor.isOperator ? startMs - 86_400_000 : nowMs,
-  )
-  if (!candidates.some((slot) => slot.startsAtUtc === newStartSql)) {
-    throw new AppointmentError('That time is not available.')
-  }
-
   const nowSql = utcMsToSql(nowMs)
-  await getDb().transaction(async (tx) => {
-    await tx.execute(
-      sql`SELECT sacred_house_id FROM sacred_house_booking_settings WHERE sacred_house_id = ${row.sacredHouseId} FOR UPDATE`,
+
+  const audit = await getDb().transaction(async (tx) => {
+    await lockHouseScheduling(tx, preRead.sacredHouseId)
+
+    const row = (
+      await tx
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, appointmentId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!row) throw new AppointmentError('Appointment not found.')
+    if (!actor.isOperator && row.userId !== actor.userId) {
+      throw new AppointmentError('Appointment not found.')
+    }
+    if (row.status !== 'CONFIRMED') {
+      throw new AppointmentError(
+        'Only confirmed appointments can be rescheduled. Release and rebook a pending reservation instead.',
+      )
+    }
+
+    const config = await readScheduleConfig(row.sacredHouseId, tx)
+    if (!actor.isOperator) {
+      const cutoffMs =
+        sqlToUtcMs(row.startsAtUtc) -
+        config.settings.rescheduleCutoffMinutes * 60_000
+      if (nowMs > cutoffMs) {
+        throw new AppointmentError(
+          'This appointment is too close to its start time to reschedule online. Please contact support.',
+        )
+      }
+    }
+
+    // Destination validity uses the BOOKED duration snapshot and the
+    // real clock — no admin lead/advance bypass.
+    const bookable = await loadBookableService(row.serviceId, tx)
+    const local = utcMsToLocal(config.settings.schedulingTimezone, startMs)
+    const candidates = await structuralSlots(
+      { ...bookable, durationMinutes: row.durationMinutesSnapshot },
+      config,
+      local.date,
+      local.date,
+      nowMs,
     )
+    if (!candidates.some((slot) => slot.startsAtUtc === newStartSql)) {
+      throw new AppointmentError('That time is not available.')
+    }
+    const newEndSql = utcMsToSql(startMs + row.durationMinutesSnapshot * 60_000)
+
     const conflicts = await tx
       .select({ id: appointments.id })
       .from(appointments)
@@ -685,14 +836,29 @@ export async function rescheduleAppointment(
     if (conflicts.length > 0) {
       throw new AppointmentError('That time has just been taken.')
     }
-    await tx
+
+    const result = await tx
       .update(appointments)
       .set({
         startsAtUtc: newStartSql,
         endsAtUtc: newEndSql,
         rescheduleCount: row.rescheduleCount + 1,
       })
-      .where(eq(appointments.id, appointmentId))
+      .where(
+        and(
+          eq(appointments.id, appointmentId),
+          eq(appointments.status, 'CONFIRMED'),
+        ),
+      )
+    if (result[0].affectedRows !== 1) {
+      throw new AppointmentError(
+        'This appointment changed while rescheduling. Please retry.',
+      )
+    }
+    return {
+      oldStartsAtUtc: row.startsAtUtc,
+      rescheduleCount: row.rescheduleCount + 1,
+    }
   })
 
   await recordAuditEvent({
@@ -701,10 +867,10 @@ export async function rescheduleAppointment(
     entityType: 'appointment',
     entityId: String(appointmentId),
     metadata: {
-      oldStartsAtUtc: row.startsAtUtc,
+      oldStartsAtUtc: audit.oldStartsAtUtc,
       newStartsAtUtc: newStartSql,
       operator: actor.isOperator,
-      rescheduleCount: row.rescheduleCount + 1,
+      rescheduleCount: audit.rescheduleCount,
     },
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
@@ -721,10 +887,23 @@ export async function completeAppointment(
   if (row.status !== 'CONFIRMED') {
     throw new AppointmentError('Only confirmed appointments can be completed.')
   }
-  await getDb()
+  // Atomic compare-and-set pinned to the validated basis (status AND
+  // start time, matching cancelAppointment): cannot overwrite a
+  // simultaneous CANCELLED/NO_SHOW, and cannot land on an occurrence a
+  // concurrent reschedule just moved.
+  const result = await getDb()
     .update(appointments)
     .set({ status: 'COMPLETED', completedAt: new Date() })
-    .where(eq(appointments.id, appointmentId))
+    .where(
+      and(
+        eq(appointments.id, appointmentId),
+        eq(appointments.status, 'CONFIRMED'),
+        eq(appointments.startsAtUtc, row.startsAtUtc),
+      ),
+    )
+  if (result[0].affectedRows !== 1) {
+    throw new AppointmentError('Only confirmed appointments can be completed.')
+  }
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'appointment.completed',
@@ -748,10 +927,24 @@ export async function markNoShow(
       'Only confirmed appointments can be marked as no-show.',
     )
   }
-  await getDb()
+  // Atomic compare-and-set pinned to the validated basis (status AND
+  // start time): COMPLETED and NO_SHOW can never overwrite each other,
+  // and the transition never lands on a concurrently-moved occurrence.
+  const result = await getDb()
     .update(appointments)
     .set({ status: 'NO_SHOW', noShowAt: new Date() })
-    .where(eq(appointments.id, appointmentId))
+    .where(
+      and(
+        eq(appointments.id, appointmentId),
+        eq(appointments.status, 'CONFIRMED'),
+        eq(appointments.startsAtUtc, row.startsAtUtc),
+      ),
+    )
+  if (result[0].affectedRows !== 1) {
+    throw new AppointmentError(
+      'Only confirmed appointments can be marked as no-show.',
+    )
+  }
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'appointment.no_show',
@@ -765,6 +958,14 @@ export async function markNoShow(
 
 // --- Representatives --------------------------------------------------------
 
+/**
+ * Assigns a representative. The appointment row (SELECT … FOR UPDATE)
+ * is the serialization resource for representative changes: the
+ * CONFIRMED requirement, member validity and the one-PRIMARY rule are
+ * all re-checked under that lock, so two concurrent PRIMARY
+ * assignments can never both succeed, and an assignment can never land
+ * on an appointment that just became terminal.
+ */
 export async function assignRepresentative(
   actorId: number,
   ctx: RequestContext,
@@ -773,54 +974,71 @@ export async function assignRepresentative(
   role: AssignmentRole,
 ): Promise<void> {
   await requirePermission(actorId, 'appointments.manage')
-  const row = await loadAppointment(appointmentId)
-  if (row.status !== 'CONFIRMED') {
-    throw new AppointmentError(
-      'Representatives are assigned to confirmed appointments only.',
-    )
-  }
-  const member = (
-    await getDb()
-      .select()
-      .from(sacredHouseMembers)
-      .where(eq(sacredHouseMembers.id, memberId))
-      .limit(1)
-  ).at(0)
-  if (!member) throw new AppointmentError('Member not found.')
-  if (member.sacredHouseId !== row.sacredHouseId) {
-    throw new AppointmentError(
-      "Members can only serve their own Sacred House's appointments.",
-    )
-  }
-  if (!member.active) {
-    throw new AppointmentError('This member is not active.')
-  }
-  if (role === 'PRIMARY') {
-    const existingPrimary = await getDb()
-      .select({ memberId: appointmentRepresentatives.sacredHouseMemberId })
-      .from(appointmentRepresentatives)
-      .where(
-        and(
-          eq(appointmentRepresentatives.appointmentId, appointmentId),
-          eq(appointmentRepresentatives.assignmentRole, 'PRIMARY'),
-        ),
-      )
-      .limit(1)
-    if (existingPrimary.length > 0) {
+
+  await getDb().transaction(async (tx) => {
+    const row = (
+      await tx
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, appointmentId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!row) throw new AppointmentError('Appointment not found.')
+    if (row.status !== 'CONFIRMED') {
       throw new AppointmentError(
-        'This appointment already has a primary representative.',
+        'Representatives are assigned to confirmed appointments only.',
       )
     }
-  }
-  await getDb()
-    .insert(appointmentRepresentatives)
-    .values({
-      appointmentId,
-      sacredHouseMemberId: memberId,
-      assignmentRole: role,
-      assignedBy: actorId,
-    })
-    .onDuplicateKeyUpdate({ set: { assignmentRole: role } })
+    const member = (
+      await tx
+        .select()
+        .from(sacredHouseMembers)
+        .where(eq(sacredHouseMembers.id, memberId))
+        .limit(1)
+    ).at(0)
+    if (!member) throw new AppointmentError('Member not found.')
+    if (member.sacredHouseId !== row.sacredHouseId) {
+      throw new AppointmentError(
+        "Members can only serve their own Sacred House's appointments.",
+      )
+    }
+    if (!member.active) {
+      throw new AppointmentError('This member is not active.')
+    }
+    if (role === 'PRIMARY') {
+      // Re-checked under the appointment lock; re-assigning the same
+      // member as PRIMARY stays an idempotent update.
+      const existingPrimary = await tx
+        .select({ memberId: appointmentRepresentatives.sacredHouseMemberId })
+        .from(appointmentRepresentatives)
+        .where(
+          and(
+            eq(appointmentRepresentatives.appointmentId, appointmentId),
+            eq(appointmentRepresentatives.assignmentRole, 'PRIMARY'),
+          ),
+        )
+        .limit(1)
+      if (
+        existingPrimary.length > 0 &&
+        existingPrimary[0].memberId !== memberId
+      ) {
+        throw new AppointmentError(
+          'This appointment already has a primary representative.',
+        )
+      }
+    }
+    await tx
+      .insert(appointmentRepresentatives)
+      .values({
+        appointmentId,
+        sacredHouseMemberId: memberId,
+        assignmentRole: role,
+        assignedBy: actorId,
+      })
+      .onDuplicateKeyUpdate({ set: { assignmentRole: role } })
+  })
+
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'appointment.representative_assigned',
@@ -832,6 +1050,11 @@ export async function assignRepresentative(
   })
 }
 
+/**
+ * Removes a representative. Allowed only while the appointment is
+ * CONFIRMED (re-checked under the appointment row lock): terminal
+ * historical appointments keep their assignment record stable.
+ */
 export async function removeRepresentative(
   actorId: number,
   ctx: RequestContext,
@@ -839,23 +1062,44 @@ export async function removeRepresentative(
   memberId: number,
 ): Promise<void> {
   await requirePermission(actorId, 'appointments.manage')
-  await getDb()
-    .delete(appointmentRepresentatives)
-    .where(
-      and(
-        eq(appointmentRepresentatives.appointmentId, appointmentId),
-        eq(appointmentRepresentatives.sacredHouseMemberId, memberId),
-      ),
-    )
-  await recordAuditEvent({
-    actorUserId: actorId,
-    action: 'appointment.representative_removed',
-    entityType: 'appointment',
-    entityId: String(appointmentId),
-    metadata: { memberId },
-    ipAddress: ctx.ipAddress,
-    userAgent: ctx.userAgent,
+
+  const removed = await getDb().transaction(async (tx) => {
+    const row = (
+      await tx
+        .select({ status: appointments.status })
+        .from(appointments)
+        .where(eq(appointments.id, appointmentId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!row) throw new AppointmentError('Appointment not found.')
+    if (row.status !== 'CONFIRMED') {
+      throw new AppointmentError(
+        'Representatives can only be changed while the appointment is confirmed.',
+      )
+    }
+    const result = await tx
+      .delete(appointmentRepresentatives)
+      .where(
+        and(
+          eq(appointmentRepresentatives.appointmentId, appointmentId),
+          eq(appointmentRepresentatives.sacredHouseMemberId, memberId),
+        ),
+      )
+    return result[0].affectedRows > 0
   })
+
+  if (removed) {
+    await recordAuditEvent({
+      actorUserId: actorId,
+      action: 'appointment.representative_removed',
+      entityType: 'appointment',
+      entityId: String(appointmentId),
+      metadata: { memberId },
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    })
+  }
 }
 
 // --- Reads ------------------------------------------------------------------

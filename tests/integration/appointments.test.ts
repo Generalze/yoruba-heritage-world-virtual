@@ -42,12 +42,15 @@ import {
   getUserAppointmentByPublicId,
   getUserAppointments,
   loadBookableService,
+  markNoShow,
+  removeRepresentative,
   rescheduleAppointment,
 } from '@/services/appointments'
 import {
   addDays,
   currentLocalDate,
   localToUtcMs,
+  sqlToUtcMs,
   utcMsToSql,
 } from '@/lib/schedule-time'
 
@@ -1072,5 +1075,574 @@ describe('privacy, ownership and audit', () => {
     expect(foreign).toBeNull()
     const own = await getUserAppointmentByPublicId(eligibleA, created.publicId)
     expect(own?.id).toBe(created.appointmentId)
+  })
+})
+
+describe('hardening: lifecycle and configuration races', () => {
+  it('an expired hold cannot confirm into a reallocated interval', async () => {
+    const start = slotUtc(D(19), '09:00')
+    const holdA = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: start,
+    })
+    // Hold A expires without payment...
+    await getDb()
+      .update(appointments)
+      .set({ reservationExpiresAt: utcMsToSql(Date.now() - 60_000) })
+      .where(eq(appointments.id, holdA.appointmentId))
+    // ...so user B legitimately takes the interval.
+    const holdB = await createReservation(eligibleB, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: start,
+    })
+
+    // A's late confirmation MUST be refused under the House lock —
+    // even when the CALLER'S clock predates the expiry. This is the
+    // deterministic regression for the stale-clock defect: an entry
+    // clock 60s before the (already past) expiry makes the naive
+    // pre-lock check pass; the in-lock fresh-clock check must refuse.
+    const rowA = (
+      await getDb()
+        .select({ expires: appointments.reservationExpiresAt })
+        .from(appointments)
+        .where(eq(appointments.id, holdA.appointmentId))
+    ).at(0)!
+    const staleEntryClock = sqlToUtcMs(rowA.expires!) - 60_000
+    let thrown: unknown = null
+    try {
+      await confirmReservation(holdA.appointmentId, ctx, staleEntryClock)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+    const afterA = (
+      await getDb()
+        .select({ status: appointments.status })
+        .from(appointments)
+        .where(eq(appointments.id, holdA.appointmentId))
+    ).at(0)!
+    expect(afterA.status).not.toBe('CONFIRMED')
+
+    // B confirms normally: exactly one CONFIRMED owner of the interval.
+    await confirmReservation(holdB.appointmentId, ctx)
+    const rows = await getDb()
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.sacredHouseId, houseId),
+          eq(appointments.startsAtUtc, start),
+          eq(appointments.status, 'CONFIRMED'),
+        ),
+      )
+    expect(rows.length).toBe(1)
+    expect(rows[0].id).toBe(holdB.appointmentId)
+  })
+
+  it('stale-expiry cleanup never overwrites a row that became CONFIRMED', async () => {
+    // Sequential sanity: a CONFIRMED row with a stale expiry stamp is
+    // never selected nor updated by cleanup.
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(19), '11:00'),
+    })
+    await getDb()
+      .update(appointments)
+      .set({
+        status: 'CONFIRMED',
+        reservationExpiresAt: utcMsToSql(Date.now() - 60_000),
+      })
+      .where(eq(appointments.id, created.appointmentId))
+
+    await expireStaleReservations()
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    expect(row.status).toBe('CONFIRMED')
+  })
+
+  it('confirm racing expiry cleanup: exactly one wins, EXPIRED never overwrites CONFIRMED', async () => {
+    // The hold is LIVE on the real clock but STALE from the cleanup
+    // caller's injected future clock — so both operations genuinely
+    // target the same row and the guarded UPDATE decides the race.
+    const created = await createReservation(eligibleB, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(19), '13:00'),
+    })
+    const futureNow = Date.now() + 60 * 60_000
+
+    const [confirmResult] = await Promise.allSettled([
+      confirmReservation(created.appointmentId, ctx),
+      expireStaleReservations(futureNow),
+    ])
+
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    if (confirmResult.status === 'fulfilled') {
+      // Confirm won: the guarded expiry UPDATE must have skipped the
+      // row (status pin failed) — and no expired audit event exists.
+      expect(row.status).toBe('CONFIRMED')
+      const expiredAudit = await getDb()
+        .select()
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.action, 'appointment.expired'),
+            eq(auditLogs.entityId, String(created.appointmentId)),
+          ),
+        )
+      expect(expiredAudit.length).toBe(0)
+    } else {
+      // Cleanup won: the hold is EXPIRED and confirm was refused.
+      expect(row.status).toBe('EXPIRED')
+    }
+  })
+
+  it('cancel racing reschedule: exactly one wins', async () => {
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(25), '09:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+
+    const results = await Promise.allSettled([
+      cancelAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        'Race: operational cancellation',
+      ),
+      rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        slotUtc(D(25), '12:00'),
+      ),
+    ])
+    // Cancel pins (status, startsAtUtc); reschedule re-reads under the
+    // lock — whichever commits second must observe the other and lose.
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    if (results[0].status === 'fulfilled') {
+      expect(row.status).toBe('CANCELLED')
+      expect(row.startsAtUtc).toBe(slotUtc(D(25), '09:00'))
+    } else {
+      expect(row.status).toBe('CONFIRMED')
+      expect(row.startsAtUtc).toBe(slotUtc(D(25), '12:00'))
+    }
+  })
+
+  it('cancel vs complete race: exactly one terminal transition wins', async () => {
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(20), '09:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+
+    const results = await Promise.allSettled([
+      cancelAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        'Race test operational cancellation',
+      ),
+      completeAppointment(adminId, ctx, created.appointmentId),
+    ])
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    expect(fulfilled.length).toBe(1)
+
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    const cancelWon = results[0].status === 'fulfilled'
+    expect(row.status).toBe(cancelWon ? 'CANCELLED' : 'COMPLETED')
+  })
+
+  it('complete vs no-show race: exactly one terminal transition wins', async () => {
+    const created = await createReservation(eligibleB, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(20), '11:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+
+    const results = await Promise.allSettled([
+      completeAppointment(adminId, ctx, created.appointmentId),
+      markNoShow(adminId, ctx, created.appointmentId),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    expect(['COMPLETED', 'NO_SHOW']).toContain(row.status)
+  })
+
+  it('reschedule re-reads state under the lock: terminal records stay untouched', async () => {
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(20), '13:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+    await cancelAppointment(
+      { userId: adminId, isOperator: true },
+      ctx,
+      created.appointmentId,
+      'Cancelled before reschedule attempt',
+    )
+
+    let thrown: unknown = null
+    try {
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        slotUtc(D(20), '15:00'),
+      )
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    expect(row.status).toBe('CANCELLED')
+    expect(row.startsAtUtc).toBe(slotUtc(D(20), '13:00'))
+  })
+
+  it('concurrent reschedules serialize and increment from the current count', async () => {
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(21), '09:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+
+    const destinations = [slotUtc(D(21), '12:00'), slotUtc(D(21), '15:00')]
+    const results = await Promise.allSettled(
+      destinations.map((dest) =>
+        rescheduleAppointment(
+          { userId: adminId, isOperator: true },
+          ctx,
+          created.appointmentId,
+          dest,
+        ),
+      ),
+    )
+    const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+    expect(fulfilled).toBeGreaterThanOrEqual(1)
+
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    expect(row.rescheduleCount).toBe(fulfilled)
+    expect(destinations).toContain(row.startsAtUtc)
+  })
+
+  it('a reservation can never land while booking is disabled', async () => {
+    const racedSlot = slotUtc(D(22), '09:00')
+    const results = await Promise.allSettled([
+      updateBookingSettings(adminId, ctx, houseId, {
+        ...SETTINGS,
+        bookingEnabled: false,
+      }),
+      createReservation(eligibleA, ctx, {
+        serviceId: bookableServiceId,
+        startsAtUtc: racedSlot,
+      }),
+    ])
+    // Branch-consistent outcome for the raced slot: the reservation
+    // exists if and only if it won the serialization race — a rejected
+    // reservation must have left no row behind.
+    const racedRows = await getDb()
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.sacredHouseId, houseId),
+          eq(appointments.startsAtUtc, racedSlot),
+        ),
+      )
+    if (results[1].status === 'fulfilled') {
+      expect(racedRows.length).toBe(1)
+    } else {
+      expect(racedRows.length).toBe(0)
+    }
+
+    // Whatever the interleaving above, the in-lock revalidation makes
+    // the settled state deterministic: booking is now disabled, so
+    // reserving is impossible and leaves no row behind.
+    let thrown: unknown = null
+    try {
+      await createReservation(eligibleB, ctx, {
+        serviceId: bookableServiceId,
+        startsAtUtc: slotUtc(D(22), '11:00'),
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+    const disabledRows = await getDb()
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.sacredHouseId, houseId),
+          eq(appointments.startsAtUtc, slotUtc(D(22), '11:00')),
+        ),
+      )
+    expect(disabledRows.length).toBe(0)
+
+    await updateBookingSettings(adminId, ctx, houseId, SETTINGS)
+  })
+
+  it('concurrent overlapping availability windows cannot both be created', async () => {
+    const results = await Promise.allSettled([
+      addAvailabilityWindow(adminId, ctx, otherHouseId, {
+        dayOfWeek: 2,
+        startLocalTime: '09:00',
+        endLocalTime: '12:00',
+      }),
+      addAvailabilityWindow(adminId, ctx, otherHouseId, {
+        dayOfWeek: 2,
+        startLocalTime: '10:00',
+        endLocalTime: '13:00',
+      }),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+
+    const windows = await getDb()
+      .select()
+      .from(sacredHouseAvailability)
+      .where(
+        and(
+          eq(sacredHouseAvailability.sacredHouseId, otherHouseId),
+          eq(sacredHouseAvailability.dayOfWeek, 2),
+          eq(sacredHouseAvailability.active, true),
+        ),
+      )
+    expect(windows.length).toBe(1)
+  })
+
+  it('concurrent PRIMARY assignments yield exactly one PRIMARY; terminal locks assignments', async () => {
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(23), '09:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+
+    const results = await Promise.allSettled([
+      assignRepresentative(
+        adminId,
+        ctx,
+        created.appointmentId,
+        memberActiveId,
+        'PRIMARY',
+      ),
+      assignRepresentative(
+        adminId,
+        ctx,
+        created.appointmentId,
+        memberSupportId,
+        'PRIMARY',
+      ),
+    ])
+    expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+
+    const primaries = await getDb()
+      .select()
+      .from(appointmentRepresentatives)
+      .where(
+        and(
+          eq(appointmentRepresentatives.appointmentId, created.appointmentId),
+          eq(appointmentRepresentatives.assignmentRole, 'PRIMARY'),
+        ),
+      )
+    expect(primaries.length).toBe(1)
+
+    // Once terminal, representative changes are refused and the
+    // historical assignment stays stable.
+    await completeAppointment(adminId, ctx, created.appointmentId)
+    let thrown: unknown = null
+    try {
+      await assignRepresentative(
+        adminId,
+        ctx,
+        created.appointmentId,
+        memberSupportId,
+        'SUPPORT',
+      )
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+
+    thrown = null
+    try {
+      await removeRepresentative(
+        adminId,
+        ctx,
+        created.appointmentId,
+        primaries[0].sacredHouseMemberId,
+      )
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+    const after = await getDb()
+      .select()
+      .from(appointmentRepresentatives)
+      .where(
+        eq(appointmentRepresentatives.appointmentId, created.appointmentId),
+      )
+    expect(after.length).toBe(1)
+  })
+
+  it('admin reschedule bypasses only the cutoff - lead and advance limits still apply', async () => {
+    const created = await createReservation(eligibleA, ctx, {
+      serviceId: bookableServiceId,
+      startsAtUtc: slotUtc(D(24), '09:00'),
+    })
+    await confirmReservation(created.appointmentId, ctx)
+
+    // Destination inside the minimum lead window: refused even for admin.
+    let thrown: unknown = null
+    try {
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        slotUtc(today, '09:00'),
+      )
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+
+    // Destination beyond the maximum advance range: refused for admin.
+    thrown = null
+    try {
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        slotUtc(D(100), '09:00'),
+      )
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+
+    const row = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, created.appointmentId))
+    ).at(0)!
+    expect(row.startsAtUtc).toBe(slotUtc(D(24), '09:00'))
+  })
+
+  it('a missing profile timezone blocks reservation end to end (eligibility gate; the in-function snapshot guard is unreachable defense-in-depth)', async () => {
+    const start = slotUtc(D(24), '11:00')
+    const { userProfiles } = await import('@/db/schema')
+    await getDb()
+      .update(userProfiles)
+      .set({ timezone: null })
+      .where(eq(userProfiles.userId, eligibleB))
+
+    let thrown: unknown = null
+    try {
+      await createReservation(eligibleB, ctx, {
+        serviceId: bookableServiceId,
+        startsAtUtc: start,
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(AppointmentError)
+
+    const rows = await getDb()
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.sacredHouseId, houseId),
+          eq(appointments.startsAtUtc, start),
+        ),
+      )
+    expect(rows.length).toBe(0)
+    // No appointment anywhere carries a silently-defaulted UTC snapshot
+    // for this user.
+    const utcSnapshots = await getDb()
+      .select()
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.userId, eligibleB),
+          eq(appointments.userTimezone, 'UTC'),
+        ),
+      )
+    expect(utcSnapshots.length).toBe(0)
+
+    await getDb()
+      .update(userProfiles)
+      .set({ timezone: 'Africa/Lagos' })
+      .where(eq(userProfiles.userId, eligibleB))
+  })
+
+  it('confirmReservation is unreachable from server functions and routes', async () => {
+    const { readFileSync, readdirSync, statSync } = await import('node:fs')
+    const { join } = await import('node:path')
+
+    // Recursively collect every source file under a directory so new
+    // action modules or nested route folders can never dodge the scan.
+    function walk(dir: string): Array<string> {
+      const out: Array<string> = []
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry)
+        if (statSync(full).isDirectory()) out.push(...walk(full))
+        else if (/\.tsx?$/.test(entry)) out.push(full)
+      }
+      return out
+    }
+
+    const root = process.cwd()
+    const scanned: Array<string> = [
+      // Every server-function module in the codebase (any *-actions.ts
+      // anywhere under src) plus the auth actions module explicitly.
+      ...walk(join(root, 'src', 'services')).filter((f) =>
+        /-actions\.tsx?$/.test(f),
+      ),
+      join(root, 'src', 'auth', 'actions.ts'),
+      ...walk(join(root, 'src', 'routes')),
+    ]
+    expect(scanned.length).toBeGreaterThan(10)
+    for (const file of scanned) {
+      const source = readFileSync(file, 'utf8')
+      expect(source).not.toContain('confirmReservation')
+      expect(source).not.toMatch(/mark paid|payment successful/i)
+    }
   })
 })
