@@ -19,6 +19,10 @@ import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as DeitiesIndexRouteImport } from './routes/deities.index'
 import { Route as DeitiesSlugRouteImport } from './routes/deities.$slug'
+import { Route as ProfileIndexRouteImport } from './routes/profile.index'
+import { Route as ProfileConsentsRouteImport } from './routes/profile.consents'
+import { Route as ProfileEditRouteImport } from './routes/profile.edit'
+import { Route as ProfileSpiritualRouteImport } from './routes/profile.spiritual'
 import { Route as SacredHousesIndexRouteImport } from './routes/sacred-houses.index'
 import { Route as SacredHousesSlugRouteImport } from './routes/sacred-houses.$slug'
 import { Route as ServicesIndexRouteImport } from './routes/services.index'
@@ -83,6 +87,26 @@ const DeitiesIndexRoute = DeitiesIndexRouteImport.update({
 const DeitiesSlugRoute = DeitiesSlugRouteImport.update({
   id: '/deities/$slug',
   path: '/deities/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileIndexRoute = ProfileIndexRouteImport.update({
+  id: '/profile/',
+  path: '/profile/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileConsentsRoute = ProfileConsentsRouteImport.update({
+  id: '/profile/consents',
+  path: '/profile/consents',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileEditRoute = ProfileEditRouteImport.update({
+  id: '/profile/edit',
+  path: '/profile/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ProfileSpiritualRoute = ProfileSpiritualRouteImport.update({
+  id: '/profile/spiritual',
+  path: '/profile/spiritual',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SacredHousesIndexRoute = SacredHousesIndexRouteImport.update({
@@ -178,10 +202,14 @@ export interface FileRoutesByFullPath {
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
   '/deities/$slug': typeof DeitiesSlugRoute
+  '/profile/consents': typeof ProfileConsentsRoute
+  '/profile/edit': typeof ProfileEditRoute
+  '/profile/spiritual': typeof ProfileSpiritualRoute
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
   '/admin/': typeof AdminIndexRoute
   '/deities/': typeof DeitiesIndexRoute
+  '/profile/': typeof ProfileIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
@@ -204,10 +232,14 @@ export interface FileRoutesByTo {
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
   '/deities/$slug': typeof DeitiesSlugRoute
+  '/profile/consents': typeof ProfileConsentsRoute
+  '/profile/edit': typeof ProfileEditRoute
+  '/profile/spiritual': typeof ProfileSpiritualRoute
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
   '/admin': typeof AdminIndexRoute
   '/deities': typeof DeitiesIndexRoute
+  '/profile': typeof ProfileIndexRoute
   '/sacred-houses': typeof SacredHousesIndexRoute
   '/services': typeof ServicesIndexRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
@@ -232,10 +264,14 @@ export interface FileRoutesById {
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
   '/deities/$slug': typeof DeitiesSlugRoute
+  '/profile/consents': typeof ProfileConsentsRoute
+  '/profile/edit': typeof ProfileEditRoute
+  '/profile/spiritual': typeof ProfileSpiritualRoute
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
   '/admin/': typeof AdminIndexRoute
   '/deities/': typeof DeitiesIndexRoute
+  '/profile/': typeof ProfileIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
@@ -261,10 +297,14 @@ export interface FileRouteTypes {
     | '/register'
     | '/api/health'
     | '/deities/$slug'
+    | '/profile/consents'
+    | '/profile/edit'
+    | '/profile/spiritual'
     | '/sacred-houses/$slug'
     | '/services/$slug'
     | '/admin/'
     | '/deities/'
+    | '/profile/'
     | '/sacred-houses/'
     | '/services/'
     | '/admin/catalogue/review'
@@ -287,10 +327,14 @@ export interface FileRouteTypes {
     | '/register'
     | '/api/health'
     | '/deities/$slug'
+    | '/profile/consents'
+    | '/profile/edit'
+    | '/profile/spiritual'
     | '/sacred-houses/$slug'
     | '/services/$slug'
     | '/admin'
     | '/deities'
+    | '/profile'
     | '/sacred-houses'
     | '/services'
     | '/admin/catalogue/review'
@@ -314,10 +358,14 @@ export interface FileRouteTypes {
     | '/register'
     | '/api/health'
     | '/deities/$slug'
+    | '/profile/consents'
+    | '/profile/edit'
+    | '/profile/spiritual'
     | '/sacred-houses/$slug'
     | '/services/$slug'
     | '/admin/'
     | '/deities/'
+    | '/profile/'
     | '/sacred-houses/'
     | '/services/'
     | '/admin/catalogue/review'
@@ -342,9 +390,13 @@ export interface RootRouteChildren {
   RegisterRoute: typeof RegisterRoute
   ApiHealthRoute: typeof ApiHealthRoute
   DeitiesSlugRoute: typeof DeitiesSlugRoute
+  ProfileConsentsRoute: typeof ProfileConsentsRoute
+  ProfileEditRoute: typeof ProfileEditRoute
+  ProfileSpiritualRoute: typeof ProfileSpiritualRoute
   SacredHousesSlugRoute: typeof SacredHousesSlugRoute
   ServicesSlugRoute: typeof ServicesSlugRoute
   DeitiesIndexRoute: typeof DeitiesIndexRoute
+  ProfileIndexRoute: typeof ProfileIndexRoute
   SacredHousesIndexRoute: typeof SacredHousesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
 }
@@ -419,6 +471,34 @@ declare module '@tanstack/react-router' {
       path: '/deities/$slug'
       fullPath: '/deities/$slug'
       preLoaderRoute: typeof DeitiesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile/': {
+      id: '/profile/'
+      path: '/profile'
+      fullPath: '/profile/'
+      preLoaderRoute: typeof ProfileIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile/consents': {
+      id: '/profile/consents'
+      path: '/profile/consents'
+      fullPath: '/profile/consents'
+      preLoaderRoute: typeof ProfileConsentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile/edit': {
+      id: '/profile/edit'
+      path: '/profile/edit'
+      fullPath: '/profile/edit'
+      preLoaderRoute: typeof ProfileEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/profile/spiritual': {
+      id: '/profile/spiritual'
+      path: '/profile/spiritual'
+      fullPath: '/profile/spiritual'
+      preLoaderRoute: typeof ProfileSpiritualRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sacred-houses/': {
@@ -570,9 +650,13 @@ const rootRouteChildren: RootRouteChildren = {
   RegisterRoute: RegisterRoute,
   ApiHealthRoute: ApiHealthRoute,
   DeitiesSlugRoute: DeitiesSlugRoute,
+  ProfileConsentsRoute: ProfileConsentsRoute,
+  ProfileEditRoute: ProfileEditRoute,
+  ProfileSpiritualRoute: ProfileSpiritualRoute,
   SacredHousesSlugRoute: SacredHousesSlugRoute,
   ServicesSlugRoute: ServicesSlugRoute,
   DeitiesIndexRoute: DeitiesIndexRoute,
+  ProfileIndexRoute: ProfileIndexRoute,
   SacredHousesIndexRoute: SacredHousesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
 }
