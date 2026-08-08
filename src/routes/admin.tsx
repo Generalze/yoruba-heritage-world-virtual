@@ -72,6 +72,14 @@ function AdminLayout() {
                 Appointments
               </Link>
             ) : null}
+            {admin.permissions.includes('payments.view') ? (
+              <Link
+                to="/admin/payments"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Payments
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}

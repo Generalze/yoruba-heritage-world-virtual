@@ -39,6 +39,8 @@ export const PERMISSION_CODES = [
   'appointments.view',
   'appointments.manage',
   'availability.manage',
+  'payments.view',
+  'payments.manage',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -130,6 +132,15 @@ export const PERMISSION_DEFINITIONS: Record<
     description:
       'Configure Sacred House booking settings, weekly availability and exceptions',
   },
+  'payments.view': {
+    name: 'View payments',
+    description: 'Inspect payment attempts, settlements and review queues',
+  },
+  'payments.manage': {
+    name: 'Manage payments operationally',
+    description:
+      'Operational payment review and provider re-verification — never manual fabrication of successful payments',
+  },
 }
 
 /** Appointment operations are ADMIN/SUPER_ADMIN only — catalogue
@@ -138,6 +149,14 @@ const APPOINTMENT_PERMISSIONS: Array<PermissionCode> = [
   'appointments.view',
   'appointments.manage',
   'availability.manage',
+]
+
+/** Payment visibility/review is ADMIN/SUPER_ADMIN only — CONTENT_MANAGER
+ * never gains payment access; USER sees only their own records via
+ * owner-scoped routes, never these permissions. */
+const PAYMENT_PERMISSIONS: Array<PermissionCode> = [
+  'payments.view',
+  'payments.manage',
 ]
 
 const CATALOGUE_VIEW: Array<PermissionCode> = [
@@ -186,6 +205,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'catalogue.approve',
     'catalogue.publish',
     ...APPOINTMENT_PERMISSIONS,
+    ...PAYMENT_PERMISSIONS,
   ],
   SUPER_ADMIN: [
     'account.self.read',
@@ -196,6 +216,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'catalogue.approve',
     'catalogue.publish',
     ...APPOINTMENT_PERMISSIONS,
+    ...PAYMENT_PERMISSIONS,
   ],
 }
 

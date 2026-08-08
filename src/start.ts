@@ -18,8 +18,26 @@ import { createCsrfMiddleware, createStart } from '@tanstack/react-start'
  */
 const STATE_CHANGING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
+/**
+ * Provider webhook routes are server-to-server: payment providers
+ * cannot send browser CSRF/origin signals, so ONLY these exact paths
+ * are exempted (no wildcard trust). Each route independently requires
+ * provider signature/authentication before any processing — an
+ * unauthenticated request to these paths does nothing. Every normal
+ * user/admin POST route remains fully CSRF-protected.
+ */
+const WEBHOOK_EXEMPT_PATHS = new Set([
+  '/api/webhooks/paystack',
+  '/api/webhooks/stripe',
+  '/api/webhooks/paypal',
+  '/api/webhooks/crypto',
+])
+
 const csrfProtection = createCsrfMiddleware({
-  filter: ({ request }) => STATE_CHANGING_METHODS.has(request.method),
+  filter: ({ request }) => {
+    if (!STATE_CHANGING_METHODS.has(request.method)) return false
+    return !WEBHOOK_EXEMPT_PATHS.has(new URL(request.url).pathname)
+  },
 })
 
 export const startInstance = createStart(() => ({

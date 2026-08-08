@@ -5,7 +5,7 @@ External provider adapters behind interfaces (TECHNICAL_CANON.md §23):
 - VideoGenerationProvider (Kling / mock)
 - TTSProvider
 - ObjectStorageProvider
-- PaymentProvider (Paystack / Flutterwave)
+- PaymentProvider (Paystack / PayPal / Stripe / Crypto)
 - EmailProvider
 - AISelectionProvider
 

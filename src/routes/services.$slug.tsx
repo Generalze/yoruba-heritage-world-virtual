@@ -1,12 +1,19 @@
 import { Link, createFileRoute, notFound } from '@tanstack/react-router'
 
 import { getServiceFn } from '@/services/catalogue-actions'
+import { getServiceBookableFn } from '@/services/booking-actions'
 
 export const Route = createFileRoute('/services/$slug')({
   loader: async ({ params }) => {
     const service = await getServiceFn({ data: { slug: params.slug } })
     if (!service) throw notFound()
-    return service
+    // Server-computed boolean only: the Book button appears solely when
+    // a genuine booking path exists (published + active + configured +
+    // booking enabled) — never a fake path, never internal details.
+    const { bookable } = await getServiceBookableFn({
+      data: { serviceSlug: params.slug },
+    })
+    return { ...service, bookable }
   },
   notFoundComponent: ServiceNotFound,
   component: ServicePage,
@@ -76,6 +83,20 @@ function ServicePage() {
         ) : (
           <p className="mt-6 text-sm text-stone-500">
             Details will be provided when this service is opened for booking.
+          </p>
+        )}
+
+        {service.bookable ? (
+          <Link
+            to="/book/$serviceSlug"
+            params={{ serviceSlug: service.slug }}
+            className="mt-8 inline-block rounded-md bg-amber-600 px-6 py-3 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-500"
+          >
+            Book Appointment
+          </Link>
+        ) : (
+          <p className="mt-8 text-sm text-stone-500">
+            Online booking is not available for this service at the moment.
           </p>
         )}
       </div>

@@ -17,8 +17,13 @@ import { Route as OlodumareRouteImport } from './routes/olodumare'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
+import { Route as AppointmentsIndexRouteImport } from './routes/appointments.index'
+import { Route as AppointmentsPublicIdRouteImport } from './routes/appointments.$publicId'
+import { Route as BookServiceSlugRouteImport } from './routes/book.$serviceSlug'
+import { Route as CheckoutAppointmentPublicIdRouteImport } from './routes/checkout.$appointmentPublicId'
 import { Route as DeitiesIndexRouteImport } from './routes/deities.index'
 import { Route as DeitiesSlugRouteImport } from './routes/deities.$slug'
+import { Route as PaymentsIndexRouteImport } from './routes/payments.index'
 import { Route as ProfileIndexRouteImport } from './routes/profile.index'
 import { Route as ProfileConsentsRouteImport } from './routes/profile.consents'
 import { Route as ProfileEditRouteImport } from './routes/profile.edit'
@@ -31,8 +36,13 @@ import { Route as AdminAppointmentsIndexRouteImport } from './routes/admin.appoi
 import { Route as AdminAppointmentsIdRouteImport } from './routes/admin.appointments.$id'
 import { Route as AdminCatalogueIndexRouteImport } from './routes/admin.catalogue.index'
 import { Route as AdminCatalogueReviewRouteImport } from './routes/admin.catalogue.review'
+import { Route as AdminPaymentsIndexRouteImport } from './routes/admin.payments.index'
+import { Route as AdminPaymentsIdRouteImport } from './routes/admin.payments.$id'
 import { Route as AdminSchedulingIndexRouteImport } from './routes/admin.scheduling.index'
 import { Route as AdminSchedulingHouseIdRouteImport } from './routes/admin.scheduling.$houseId'
+import { Route as ApiWebhooksProviderRouteImport } from './routes/api.webhooks.$provider'
+import { Route as PaymentsReceiptAttemptPublicIdRouteImport } from './routes/payments.receipt.$attemptPublicId'
+import { Route as PaymentsReturnProviderRouteImport } from './routes/payments.return.$provider'
 import { Route as AdminCatalogueDeitiesIndexRouteImport } from './routes/admin.catalogue.deities.index'
 import { Route as AdminCatalogueDeitiesIdRouteImport } from './routes/admin.catalogue.deities.$id'
 import { Route as AdminCatalogueDeitiesNewRouteImport } from './routes/admin.catalogue.deities.new'
@@ -83,6 +93,27 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
   path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppointmentsIndexRoute = AppointmentsIndexRouteImport.update({
+  id: '/appointments/',
+  path: '/appointments/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppointmentsPublicIdRoute = AppointmentsPublicIdRouteImport.update({
+  id: '/appointments/$publicId',
+  path: '/appointments/$publicId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BookServiceSlugRoute = BookServiceSlugRouteImport.update({
+  id: '/book/$serviceSlug',
+  path: '/book/$serviceSlug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CheckoutAppointmentPublicIdRoute =
+  CheckoutAppointmentPublicIdRouteImport.update({
+    id: '/checkout/$appointmentPublicId',
+    path: '/checkout/$appointmentPublicId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const DeitiesIndexRoute = DeitiesIndexRouteImport.update({
   id: '/deities/',
   path: '/deities/',
@@ -91,6 +122,11 @@ const DeitiesIndexRoute = DeitiesIndexRouteImport.update({
 const DeitiesSlugRoute = DeitiesSlugRouteImport.update({
   id: '/deities/$slug',
   path: '/deities/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PaymentsIndexRoute = PaymentsIndexRouteImport.update({
+  id: '/payments/',
+  path: '/payments/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileIndexRoute = ProfileIndexRouteImport.update({
@@ -153,6 +189,16 @@ const AdminCatalogueReviewRoute = AdminCatalogueReviewRouteImport.update({
   path: '/catalogue/review',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminPaymentsIndexRoute = AdminPaymentsIndexRouteImport.update({
+  id: '/payments/',
+  path: '/payments/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminPaymentsIdRoute = AdminPaymentsIdRouteImport.update({
+  id: '/payments/$id',
+  path: '/payments/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminSchedulingIndexRoute = AdminSchedulingIndexRouteImport.update({
   id: '/scheduling/',
   path: '/scheduling/',
@@ -162,6 +208,22 @@ const AdminSchedulingHouseIdRoute = AdminSchedulingHouseIdRouteImport.update({
   id: '/scheduling/$houseId',
   path: '/scheduling/$houseId',
   getParentRoute: () => AdminRoute,
+} as any)
+const ApiWebhooksProviderRoute = ApiWebhooksProviderRouteImport.update({
+  id: '/api/webhooks/$provider',
+  path: '/api/webhooks/$provider',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PaymentsReceiptAttemptPublicIdRoute =
+  PaymentsReceiptAttemptPublicIdRouteImport.update({
+    id: '/payments/receipt/$attemptPublicId',
+    path: '/payments/receipt/$attemptPublicId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const PaymentsReturnProviderRoute = PaymentsReturnProviderRouteImport.update({
+  id: '/payments/return/$provider',
+  path: '/payments/return/$provider',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminCatalogueDeitiesIndexRoute =
   AdminCatalogueDeitiesIndexRouteImport.update({
@@ -225,6 +287,9 @@ export interface FileRoutesByFullPath {
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
+  '/appointments/$publicId': typeof AppointmentsPublicIdRoute
+  '/book/$serviceSlug': typeof BookServiceSlugRoute
+  '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
   '/deities/$slug': typeof DeitiesSlugRoute
   '/profile/consents': typeof ProfileConsentsRoute
   '/profile/edit': typeof ProfileEditRoute
@@ -232,15 +297,22 @@ export interface FileRoutesByFullPath {
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
   '/admin/': typeof AdminIndexRoute
+  '/appointments/': typeof AppointmentsIndexRoute
   '/deities/': typeof DeitiesIndexRoute
+  '/payments/': typeof PaymentsIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
   '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
+  '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
+  '/payments/return/$provider': typeof PaymentsReturnProviderRoute
   '/admin/appointments/': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/payments/': typeof AdminPaymentsIndexRoute
   '/admin/scheduling/': typeof AdminSchedulingIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
@@ -259,6 +331,9 @@ export interface FileRoutesByTo {
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
+  '/appointments/$publicId': typeof AppointmentsPublicIdRoute
+  '/book/$serviceSlug': typeof BookServiceSlugRoute
+  '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
   '/deities/$slug': typeof DeitiesSlugRoute
   '/profile/consents': typeof ProfileConsentsRoute
   '/profile/edit': typeof ProfileEditRoute
@@ -266,15 +341,22 @@ export interface FileRoutesByTo {
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
   '/admin': typeof AdminIndexRoute
+  '/appointments': typeof AppointmentsIndexRoute
   '/deities': typeof DeitiesIndexRoute
+  '/payments': typeof PaymentsIndexRoute
   '/profile': typeof ProfileIndexRoute
   '/sacred-houses': typeof SacredHousesIndexRoute
   '/services': typeof ServicesIndexRoute
   '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
+  '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
+  '/payments/return/$provider': typeof PaymentsReturnProviderRoute
   '/admin/appointments': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue': typeof AdminCatalogueIndexRoute
+  '/admin/payments': typeof AdminPaymentsIndexRoute
   '/admin/scheduling': typeof AdminSchedulingIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
@@ -295,6 +377,9 @@ export interface FileRoutesById {
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
   '/api/health': typeof ApiHealthRoute
+  '/appointments/$publicId': typeof AppointmentsPublicIdRoute
+  '/book/$serviceSlug': typeof BookServiceSlugRoute
+  '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
   '/deities/$slug': typeof DeitiesSlugRoute
   '/profile/consents': typeof ProfileConsentsRoute
   '/profile/edit': typeof ProfileEditRoute
@@ -302,15 +387,22 @@ export interface FileRoutesById {
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
   '/admin/': typeof AdminIndexRoute
+  '/appointments/': typeof AppointmentsIndexRoute
   '/deities/': typeof DeitiesIndexRoute
+  '/payments/': typeof PaymentsIndexRoute
   '/profile/': typeof ProfileIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
   '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
+  '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
+  '/payments/return/$provider': typeof PaymentsReturnProviderRoute
   '/admin/appointments/': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/payments/': typeof AdminPaymentsIndexRoute
   '/admin/scheduling/': typeof AdminSchedulingIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
@@ -332,6 +424,9 @@ export interface FileRouteTypes {
     | '/olodumare'
     | '/register'
     | '/api/health'
+    | '/appointments/$publicId'
+    | '/book/$serviceSlug'
+    | '/checkout/$appointmentPublicId'
     | '/deities/$slug'
     | '/profile/consents'
     | '/profile/edit'
@@ -339,15 +434,22 @@ export interface FileRouteTypes {
     | '/sacred-houses/$slug'
     | '/services/$slug'
     | '/admin/'
+    | '/appointments/'
     | '/deities/'
+    | '/payments/'
     | '/profile/'
     | '/sacred-houses/'
     | '/services/'
     | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/payments/$id'
     | '/admin/scheduling/$houseId'
+    | '/api/webhooks/$provider'
+    | '/payments/receipt/$attemptPublicId'
+    | '/payments/return/$provider'
     | '/admin/appointments/'
     | '/admin/catalogue/'
+    | '/admin/payments/'
     | '/admin/scheduling/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
@@ -366,6 +468,9 @@ export interface FileRouteTypes {
     | '/olodumare'
     | '/register'
     | '/api/health'
+    | '/appointments/$publicId'
+    | '/book/$serviceSlug'
+    | '/checkout/$appointmentPublicId'
     | '/deities/$slug'
     | '/profile/consents'
     | '/profile/edit'
@@ -373,15 +478,22 @@ export interface FileRouteTypes {
     | '/sacred-houses/$slug'
     | '/services/$slug'
     | '/admin'
+    | '/appointments'
     | '/deities'
+    | '/payments'
     | '/profile'
     | '/sacred-houses'
     | '/services'
     | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/payments/$id'
     | '/admin/scheduling/$houseId'
+    | '/api/webhooks/$provider'
+    | '/payments/receipt/$attemptPublicId'
+    | '/payments/return/$provider'
     | '/admin/appointments'
     | '/admin/catalogue'
+    | '/admin/payments'
     | '/admin/scheduling'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
@@ -401,6 +513,9 @@ export interface FileRouteTypes {
     | '/olodumare'
     | '/register'
     | '/api/health'
+    | '/appointments/$publicId'
+    | '/book/$serviceSlug'
+    | '/checkout/$appointmentPublicId'
     | '/deities/$slug'
     | '/profile/consents'
     | '/profile/edit'
@@ -408,15 +523,22 @@ export interface FileRouteTypes {
     | '/sacred-houses/$slug'
     | '/services/$slug'
     | '/admin/'
+    | '/appointments/'
     | '/deities/'
+    | '/payments/'
     | '/profile/'
     | '/sacred-houses/'
     | '/services/'
     | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/payments/$id'
     | '/admin/scheduling/$houseId'
+    | '/api/webhooks/$provider'
+    | '/payments/receipt/$attemptPublicId'
+    | '/payments/return/$provider'
     | '/admin/appointments/'
     | '/admin/catalogue/'
+    | '/admin/payments/'
     | '/admin/scheduling/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
@@ -437,16 +559,24 @@ export interface RootRouteChildren {
   OlodumareRoute: typeof OlodumareRoute
   RegisterRoute: typeof RegisterRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  AppointmentsPublicIdRoute: typeof AppointmentsPublicIdRoute
+  BookServiceSlugRoute: typeof BookServiceSlugRoute
+  CheckoutAppointmentPublicIdRoute: typeof CheckoutAppointmentPublicIdRoute
   DeitiesSlugRoute: typeof DeitiesSlugRoute
   ProfileConsentsRoute: typeof ProfileConsentsRoute
   ProfileEditRoute: typeof ProfileEditRoute
   ProfileSpiritualRoute: typeof ProfileSpiritualRoute
   SacredHousesSlugRoute: typeof SacredHousesSlugRoute
   ServicesSlugRoute: typeof ServicesSlugRoute
+  AppointmentsIndexRoute: typeof AppointmentsIndexRoute
   DeitiesIndexRoute: typeof DeitiesIndexRoute
+  PaymentsIndexRoute: typeof PaymentsIndexRoute
   ProfileIndexRoute: typeof ProfileIndexRoute
   SacredHousesIndexRoute: typeof SacredHousesIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
+  ApiWebhooksProviderRoute: typeof ApiWebhooksProviderRoute
+  PaymentsReceiptAttemptPublicIdRoute: typeof PaymentsReceiptAttemptPublicIdRoute
+  PaymentsReturnProviderRoute: typeof PaymentsReturnProviderRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -507,6 +637,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/appointments/': {
+      id: '/appointments/'
+      path: '/appointments'
+      fullPath: '/appointments/'
+      preLoaderRoute: typeof AppointmentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/appointments/$publicId': {
+      id: '/appointments/$publicId'
+      path: '/appointments/$publicId'
+      fullPath: '/appointments/$publicId'
+      preLoaderRoute: typeof AppointmentsPublicIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/book/$serviceSlug': {
+      id: '/book/$serviceSlug'
+      path: '/book/$serviceSlug'
+      fullPath: '/book/$serviceSlug'
+      preLoaderRoute: typeof BookServiceSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/checkout/$appointmentPublicId': {
+      id: '/checkout/$appointmentPublicId'
+      path: '/checkout/$appointmentPublicId'
+      fullPath: '/checkout/$appointmentPublicId'
+      preLoaderRoute: typeof CheckoutAppointmentPublicIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/deities/': {
       id: '/deities/'
       path: '/deities'
@@ -519,6 +677,13 @@ declare module '@tanstack/react-router' {
       path: '/deities/$slug'
       fullPath: '/deities/$slug'
       preLoaderRoute: typeof DeitiesSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payments/': {
+      id: '/payments/'
+      path: '/payments'
+      fullPath: '/payments/'
+      preLoaderRoute: typeof PaymentsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile/': {
@@ -605,6 +770,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCatalogueReviewRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/payments/': {
+      id: '/admin/payments/'
+      path: '/payments'
+      fullPath: '/admin/payments/'
+      preLoaderRoute: typeof AdminPaymentsIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/payments/$id': {
+      id: '/admin/payments/$id'
+      path: '/payments/$id'
+      fullPath: '/admin/payments/$id'
+      preLoaderRoute: typeof AdminPaymentsIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/scheduling/': {
       id: '/admin/scheduling/'
       path: '/scheduling'
@@ -618,6 +797,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/scheduling/$houseId'
       preLoaderRoute: typeof AdminSchedulingHouseIdRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/api/webhooks/$provider': {
+      id: '/api/webhooks/$provider'
+      path: '/api/webhooks/$provider'
+      fullPath: '/api/webhooks/$provider'
+      preLoaderRoute: typeof ApiWebhooksProviderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payments/receipt/$attemptPublicId': {
+      id: '/payments/receipt/$attemptPublicId'
+      path: '/payments/receipt/$attemptPublicId'
+      fullPath: '/payments/receipt/$attemptPublicId'
+      preLoaderRoute: typeof PaymentsReceiptAttemptPublicIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payments/return/$provider': {
+      id: '/payments/return/$provider'
+      path: '/payments/return/$provider'
+      fullPath: '/payments/return/$provider'
+      preLoaderRoute: typeof PaymentsReturnProviderRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/admin/catalogue/deities/': {
       id: '/admin/catalogue/deities/'
@@ -689,9 +889,11 @@ interface AdminRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
   AdminAppointmentsIdRoute: typeof AdminAppointmentsIdRoute
   AdminCatalogueReviewRoute: typeof AdminCatalogueReviewRoute
+  AdminPaymentsIdRoute: typeof AdminPaymentsIdRoute
   AdminSchedulingHouseIdRoute: typeof AdminSchedulingHouseIdRoute
   AdminAppointmentsIndexRoute: typeof AdminAppointmentsIndexRoute
   AdminCatalogueIndexRoute: typeof AdminCatalogueIndexRoute
+  AdminPaymentsIndexRoute: typeof AdminPaymentsIndexRoute
   AdminSchedulingIndexRoute: typeof AdminSchedulingIndexRoute
   AdminCatalogueDeitiesIdRoute: typeof AdminCatalogueDeitiesIdRoute
   AdminCatalogueDeitiesNewRoute: typeof AdminCatalogueDeitiesNewRoute
@@ -708,9 +910,11 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
   AdminAppointmentsIdRoute: AdminAppointmentsIdRoute,
   AdminCatalogueReviewRoute: AdminCatalogueReviewRoute,
+  AdminPaymentsIdRoute: AdminPaymentsIdRoute,
   AdminSchedulingHouseIdRoute: AdminSchedulingHouseIdRoute,
   AdminAppointmentsIndexRoute: AdminAppointmentsIndexRoute,
   AdminCatalogueIndexRoute: AdminCatalogueIndexRoute,
+  AdminPaymentsIndexRoute: AdminPaymentsIndexRoute,
   AdminSchedulingIndexRoute: AdminSchedulingIndexRoute,
   AdminCatalogueDeitiesIdRoute: AdminCatalogueDeitiesIdRoute,
   AdminCatalogueDeitiesNewRoute: AdminCatalogueDeitiesNewRoute,
@@ -733,16 +937,24 @@ const rootRouteChildren: RootRouteChildren = {
   OlodumareRoute: OlodumareRoute,
   RegisterRoute: RegisterRoute,
   ApiHealthRoute: ApiHealthRoute,
+  AppointmentsPublicIdRoute: AppointmentsPublicIdRoute,
+  BookServiceSlugRoute: BookServiceSlugRoute,
+  CheckoutAppointmentPublicIdRoute: CheckoutAppointmentPublicIdRoute,
   DeitiesSlugRoute: DeitiesSlugRoute,
   ProfileConsentsRoute: ProfileConsentsRoute,
   ProfileEditRoute: ProfileEditRoute,
   ProfileSpiritualRoute: ProfileSpiritualRoute,
   SacredHousesSlugRoute: SacredHousesSlugRoute,
   ServicesSlugRoute: ServicesSlugRoute,
+  AppointmentsIndexRoute: AppointmentsIndexRoute,
   DeitiesIndexRoute: DeitiesIndexRoute,
+  PaymentsIndexRoute: PaymentsIndexRoute,
   ProfileIndexRoute: ProfileIndexRoute,
   SacredHousesIndexRoute: SacredHousesIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
+  ApiWebhooksProviderRoute: ApiWebhooksProviderRoute,
+  PaymentsReceiptAttemptPublicIdRoute: PaymentsReceiptAttemptPublicIdRoute,
+  PaymentsReturnProviderRoute: PaymentsReturnProviderRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

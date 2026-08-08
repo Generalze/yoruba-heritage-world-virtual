@@ -936,7 +936,13 @@ OBJECT_STORAGE_ACCESS_KEY
 OBJECT_STORAGE_SECRET_KEY
 
 PAYSTACK_SECRET_KEY
-FLUTTERWAVE_SECRET_KEY
+PAYPAL_CLIENT_ID
+PAYPAL_CLIENT_SECRET
+PAYPAL_WEBHOOK_ID
+STRIPE_SECRET_KEY
+STRIPE_WEBHOOK_SECRET
+CRYPTO_API_KEY
+CRYPTO_WEBHOOK_SECRET
 
 EMAIL_*
 ```
@@ -949,11 +955,17 @@ Only publish `.env.example` with placeholders.
 
 Payment integrations must be isolated through provider adapters.
 
-Initial preferred providers may include:
+Locked providers (Paystack is the preferred Nigeria-facing option;
+PayPal and Stripe add international routes where the merchant account
+and appointment currency support them; Crypto is part of the provider
+architecture but remains disabled in production until a concrete
+processor is explicitly approved):
 
 ```text
 Paystack
-Flutterwave
+PayPal
+Stripe
+Crypto
 ```
 
 Payment webhooks must:
