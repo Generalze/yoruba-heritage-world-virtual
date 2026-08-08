@@ -37,12 +37,24 @@ import { users } from './users'
  */
 
 /**
- * The controlled Step 7 content types. Application constant over a
- * bounded VARCHAR (not a DB enum) so later approved stages can add
- * types (e.g. an approved prayer library) without a schema rewrite —
- * but the Step 7 authoring surface accepts exactly these seven.
+ * Content domains (Step 8): GUIDANCE is the Step 7 appointment
+ * preparation/guidance system; SACRED_RUNTIME is the approved sacred
+ * library the future autonomous Prayer Room engine consumes. The two
+ * domains share the workflow architecture but never mix: guidance
+ * assignment considers only GUIDANCE, runtime candidates only
+ * SACRED_RUNTIME. The domain is established server-side by the route/
+ * service used — never by browser input.
  */
-export const SPIRITUAL_CONTENT_TYPES = [
+export const CONTENT_DOMAINS = ['GUIDANCE', 'SACRED_RUNTIME'] as const
+export type ContentDomain = (typeof CONTENT_DOMAINS)[number]
+
+/**
+ * The controlled Step 7 GUIDANCE content types. Application constant
+ * over a bounded VARCHAR (not a DB enum); the Step 7 authoring surface
+ * accepts exactly these seven — sacred runtime types are never offered
+ * there.
+ */
+export const GUIDANCE_CONTENT_TYPES = [
   'PREPARATION',
   'WHAT_TO_EXPECT',
   'ARRIVAL_GUIDANCE',
@@ -51,7 +63,33 @@ export const SPIRITUAL_CONTENT_TYPES = [
   'THANKSGIVING_GUIDANCE',
   'GENERAL_SPIRITUAL_NOTICE',
 ] as const
-export type SpiritualContentType = (typeof SPIRITUAL_CONTENT_TYPES)[number]
+export type GuidanceContentType = (typeof GUIDANCE_CONTENT_TYPES)[number]
+
+/**
+ * The controlled Step 8 SACRED_RUNTIME content types. Deliberately no
+ * SILENCE (a future template/timeline construct, not sacred text) and
+ * no INSTRUCTION/FOLLOW_UP (Step 7 guidance territory).
+ */
+export const SACRED_RUNTIME_CONTENT_TYPES = [
+  'OPENING',
+  'GREETING',
+  'HOUSE_INTRO',
+  'INVOCATION',
+  'PRAYER',
+  'CALL_RESPONSE',
+  'REFLECTION',
+  'CHANT',
+  'BLESSING',
+  'CLOSING',
+] as const
+export type SacredRuntimeContentType =
+  (typeof SACRED_RUNTIME_CONTENT_TYPES)[number]
+
+export const ALL_SPIRITUAL_CONTENT_TYPES = [
+  ...GUIDANCE_CONTENT_TYPES,
+  ...SACRED_RUNTIME_CONTENT_TYPES,
+] as const
+export type SpiritualContentType = (typeof ALL_SPIRITUAL_CONTENT_TYPES)[number]
 
 export const CONTENT_SCOPE_TYPES = [
   'PLATFORM',
@@ -94,6 +132,11 @@ export const spiritualContentItems = mysqlTable(
     id: int('id', { unsigned: true }).autoincrement().primaryKey(),
     publicId: varchar('public_id', { length: 36 }).notNull(),
     code: varchar('code', { length: 60 }).notNull(),
+    // GUIDANCE default so the Step 8 migration safely backfills every
+    // pre-existing Step 7 row.
+    contentDomain: mysqlEnum('content_domain', CONTENT_DOMAINS)
+      .notNull()
+      .default('GUIDANCE'),
     contentType: varchar('content_type', { length: 40 }).notNull(),
     scopeType: mysqlEnum('scope_type', CONTENT_SCOPE_TYPES).notNull(),
     sacredHouseId: int('sacred_house_id', { unsigned: true }),
@@ -107,6 +150,7 @@ export const spiritualContentItems = mysqlTable(
   (table) => [
     uniqueIndex('sci_public_id_unique').on(table.publicId),
     uniqueIndex('sci_code_unique').on(table.code),
+    index('sci_domain_idx').on(table.contentDomain),
     index('sci_type_idx').on(table.contentType),
     index('sci_scope_idx').on(table.scopeType),
     index('sci_house_idx').on(table.sacredHouseId),
@@ -341,5 +385,140 @@ export const appointmentGuidanceAcknowledgements = mysqlTable(
       foreignColumns: [spiritualContentVersions.id],
       name: 'agk_version_fk',
     }).onDelete('restrict'),
+  ],
+)
+
+// --- Step 8: sacred runtime profiles ---------------------------------------
+
+export const VARIANT_KINDS = [
+  'ORIGINAL',
+  'AUTHORIZED_ALTERNATE',
+  'TRANSLATION',
+  'TRANSLITERATION',
+  'GLOSS',
+] as const
+export type VariantKind = (typeof VARIANT_KINDS)[number]
+
+export const PROVENANCE_TYPES = [
+  'ORIGINAL_AUTHORED',
+  'COMMISSIONED',
+  'TRADITIONAL_ORAL',
+  'LICENSED_SOURCE',
+  'DOCUMENTED_SOURCE',
+] as const
+export type ProvenanceType = (typeof PROVENANCE_TYPES)[number]
+
+export const VOICE_POLICIES = [
+  'HUMAN_RECORDED_REQUIRED',
+  'APPROVED_TTS_ALLOWED',
+  'TEXT_ONLY',
+] as const
+export type VoicePolicy = (typeof VOICE_POLICIES)[number]
+
+export const EXTERNAL_AI_POLICIES = [
+  'NO_EXTERNAL_AI',
+  'METADATA_ONLY',
+  'APPROVED_TEXT_CONTEXT',
+] as const
+export type ExternalAiPolicy = (typeof EXTERNAL_AI_POLICIES)[number]
+
+export const ACCESS_POLICIES = [
+  'STAFF_ONLY',
+  'PRAYER_ROOM_PRIVATE',
+  'ARCHIVAL_RESTRICTED',
+] as const
+export type AccessPolicy = (typeof ACCESS_POLICIES)[number]
+
+export const RIGHTS_STATUSES = [
+  'UNREVIEWED',
+  'PENDING_REVIEW',
+  'CLEARED',
+  'RESTRICTED',
+  'WITHDRAWN',
+] as const
+export type RightsStatus = (typeof RIGHTS_STATUSES)[number]
+
+/**
+ * One-to-one runtime/provenance/rights profile for every SACRED_RUNTIME
+ * content version (Step 8). Created ATOMICALLY with its version — a
+ * sacred version never exists without a profile, and a GUIDANCE version
+ * never has one (application-enforced; the composite FK guarantees the
+ * version/item pairing at the database level).
+ *
+ * Governance model: humans approve upstream ONCE — cultural publication
+ * (the Step 7 workflow), rights clearance (independent gate, only on
+ * immutable APPROVED/PUBLISHED text), and the runtime_enabled switch.
+ * Runtime eligibility is COMPUTED from these gates plus the SHA-256
+ * integrity hash; no per-appointment human approval ever exists.
+ * external_ai_policy is a FUTURE permission boundary only — nothing in
+ * Step 8 calls any AI regardless of its value.
+ */
+export const sacredContentVersionProfiles = mysqlTable(
+  'sacred_content_version_profiles',
+  {
+    contentVersionId: bigint('content_version_id', {
+      mode: 'number',
+      unsigned: true,
+    }).primaryKey(),
+    contentItemId: int('content_item_id', { unsigned: true }).notNull(),
+    variantKind: mysqlEnum('variant_kind', VARIANT_KINDS)
+      .notNull()
+      .default('ORIGINAL'),
+    provenanceType: mysqlEnum('provenance_type', PROVENANCE_TYPES).notNull(),
+    sourceCommunity: varchar('source_community', { length: 255 }),
+    sourcePlace: varchar('source_place', { length: 255 }),
+    sourceReference: varchar('source_reference', { length: 1000 }),
+    publicAttributionText: varchar('public_attribution_text', { length: 500 }),
+    internalProvenanceNote: varchar('internal_provenance_note', {
+      length: 2000,
+    }),
+    digitalStorageAuthorized: boolean('digital_storage_authorized')
+      .notNull()
+      .default(false),
+    themeCode: varchar('theme_code', { length: 60 }),
+    durationHintSeconds: int('duration_hint_seconds', { unsigned: true }),
+    repeatable: boolean('repeatable').notNull().default(false),
+    voicePolicy: mysqlEnum('voice_policy', VOICE_POLICIES).notNull(),
+    externalAiPolicy: mysqlEnum('external_ai_policy', EXTERNAL_AI_POLICIES)
+      .notNull()
+      .default('METADATA_ONLY'),
+    accessPolicy: mysqlEnum('access_policy', ACCESS_POLICIES)
+      .notNull()
+      .default('STAFF_ONLY'),
+    rightsStatus: mysqlEnum('rights_status', RIGHTS_STATUSES)
+      .notNull()
+      .default('UNREVIEWED'),
+    rightsReviewedBy: bigint('rights_reviewed_by', {
+      mode: 'number',
+      unsigned: true,
+    }),
+    rightsReviewedAt: timestamp('rights_reviewed_at'),
+    rightsNote: varchar('rights_note', { length: 1000 }),
+    runtimeEnabled: boolean('runtime_enabled').notNull().default(false),
+    contentSha256: varchar('content_sha256', { length: 64 }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    index('scvp_item_idx').on(table.contentItemId),
+    index('scvp_rights_idx').on(table.rightsStatus),
+    index('scvp_runtime_idx').on(table.runtimeEnabled),
+    index('scvp_access_idx').on(table.accessPolicy),
+    index('scvp_theme_idx').on(table.themeCode),
+    index('scvp_variant_idx').on(table.variantKind),
+    // The profile's version must actually belong to the profile's item.
+    foreignKey({
+      columns: [table.contentVersionId, table.contentItemId],
+      foreignColumns: [
+        spiritualContentVersions.id,
+        spiritualContentVersions.contentItemId,
+      ],
+      name: 'scvp_ver_item_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.rightsReviewedBy],
+      foreignColumns: [users.id],
+      name: 'scvp_rights_by_fk',
+    }).onDelete('set null'),
   ],
 )

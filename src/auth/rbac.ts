@@ -45,6 +45,7 @@ export const PERMISSION_CODES = [
   'spiritual_content.manage',
   'spiritual_content.approve',
   'spiritual_content.publish',
+  'sacred_content.rights_manage',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -165,6 +166,11 @@ export const PERMISSION_DEFINITIONS: Record<
     description:
       'Publish APPROVED guidance versions, archive versions and deactivate items operationally',
   },
+  'sacred_content.rights_manage': {
+    name: 'Manage sacred content rights',
+    description:
+      'Record rights/provenance review outcomes for sacred runtime content — an independent gate from cultural approval',
+  },
 }
 
 /** Appointment operations are ADMIN/SUPER_ADMIN only — catalogue
@@ -196,6 +202,9 @@ const SPIRITUAL_CONTENT_ALL: Array<PermissionCode> = [
   ...SPIRITUAL_CONTENT_AUTHORING,
   'spiritual_content.approve',
   'spiritual_content.publish',
+  // Rights review is ADMIN/SUPER_ADMIN only — CONTENT_MANAGER can
+  // never clear rights (it is not part of the authoring set).
+  'sacred_content.rights_manage',
 ]
 
 const CATALOGUE_VIEW: Array<PermissionCode> = [

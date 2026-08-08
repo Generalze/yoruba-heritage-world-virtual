@@ -1,7 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 
-import { CONTENT_SCOPE_TYPES, SPIRITUAL_CONTENT_TYPES } from '@/db/schema'
+import { CONTENT_SCOPE_TYPES, GUIDANCE_CONTENT_TYPES } from '@/db/schema'
 import { listSpiritualContentFn } from '@/services/spiritual-content-actions'
 import { contentTypeLabel } from '@/lib/guidance-labels'
 
@@ -12,7 +12,7 @@ import { contentTypeLabel } from '@/lib/guidance-labels'
  */
 
 const searchSchema = z.object({
-  type: z.enum(SPIRITUAL_CONTENT_TYPES).optional(),
+  type: z.enum(GUIDANCE_CONTENT_TYPES).optional(),
   scope: z.enum(CONTENT_SCOPE_TYPES).optional(),
   active: z.boolean().optional(),
 })
@@ -69,7 +69,7 @@ function SpiritualContentLibraryPage() {
           search={{}}
           active={!search.type && !search.scope}
         />
-        {SPIRITUAL_CONTENT_TYPES.map((type) => (
+        {GUIDANCE_CONTENT_TYPES.map((type) => (
           <FilterLink
             key={type}
             label={contentTypeLabel(type)}

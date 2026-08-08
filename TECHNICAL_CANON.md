@@ -407,6 +407,56 @@ AND
 active = true
 ```
 
+## 10.1 Amendment — Implemented Sacred Runtime Content Library (Phase One, Step 8)
+
+This amendment narrowly refines the conceptual `content_blocks` design above.
+The implemented system EXTENDS the existing
+`spiritual_content_items` / `spiritual_content_versions` architecture
+(Phase One, Step 7) instead of creating a parallel `content_blocks`
+approval system.
+
+- **Content domains.** Every spiritual content item carries a
+  `content_domain`: `GUIDANCE` (Step 7 appointment preparation/guidance)
+  or `SACRED_RUNTIME` (approved sacred blocks for the future autonomous
+  Prayer Room engine). The two domains share one workflow implementation
+  but never mix: guidance assignment considers only `GUIDANCE`; runtime
+  candidate queries consider only `SACRED_RUNTIME`.
+- **Sacred runtime content types** (exactly): `OPENING`, `GREETING`,
+  `HOUSE_INTRO`, `INVOCATION`, `PRAYER`, `CALL_RESPONSE`, `REFLECTION`,
+  `CHANT`, `BLESSING`, `CLOSING`.
+- `SILENCE` is NOT sacred text — it belongs to future approved session
+  templates/timelines. Preparation, follow-up and instructional guidance
+  remain Step 7 `GUIDANCE` content types.
+- **Independent gates.** Cultural publication (DRAFT → UNDER_REVIEW →
+  APPROVED → PUBLISHED → ARCHIVED) and rights clearance
+  (UNREVIEWED / PENDING_REVIEW / CLEARED / RESTRICTED / WITHDRAWN) are
+  independent. PUBLISHED does not imply rights-cleared; CLEARED does not
+  imply culturally approved. Rights may only be CLEARED on immutable
+  (APPROVED or PUBLISHED) text.
+- **Runtime eligibility is COMPUTED**, never stored as a status: active
+  SACRED_RUNTIME item + PUBLISHED version + sacred profile + digital
+  storage authorization + rights CLEARED + access policy
+  `PRAYER_ROOM_PRIVATE` + `runtime_enabled` + valid SHA-256 integrity
+  hash + supported exact language.
+- **Autonomy.** Humans approve content, templates and policies UPSTREAM
+  once. Normal Prayer Room operation is autonomous and must NOT require
+  human per-appointment approval. AI may later select/orchestrate inside
+  approved template/rule boundaries but may never invent doctrine or
+  alter approved sacred text.
+- **External AI use is governed per sacred version** via
+  `external_ai_policy`: `NO_EXTERNAL_AI`, `METADATA_ONLY` (default), or
+  `APPROVED_TEXT_CONTEXT` (exact approved text may be supplied as
+  context to a future authorized process — never rewritten, translated
+  or extended).
+- **Integrity.** Every published sacred version is protected by a
+  SHA-256 hash (`content_sha256`) over the exact stored UTF-8 body,
+  stamped transactionally at publication. Future recipe/render systems
+  prove they consume the exact approved text via
+  `content_version_id` + `content_sha256`; a mismatch fails closed.
+- **Voice.** Human-recorded prayer remains preferred; each sacred
+  version carries an explicit `voice_policy`
+  (`HUMAN_RECORDED_REQUIRED`, `APPROVED_TTS_ALLOWED`, `TEXT_ONLY`).
+
 ---
 
 # 11. Visual Canon Database
