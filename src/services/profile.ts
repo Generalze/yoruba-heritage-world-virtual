@@ -10,7 +10,7 @@ import {
   users,
 } from '@/db/schema'
 import { recordAuditEvent } from '@/auth/audit'
-import { calculateAge, isAgeEligible } from '@/lib/age'
+import { calculateAge, isAgeEligibleInTimeZone } from '@/lib/age'
 import { isValidCountryCode } from '@/lib/countries'
 import type { RequestContext } from '@/auth/service'
 import type { ConsentType } from '@/db/schema'
@@ -330,25 +330,35 @@ export async function getConsentStatus(userId: number): Promise<ConsentStatus> {
   return { required, marketingOptIn: marketing !== undefined }
 }
 
-/** Records acceptance of the required notices at their current versions. */
+/**
+ * Records acceptance of the required notices at their current versions.
+ * The user accepts Terms, Privacy and the Spiritual Service Notice as
+ * ONE combined action, so the three versioned upserts run inside a
+ * single transaction — either all reach their accepted state or none
+ * commit. Idempotent: re-acceptance of the same versions is a no-op
+ * upsert. Marketing is deliberately NOT part of this transaction.
+ * Audit events (type/version metadata only) are emitted after commit.
+ */
 export async function acceptRequiredConsents(
   userId: number,
   ctx: RequestContext,
 ): Promise<void> {
-  const db = getDb()
+  await getDb().transaction(async (tx) => {
+    for (const type of REQUIRED_CONSENT_TYPES) {
+      await tx
+        .insert(userConsents)
+        .values({ userId, consentType: type, version: CONSENT_VERSIONS[type] })
+        .onDuplicateKeyUpdate({ set: { revokedAt: null } })
+    }
+  })
+
   for (const type of REQUIRED_CONSENT_TYPES) {
-    const version = CONSENT_VERSIONS[type]
-    const inserted = await db
-      .insert(userConsents)
-      .values({ userId, consentType: type, version })
-      .onDuplicateKeyUpdate({ set: { revokedAt: null } })
-    void inserted
     await recordAuditEvent({
       actorUserId: userId,
       action: 'required_consent.accepted',
       entityType: 'user',
       entityId: String(userId),
-      metadata: { consentType: type, version },
+      metadata: { consentType: type, version: CONSENT_VERSIONS[type] },
       ipAddress: ctx.ipAddress,
       userAgent: ctx.userAgent,
     })
@@ -424,9 +434,13 @@ export async function getProfileCompletion(
   if (!profile?.dateOfBirth) missingFields.push('dateOfBirth')
 
   const requiredConsentsAccepted = consents.required.every((c) => c.accepted)
+  // Age is evaluated on the USER'S current calendar date via their
+  // stored IANA timezone — never the server's runtime timezone. With
+  // no stored timezone there is no fallback: eligibility stays false
+  // (and 'timezone' is already in missingFields).
   const ageEligible =
-    profile?.dateOfBirth !== null && profile?.dateOfBirth !== undefined
-      ? isAgeEligible(profile.dateOfBirth)
+    profile?.dateOfBirth != null && profile.timezone != null
+      ? isAgeEligibleInTimeZone(profile.dateOfBirth, profile.timezone)
       : false
 
   return {

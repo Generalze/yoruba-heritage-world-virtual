@@ -353,6 +353,72 @@ describe('profile completion and future-booking eligibility', () => {
   })
 })
 
+describe('consent atomicity', () => {
+  it('a failing required-consent transaction persists no consent rows at all', async () => {
+    // A user id that violates the FK makes the transaction fail; the
+    // atomic implementation must leave zero required-consent rows.
+    const ghostUserId = 999_999_999
+    let thrown: unknown = null
+    try {
+      await acceptRequiredConsents(ghostUserId, ctx)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).not.toBeNull()
+
+    const { userConsents } = await import('@/db/schema')
+    const rows = await getDb()
+      .select()
+      .from(userConsents)
+      .where(eq(userConsents.userId, ghostUserId))
+    expect(rows.length).toBe(0)
+  })
+
+  it('normal acceptance lands all three required rows together and stays idempotent', async () => {
+    const userId = await makeUser()
+    await acceptRequiredConsents(userId, ctx)
+    const status = await getConsentStatus(userId)
+    expect(status.required.filter((c) => c.accepted).length).toBe(3)
+
+    await acceptRequiredConsents(userId, ctx)
+    const { userConsents } = await import('@/db/schema')
+    const rows = await getDb()
+      .select()
+      .from(userConsents)
+      .where(eq(userConsents.userId, userId))
+    expect(rows.length).toBe(3) // no duplicates from re-acceptance
+  })
+})
+
+describe('timezone-aware eligibility wiring', () => {
+  it('uses the stored profile timezone and fails closed when it is absent', async () => {
+    const userId = await makeUser()
+    await savePersonalDetails(
+      userId,
+      { ...VALID_DETAILS, dateOfBirth: adultDob() },
+      ctx,
+    )
+    await acceptRequiredConsents(userId, ctx)
+    expect((await getProfileCompletion(userId)).ageEligible).toBe(true)
+
+    // Remove the timezone directly: no server-timezone fallback exists.
+    await getDb()
+      .update(userProfiles)
+      .set({ timezone: null })
+      .where(eq(userProfiles.userId, userId))
+
+    const completion = await getProfileCompletion(userId)
+    expect(completion.ageEligible).toBe(false)
+    expect(completion.missingFields).toContain('timezone')
+    expect(completion.complete).toBe(false)
+
+    const eligibility = await canUserBookSpiritualService(userId)
+    expect(eligibility.eligible).toBe(false)
+    expect(eligibility.reasons).toContain('PROFILE_INCOMPLETE')
+    expect(eligibility.reasons).toContain('AGE_REQUIREMENT_NOT_MET')
+  })
+})
+
 describe('audit safety', () => {
   it('profile and interest updates audit field names/counts, never values', async () => {
     const userId = await makeUser()
