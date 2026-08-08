@@ -32,9 +32,27 @@ function Home() {
           </Link>
         </div>
 
-        <p className="mt-10 text-sm text-stone-500">
-          Sacred Houses, appointments, Prayer Rooms and subscriptions arrive in
-          later approved stages.
+        <nav className="mt-10 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm">
+          <Link to="/deities" className="text-stone-400 hover:text-amber-500">
+            Deity Profiles
+          </Link>
+          <Link
+            to="/sacred-houses"
+            className="text-stone-400 hover:text-amber-500"
+          >
+            Sacred Houses
+          </Link>
+          <Link to="/services" className="text-stone-400 hover:text-amber-500">
+            Services
+          </Link>
+          <Link to="/olodumare" className="text-stone-400 hover:text-amber-500">
+            Olódùmárè
+          </Link>
+        </nav>
+
+        <p className="mt-8 text-sm text-stone-500">
+          Appointments, Prayer Rooms and subscriptions arrive in later approved
+          stages.
         </p>
       </div>
     </main>

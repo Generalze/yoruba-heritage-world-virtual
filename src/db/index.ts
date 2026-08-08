@@ -47,6 +47,17 @@ export type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0]
 export type DbClient = Db | DbTransaction
 
 /**
+ * Closes the pool and resets the lazy singletons so a later getDb()
+ * call reconnects. Used by test teardown and CLI scripts.
+ */
+export async function closeDb(): Promise<void> {
+  const current = pool
+  pool = undefined
+  db = undefined
+  if (current) await current.end()
+}
+
+/**
  * Lightweight connectivity probe used by the health-check endpoint.
  * Never throws and never exposes credentials.
  */

@@ -85,27 +85,29 @@ Health check: `GET http://localhost:3000/api/health` reports application and dat
 
 Useful scripts:
 
-| Command               | Purpose                             |
-| --------------------- | ----------------------------------- |
-| `bun run dev`         | Development server (port 3000)      |
-| `bun run build`       | Production build (`dist/`)          |
-| `bun run start`       | Run the production build with Bun   |
-| `bun run typecheck`   | Generate routes + TypeScript check  |
-| `bun run lint`        | ESLint                              |
-| `bun run test`        | Unit tests (`bun test`)             |
-| `bun run db:generate` | Generate Drizzle migrations         |
-| `bun run db:migrate`  | Apply migrations to the database    |
-| `bun run db:seed`     | Seed roles/permissions (idempotent) |
+| Command                  | Purpose                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `bun run dev`            | Development server (port 3000)                                                                       |
+| `bun run build`          | Production build (`dist/`)                                                                           |
+| `bun run start`          | Run the production build with Bun                                                                    |
+| `bun run typecheck`      | Generate routes + TypeScript check                                                                   |
+| `bun run lint`           | ESLint                                                                                               |
+| `bun run test`           | Unit tests (`bun test`)                                                                              |
+| `bun run db:generate`    | Generate Drizzle migrations                                                                          |
+| `bun run db:migrate`     | Apply migrations to the database                                                                     |
+| `bun run db:seed`        | Seed roles/permissions (idempotent)                                                                  |
+| `bun run db:seed:domain` | Seed approved catalogue: deities, Sacred Houses, focus areas, service families, members (idempotent) |
 
 Full stack via Docker (production-style): `docker compose up --build`.
 
 ### Authentication development notes
 
-After starting the database, run migrations and the RBAC seed once:
+After starting the database, run migrations and the seeds once:
 
 ```bash
 bun run db:migrate
-bun run db:seed
+bun run db:seed          # roles/permissions
+bun run db:seed:domain   # approved spiritual-domain catalogue
 ```
 
 - Registration/login live at `/register` and `/login`; the authenticated
@@ -120,6 +122,22 @@ bun run db:seed
 - Client IPs are read from the socket by default. Set `TRUST_PROXY=true`
   only when deploying behind a trusted reverse proxy that overwrites
   `X-Forwarded-For`.
+
+### Public catalogue routes
+
+- `/deities` and `/deities/$slug` — published deity profiles
+- `/sacred-houses` and `/sacred-houses/$slug` — the four Sacred Houses
+  with focus areas, members and service families
+- `/services` and `/services/$slug` — service families grouped by
+  Sacred House (no prices/durations until approved)
+- `/olodumare` — separate page; Olódùmárè is never a deities-table
+  record
+
+Only `PUBLISHED` + `active` records appear publicly. The catalogue is
+database-driven: seeded records are development data, and future
+authorised administrators can add and publish more without code
+changes. Appointments are booked with Sacred Houses — individual
+members are never bookable.
 
 ## Development Principles
 

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { eq, inArray } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/mysql2/migrator'
 
-import { getDb, getPool } from '@/db'
+import { closeDb, getDb } from '@/db'
 import { auditLogs, roles, sessions, users } from '@/db/schema'
 import { seedRbac } from '@/db/seed'
 import { AUDIT_ACTIONS, recordAuditEvent } from '@/auth/audit'
@@ -58,7 +58,7 @@ afterAll(async () => {
       .where(inArray(auditLogs.actorUserId, createdUserIds))
     await getDb().delete(users).where(inArray(users.id, createdUserIds))
   }
-  await getPool().end()
+  await closeDb()
 })
 
 describe('registration', () => {

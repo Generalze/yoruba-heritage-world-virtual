@@ -28,6 +28,12 @@ export const PERMISSION_CODES = [
   'account.self.read',
   'account.self.update',
   'admin.access',
+  'deities.view',
+  'deities.manage',
+  'sacred_houses.view',
+  'sacred_houses.manage',
+  'services.view',
+  'services.manage',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -70,13 +76,64 @@ export const PERMISSION_DEFINITIONS: Record<
     name: 'Administrative access',
     description: 'Access administrative areas and tooling',
   },
+  'deities.view': {
+    name: 'View deity profiles (admin)',
+    description: 'View deity profiles in any status, including drafts',
+  },
+  'deities.manage': {
+    name: 'Manage deity profiles',
+    description: 'Create, edit, review, publish, unpublish, archive deities',
+  },
+  'sacred_houses.view': {
+    name: 'View Sacred Houses (admin)',
+    description: 'View Sacred Houses in any status, including drafts',
+  },
+  'sacred_houses.manage': {
+    name: 'Manage Sacred Houses',
+    description:
+      'Create, edit, publish, archive Sacred Houses, members and focus areas',
+  },
+  'services.view': {
+    name: 'View services (admin)',
+    description: 'View service catalogue in any status, including drafts',
+  },
+  'services.manage': {
+    name: 'Manage services',
+    description: 'Create, edit, publish, unpublish, archive services',
+  },
 }
 
+const CATALOGUE_PERMISSIONS: Array<PermissionCode> = [
+  'deities.view',
+  'deities.manage',
+  'sacred_houses.view',
+  'sacred_houses.manage',
+  'services.view',
+  'services.manage',
+]
+
+// USER never receives catalogue-management permissions. CONTENT_MANAGER
+// manages the catalogue (consistent with content review duties);
+// ADMIN and SUPER_ADMIN inherit everything.
 export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
   USER: ['account.self.read', 'account.self.update'],
-  CONTENT_MANAGER: ['account.self.read', 'account.self.update'],
-  ADMIN: ['account.self.read', 'account.self.update', 'admin.access'],
-  SUPER_ADMIN: ['account.self.read', 'account.self.update', 'admin.access'],
+  CONTENT_MANAGER: [
+    'account.self.read',
+    'account.self.update',
+    ...CATALOGUE_PERMISSIONS,
+  ],
+  ADMIN: [
+    'account.self.read',
+    'account.self.update',
+    'admin.access',
+    ...CATALOGUE_PERMISSIONS,
+  ],
+  SUPER_ADMIN: [
+    'account.self.read',
+    'account.self.update',
+    'admin.access',
+    ...CATALOGUE_PERMISSIONS,
+  ],
 }
 
 /** The only role public registration may ever assign. */
