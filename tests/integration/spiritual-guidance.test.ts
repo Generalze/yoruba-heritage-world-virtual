@@ -799,6 +799,158 @@ describe('version workflow', () => {
     await setContentItemActive(adminId, ctx, itemId, false)
   })
 
+  it('structural freeze is PERMANENT: review-return to DRAFT never unfreezes (§13)', async () => {
+    const itemId = await makeItem({ contentType: 'ARRIVAL_GUIDANCE' })
+    const version = await createVersion(cmId, ctx, itemId, {
+      language: 'en',
+      title: 'Permanent freeze test',
+      body: 'Test preparation content A',
+      visibilityStage: 'AFTER_CONFIRMATION',
+      acknowledgementRequired: false,
+      allowEnglishFallback: false,
+    })
+    // Pre-submission: structural edit succeeds.
+    const newCode = nextCode()
+    await updateContentItem(cmId, ctx, itemId, {
+      code: newCode,
+      contentType: 'WHAT_TO_EXPECT',
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+      serviceId: null,
+      sortOrder: 0,
+    })
+    // Submit, then Admin returns it to DRAFT — the item has now been
+    // reviewed once and must stay frozen FOREVER.
+    await submitVersionForReview(cmId, ctx, version.id)
+    await returnVersionToDraft(adminId, ctx, version.id, 'needs wording work')
+    const detail = await getContentItemDetail(itemId)
+    expect(detail.structureFrozen).toBe(true)
+    let thrown: unknown = null
+    try {
+      await updateContentItem(cmId, ctx, itemId, {
+        code: nextCode(),
+        contentType: 'PREPARATION',
+        scopeType: 'SACRED_HOUSE',
+        sacredHouseId: houseId,
+        serviceId: null,
+        sortOrder: 0,
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(SpiritualContentError)
+    // Structure unchanged; sort_order remains operationally editable.
+    await updateContentItem(cmId, ctx, itemId, {
+      code: newCode,
+      contentType: 'WHAT_TO_EXPECT',
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+      serviceId: null,
+      sortOrder: 7,
+    })
+    const after = await getContentItemDetail(itemId)
+    expect(after.item.code).toBe(newCode)
+    expect(after.item.contentType).toBe('WHAT_TO_EXPECT')
+    expect(after.item.scopeType).toBe('PLATFORM')
+    expect(after.item.sortOrder).toBe(7)
+  })
+
+  it('archiving a never-submitted DRAFT also freezes structure permanently (§4)', async () => {
+    const itemId = await makeItem()
+    const version = await createVersion(cmId, ctx, itemId, {
+      language: 'en',
+      title: 'Archive-from-draft freeze',
+      body: 'Test preparation content A',
+      visibilityStage: 'AFTER_CONFIRMATION',
+      acknowledgementRequired: false,
+      allowEnglishFallback: false,
+    })
+    await archiveVersion(adminId, ctx, version.id)
+    expect((await getContentItemDetail(itemId)).structureFrozen).toBe(true)
+    let thrown: unknown = null
+    try {
+      await updateContentItem(cmId, ctx, itemId, {
+        code: nextCode(),
+        contentType: 'WHAT_TO_EXPECT',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        sortOrder: 0,
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(SpiritualContentError)
+  })
+
+  it('active-toggle authority follows durable publication evidence (§5/§6)', async () => {
+    // Unpublished item: CONTENT_MANAGER may toggle active.
+    const unpublished = await makeItem()
+    await setContentItemActive(cmId, ctx, unpublished, false)
+    await setContentItemActive(cmId, ctx, unpublished, true)
+
+    // An archived NEVER-published draft is not publication evidence:
+    // CONTENT_MANAGER must still be allowed.
+    const abandoned = await makeItem()
+    const abandonedDraft = await createVersion(cmId, ctx, abandoned, {
+      language: 'en',
+      title: 'Abandoned before publication',
+      body: 'Test preparation content A',
+      visibilityStage: 'AFTER_CONFIRMATION',
+      acknowledgementRequired: false,
+      allowEnglishFallback: false,
+    })
+    await archiveVersion(adminId, ctx, abandonedDraft.id)
+    await setContentItemActive(cmId, ctx, abandoned, false)
+    await setContentItemActive(cmId, ctx, abandoned, true)
+
+    // After first REAL publication: CM denied, ADMIN allowed.
+    const published = await makeItem()
+    await makePublished(published, { title: 'Authority test' })
+    let cmDenied: unknown = null
+    try {
+      await setContentItemActive(cmId, ctx, published, false)
+    } catch (error) {
+      cmDenied = error
+    }
+    expect(cmDenied).toBeInstanceOf(ForbiddenError)
+    await setContentItemActive(adminId, ctx, published, false)
+    await setContentItemActive(adminId, ctx, published, true)
+    await setContentItemActive(adminId, ctx, published, false)
+  })
+
+  it('first publication racing a CM active toggle resolves to a valid serialized order (§6)', async () => {
+    const itemId = await makeItem()
+    const version = await createVersion(cmId, ctx, itemId, {
+      language: 'en',
+      title: 'Race authority',
+      body: 'Test preparation content A',
+      visibilityStage: 'AFTER_CONFIRMATION',
+      acknowledgementRequired: false,
+      allowEnglishFallback: false,
+    })
+    await submitVersionForReview(cmId, ctx, version.id)
+    await approveVersion(adminId, ctx, version.id)
+
+    const [publishResult, toggleResult] = await Promise.allSettled([
+      publishVersion(adminId, ctx, version.id),
+      setContentItemActive(cmId, ctx, itemId, false),
+    ])
+    // Publication itself always succeeds.
+    expect(publishResult.status).toBe('fulfilled')
+    const item = (await getContentItemDetail(itemId)).item
+    if (toggleResult.status === 'fulfilled') {
+      // Toggle serialized BEFORE publication: it took effect.
+      expect(item.active).toBe(false)
+    } else {
+      // Publication won the lock first: the stale CM decision was
+      // refused and the item stays active.
+      expect(toggleResult.reason).toBeInstanceOf(ForbiddenError)
+      expect(item.active).toBe(true)
+    }
+    await setContentItemActive(adminId, ctx, itemId, false)
+  })
+
   it('publication requires APPROVED — no approval bypass from DRAFT or UNDER_REVIEW', async () => {
     const itemId = await makeItem()
     const draft = await createVersion(cmId, ctx, itemId, {
@@ -1450,6 +1602,7 @@ describe('visibility and acknowledgements', () => {
     vAfter = await makePublished(stageItemAfter, {
       title: 'Stage: after appointment',
       visibilityStage: 'AFTER_APPOINTMENT',
+      acknowledgementRequired: true,
     })
 
     // PENDING_PAYMENT: no guidance (selection has not even run).
@@ -1582,6 +1735,58 @@ describe('visibility and acknowledgements', () => {
       'CANCELLED',
     )
     expect(cancelledVisible.items.length).toBe(0)
+  })
+
+  it('acknowledgement_required=false is refused server-side (§7/§8)', async () => {
+    const optionalItem = await makeItem({
+      contentType: 'WHAT_TO_EXPECT',
+      scopeType: 'SERVICE',
+      serviceId,
+    })
+    const optionalVersion = await makePublished(optionalItem, {
+      title: 'Optional reading',
+      acknowledgementRequired: false,
+    })
+    const reservation = await reserveAndConfirm(userEn)
+    const visible = await getVisibleGuidance(
+      reservation.appointmentId,
+      'CONFIRMED',
+    )
+    const optional = visible.items.find(
+      (i) => i.contentVersionId === optionalVersion,
+    )
+    expect(optional?.acknowledgementRequired).toBe(false)
+
+    // The domain path itself must refuse — a hidden checkbox is not
+    // enforcement.
+    let refused: unknown = null
+    try {
+      await acknowledgeGuidance(
+        ctx,
+        { id: reservation.appointmentId, userId: userEn, status: 'CONFIRMED' },
+        optionalVersion,
+      )
+    } catch (error) {
+      refused = error
+    }
+    expect(refused).toBeInstanceOf(GuidanceError)
+    const rows = await getDb()
+      .select()
+      .from(appointmentGuidanceAcknowledgements)
+      .where(
+        and(
+          eq(
+            appointmentGuidanceAcknowledgements.appointmentId,
+            reservation.appointmentId,
+          ),
+          eq(
+            appointmentGuidanceAcknowledgements.contentVersionId,
+            optionalVersion,
+          ),
+        ),
+      )
+    expect(rows.length).toBe(0)
+    await setContentItemActive(adminId, ctx, optionalItem, false)
   })
 
   it('wrong-user isolation and audit privacy hold', async () => {

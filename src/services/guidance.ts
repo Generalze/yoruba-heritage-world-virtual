@@ -447,6 +447,13 @@ export async function acknowledgeGuidance(
   if (!stages.includes(assignment.visibilityStage)) {
     throw new GuidanceError('This guidance is not currently available.')
   }
+  // Server-authoritative: a hidden checkbox is not enforcement. Only
+  // versions that actually require acknowledgement accept one.
+  if (!assignment.acknowledgementRequired) {
+    throw new GuidanceError(
+      'This guidance does not require an acknowledgement.',
+    )
+  }
   try {
     await db.insert(appointmentGuidanceAcknowledgements).values({
       appointmentId: appointment.id,

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, ne, or } from 'drizzle-orm'
 import { z } from 'zod'
 
 import { getDb } from '@/db'
@@ -15,7 +15,8 @@ import {
   spiritualContentVersions,
 } from '@/db/schema'
 import { recordAuditEvent } from '@/auth/audit'
-import { requirePermission } from '@/auth/guards'
+import { ForbiddenError, requirePermission } from '@/auth/guards'
+import { userHasPermission } from '@/auth/rbac'
 import type { DbClient } from '@/db'
 import type {
   ContentScopeType,
@@ -243,23 +244,34 @@ async function loadItem(itemId: number, db: DbClient = getDb()) {
   return row
 }
 
-/** Structure is frozen once ANY version has progressed beyond DRAFT —
- * reviewed sacred guidance is never silently retargeted. */
+/**
+ * Structure is PERMANENTLY frozen once ANY version has EVER reached
+ * UNDER_REVIEW/APPROVED/PUBLISHED/ARCHIVED — reviewed sacred guidance
+ * is never silently retargeted. The predicate uses durable lifecycle
+ * evidence, not the current status: submitted_at survives a review
+ * return to DRAFT (it is deliberately never cleared), so
+ * DRAFT → UNDER_REVIEW → DRAFT stays frozen forever; the non-DRAFT
+ * status check additionally covers a draft archived without ever being
+ * submitted (ARCHIVED is itself a freeze state).
+ */
 async function isStructureFrozen(
   itemId: number,
   db: DbClient,
 ): Promise<boolean> {
-  const beyondDraft = await db
+  const evidence = await db
     .select({ id: spiritualContentVersions.id })
     .from(spiritualContentVersions)
     .where(
       and(
         eq(spiritualContentVersions.contentItemId, itemId),
-        ne(spiritualContentVersions.status, 'DRAFT'),
+        or(
+          isNotNull(spiritualContentVersions.submittedAt),
+          ne(spiritualContentVersions.status, 'DRAFT'),
+        ),
       ),
     )
     .limit(1)
-  return beyondDraft.length > 0
+  return evidence.length > 0
 }
 
 export async function updateContentItem(
@@ -321,40 +333,61 @@ export async function updateContentItem(
   })
 }
 
-/** Operational active toggle. After publication this is an
- * ADMIN/SUPER_ADMIN control (spiritual_content.publish); it affects
- * FUTURE assignment only — historical assignments never change. */
+/**
+ * Operational active toggle. Authority is decided INSIDE the item-row
+ * lock so it cannot race the first publication (publishVersion holds
+ * the same lock): once any version has EVER been published — durable
+ * evidence published_at IS NOT NULL, never the ARCHIVED status of an
+ * abandoned draft — only ADMIN/SUPER_ADMIN (spiritual_content.publish)
+ * may toggle. Affects FUTURE assignment only — historical assignments
+ * never change.
+ */
 export async function setContentItemActive(
   actorId: number,
   ctx: RequestContext,
   itemId: number,
   active: boolean,
 ): Promise<void> {
-  const db = getDb()
-  const hasPublishedHistory =
-    (
-      await db
-        .select({ id: spiritualContentVersions.id })
-        .from(spiritualContentVersions)
-        .where(
-          and(
-            eq(spiritualContentVersions.contentItemId, itemId),
-            inArray(spiritualContentVersions.status, ['PUBLISHED', 'ARCHIVED']),
-          ),
-        )
-        .limit(1)
-    ).length > 0
-  await requirePermission(
+  // Grants are read BEFORE the transaction (a lock-holding transaction
+  // must never acquire a second pool connection); which grant is
+  // REQUIRED is decided inside the lock from durable evidence, so a
+  // stale pre-lock authority decision can never survive a concurrent
+  // first publication.
+  const canManage = await userHasPermission(actorId, 'spiritual_content.manage')
+  const canPublish = await userHasPermission(
     actorId,
-    hasPublishedHistory
-      ? 'spiritual_content.publish'
-      : 'spiritual_content.manage',
+    'spiritual_content.publish',
   )
-  await loadItem(itemId)
-  await db
-    .update(spiritualContentItems)
-    .set({ active })
-    .where(eq(spiritualContentItems.id, itemId))
+  await getDb().transaction(async (tx) => {
+    const item = (
+      await tx
+        .select({ id: spiritualContentItems.id })
+        .from(spiritualContentItems)
+        .where(eq(spiritualContentItems.id, itemId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!item) throw new SpiritualContentError('Content item not found.')
+    const hasPublicationEvidence =
+      (
+        await tx
+          .select({ id: spiritualContentVersions.id })
+          .from(spiritualContentVersions)
+          .where(
+            and(
+              eq(spiritualContentVersions.contentItemId, itemId),
+              isNotNull(spiritualContentVersions.publishedAt),
+            ),
+          )
+          .limit(1)
+      ).length > 0
+    const allowed = hasPublicationEvidence ? canPublish : canManage
+    if (!allowed) throw new ForbiddenError()
+    await tx
+      .update(spiritualContentItems)
+      .set({ active })
+      .where(eq(spiritualContentItems.id, itemId))
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: active
@@ -524,27 +557,63 @@ export async function updateDraftVersion(
   })
 }
 
+/**
+ * First submission is the freeze boundary, so it serializes on the
+ * content-item row exactly like structural editing (lock order:
+ * CONTENT ITEM → VERSION, everywhere). Whichever wins the lock, the
+ * outcome is coherent: an edit that commits first is what gets
+ * reviewed; a submission that commits first freezes the item before
+ * the edit re-reads it.
+ */
 export async function submitVersionForReview(
   actorId: number,
   ctx: RequestContext,
   versionId: number,
 ): Promise<void> {
   await requirePermission(actorId, 'spiritual_content.manage')
+  // Pre-read only to learn the item for lock ordering.
   const current = await loadVersion(versionId)
-  const result = await getDb()
-    .update(spiritualContentVersions)
-    .set({ status: 'UNDER_REVIEW', submittedAt: new Date(), reviewNote: null })
-    .where(
-      and(
-        eq(spiritualContentVersions.id, versionId),
-        eq(spiritualContentVersions.status, 'DRAFT'),
-      ),
-    )
-  if (result[0].affectedRows !== 1) {
-    throw new SpiritualContentError(
-      'Only draft versions can be submitted for review.',
-    )
-  }
+  await getDb().transaction(async (tx) => {
+    const item = (
+      await tx
+        .select({ id: spiritualContentItems.id })
+        .from(spiritualContentItems)
+        .where(eq(spiritualContentItems.id, current.contentItemId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!item) throw new SpiritualContentError('Content item not found.')
+    const target = (
+      await tx
+        .select({ status: spiritualContentVersions.status })
+        .from(spiritualContentVersions)
+        .where(eq(spiritualContentVersions.id, versionId))
+        .limit(1)
+    ).at(0)
+    if (!target || target.status !== 'DRAFT') {
+      throw new SpiritualContentError(
+        'Only draft versions can be submitted for review.',
+      )
+    }
+    const result = await tx
+      .update(spiritualContentVersions)
+      .set({
+        status: 'UNDER_REVIEW',
+        submittedAt: new Date(),
+        reviewNote: null,
+      })
+      .where(
+        and(
+          eq(spiritualContentVersions.id, versionId),
+          eq(spiritualContentVersions.status, 'DRAFT'),
+        ),
+      )
+    if (result[0].affectedRows !== 1) {
+      throw new SpiritualContentError(
+        'Only draft versions can be submitted for review.',
+      )
+    }
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'spiritual_content.version_submitted',
@@ -760,43 +829,67 @@ export async function publishVersion(
   return outcome
 }
 
-/** ADMIN archival of an abandoned DRAFT/UNDER_REVIEW/APPROVED version
- * or retirement of a PUBLISHED one. ARCHIVED is terminal in Step 7. */
+/**
+ * ADMIN archival of an abandoned DRAFT/UNDER_REVIEW/APPROVED version
+ * or retirement of a PUBLISHED one. ARCHIVED is terminal in Step 7 —
+ * and it is itself a structural-freeze state, so DRAFT → ARCHIVED
+ * participates in the same item-first lock discipline as structural
+ * editing (lock order: CONTENT ITEM → VERSION). The transition remains
+ * a guarded CAS on the status re-read inside the lock.
+ */
 export async function archiveVersion(
   actorId: number,
   ctx: RequestContext,
   versionId: number,
 ): Promise<void> {
   await requirePermission(actorId, 'spiritual_content.publish')
-  const current = await loadVersion(versionId)
-  if (current.status === 'ARCHIVED') {
-    throw new SpiritualContentError('This version is already archived.')
-  }
-  const result = await getDb()
-    .update(spiritualContentVersions)
-    .set({ status: 'ARCHIVED', archivedAt: new Date() })
-    .where(
-      and(
-        eq(spiritualContentVersions.id, versionId),
-        eq(
-          spiritualContentVersions.status,
-          current.status as ContentVersionStatus,
+  // Pre-read only to learn the item for lock ordering.
+  const preRead = await loadVersion(versionId)
+  const fromStatus = await getDb().transaction(async (tx) => {
+    const item = (
+      await tx
+        .select({ id: spiritualContentItems.id })
+        .from(spiritualContentItems)
+        .where(eq(spiritualContentItems.id, preRead.contentItemId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (!item) throw new SpiritualContentError('Content item not found.')
+    const target = (
+      await tx
+        .select({ status: spiritualContentVersions.status })
+        .from(spiritualContentVersions)
+        .where(eq(spiritualContentVersions.id, versionId))
+        .limit(1)
+    ).at(0)
+    if (!target) throw new SpiritualContentError('Content version not found.')
+    if (target.status === 'ARCHIVED') {
+      throw new SpiritualContentError('This version is already archived.')
+    }
+    const result = await tx
+      .update(spiritualContentVersions)
+      .set({ status: 'ARCHIVED', archivedAt: new Date() })
+      .where(
+        and(
+          eq(spiritualContentVersions.id, versionId),
+          eq(spiritualContentVersions.status, target.status),
         ),
-      ),
-    )
-  if (result[0].affectedRows !== 1) {
-    throw new SpiritualContentError('Archive conflict — try again.')
-  }
+      )
+    if (result[0].affectedRows !== 1) {
+      throw new SpiritualContentError('Archive conflict — try again.')
+    }
+    return target.status
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'spiritual_content.version_archived',
     entityType: 'spiritual_content_version',
     entityId: String(versionId),
     metadata: {
-      contentItemId: current.contentItemId,
-      language: current.language,
-      versionNumber: current.versionNumber,
-      from: current.status,
+      contentItemId: preRead.contentItemId,
+      language: preRead.language,
+      versionNumber: preRead.versionNumber,
+      from: fromStatus,
       to: 'ARCHIVED',
     },
     ipAddress: ctx.ipAddress,
