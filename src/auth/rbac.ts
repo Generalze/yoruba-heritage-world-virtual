@@ -34,6 +34,8 @@ export const PERMISSION_CODES = [
   'sacred_houses.manage',
   'services.view',
   'services.manage',
+  'catalogue.approve',
+  'catalogue.publish',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -47,8 +49,7 @@ export const ROLE_DEFINITIONS: Record<
   },
   CONTENT_MANAGER: {
     name: 'Content Manager',
-    description:
-      'Reviews and manages cultural/spiritual content (later stages)',
+    description: 'Authors catalogue content and submits it for review',
   },
   ADMIN: {
     name: 'Administrator',
@@ -82,7 +83,8 @@ export const PERMISSION_DEFINITIONS: Record<
   },
   'deities.manage': {
     name: 'Manage deity profiles',
-    description: 'Create, edit, review, publish, unpublish, archive deities',
+    description:
+      'Create deity profiles, edit their content and relationships, and submit them for review',
   },
   'sacred_houses.view': {
     name: 'View Sacred Houses (admin)',
@@ -91,7 +93,7 @@ export const PERMISSION_DEFINITIONS: Record<
   'sacred_houses.manage': {
     name: 'Manage Sacred Houses',
     description:
-      'Create, edit, publish, archive Sacred Houses, members and focus areas',
+      'Create Sacred Houses, edit their content, focus areas and members, and submit them for review',
   },
   'services.view': {
     name: 'View services (admin)',
@@ -99,40 +101,74 @@ export const PERMISSION_DEFINITIONS: Record<
   },
   'services.manage': {
     name: 'Manage services',
-    description: 'Create, edit, publish, unpublish, archive services',
+    description: 'Create, edit and submit services for review',
+  },
+  'catalogue.approve': {
+    name: 'Approve catalogue content',
+    description:
+      'Review authority: approve submitted catalogue records or return them to draft with a reason',
+  },
+  'catalogue.publish': {
+    name: 'Publish catalogue content',
+    description:
+      'Technical publication: publish APPROVED records, unpublish and archive operationally',
   },
 }
 
-const CATALOGUE_PERMISSIONS: Array<PermissionCode> = [
+const CATALOGUE_VIEW: Array<PermissionCode> = [
   'deities.view',
-  'deities.manage',
   'sacred_houses.view',
-  'sacred_houses.manage',
   'services.view',
+]
+
+const CATALOGUE_MANAGE: Array<PermissionCode> = [
+  'deities.manage',
+  'sacred_houses.manage',
   'services.manage',
 ]
 
-// USER never receives catalogue-management permissions. CONTENT_MANAGER
-// manages the catalogue (consistent with content review duties);
-// ADMIN and SUPER_ADMIN inherit everything.
+/**
+ * Locked catalogue access model (Step 3.5): two day-to-day staff types.
+ *
+ * CONTENT_MANAGER authors: creates records, edits DRAFTs, submits for
+ * review — never approves or publishes (holds neither catalogue.approve
+ * nor catalogue.publish).
+ *
+ * ADMIN is the final catalogue approval authority: reviews, returns
+ * with a reason, approves, publishes, unpublishes, archives.
+ * SUPER_ADMIN (platform owner / technical safety role) inherits the
+ * same catalogue capabilities.
+ *
+ * Entity *.manage never implies approval or publication — those require
+ * catalogue.approve / catalogue.publish explicitly, and the status
+ * machine independently refuses to publish anything not APPROVED (no
+ * bypass role exists).
+ */
 export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
   USER: ['account.self.read', 'account.self.update'],
   CONTENT_MANAGER: [
     'account.self.read',
     'account.self.update',
-    ...CATALOGUE_PERMISSIONS,
+    ...CATALOGUE_VIEW,
+    ...CATALOGUE_MANAGE,
   ],
   ADMIN: [
     'account.self.read',
     'account.self.update',
     'admin.access',
-    ...CATALOGUE_PERMISSIONS,
+    ...CATALOGUE_VIEW,
+    ...CATALOGUE_MANAGE,
+    'catalogue.approve',
+    'catalogue.publish',
   ],
   SUPER_ADMIN: [
     'account.self.read',
     'account.self.update',
     'admin.access',
-    ...CATALOGUE_PERMISSIONS,
+    ...CATALOGUE_VIEW,
+    ...CATALOGUE_MANAGE,
+    'catalogue.approve',
+    'catalogue.publish',
   ],
 }
 

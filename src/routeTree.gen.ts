@@ -10,10 +10,12 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteImport } from './routes/admin'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as OlodumareRouteImport } from './routes/olodumare'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as DeitiesIndexRouteImport } from './routes/deities.index'
 import { Route as DeitiesSlugRouteImport } from './routes/deities.$slug'
@@ -21,10 +23,26 @@ import { Route as SacredHousesIndexRouteImport } from './routes/sacred-houses.in
 import { Route as SacredHousesSlugRouteImport } from './routes/sacred-houses.$slug'
 import { Route as ServicesIndexRouteImport } from './routes/services.index'
 import { Route as ServicesSlugRouteImport } from './routes/services.$slug'
+import { Route as AdminCatalogueIndexRouteImport } from './routes/admin.catalogue.index'
+import { Route as AdminCatalogueReviewRouteImport } from './routes/admin.catalogue.review'
+import { Route as AdminCatalogueDeitiesIndexRouteImport } from './routes/admin.catalogue.deities.index'
+import { Route as AdminCatalogueDeitiesIdRouteImport } from './routes/admin.catalogue.deities.$id'
+import { Route as AdminCatalogueDeitiesNewRouteImport } from './routes/admin.catalogue.deities.new'
+import { Route as AdminCatalogueSacredHousesIndexRouteImport } from './routes/admin.catalogue.sacred-houses.index'
+import { Route as AdminCatalogueSacredHousesIdRouteImport } from './routes/admin.catalogue.sacred-houses.$id'
+import { Route as AdminCatalogueSacredHousesNewRouteImport } from './routes/admin.catalogue.sacred-houses.new'
+import { Route as AdminCatalogueServicesIndexRouteImport } from './routes/admin.catalogue.services.index'
+import { Route as AdminCatalogueServicesIdRouteImport } from './routes/admin.catalogue.services.$id'
+import { Route as AdminCatalogueServicesNewRouteImport } from './routes/admin.catalogue.services.new'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardRoute = DashboardRouteImport.update({
@@ -46,6 +64,11 @@ const RegisterRoute = RegisterRouteImport.update({
   id: '/register',
   path: '/register',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRoute,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
@@ -82,9 +105,73 @@ const ServicesSlugRoute = ServicesSlugRouteImport.update({
   path: '/services/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminCatalogueIndexRoute = AdminCatalogueIndexRouteImport.update({
+  id: '/catalogue/',
+  path: '/catalogue/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminCatalogueReviewRoute = AdminCatalogueReviewRouteImport.update({
+  id: '/catalogue/review',
+  path: '/catalogue/review',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminCatalogueDeitiesIndexRoute =
+  AdminCatalogueDeitiesIndexRouteImport.update({
+    id: '/catalogue/deities/',
+    path: '/catalogue/deities/',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueDeitiesIdRoute = AdminCatalogueDeitiesIdRouteImport.update({
+  id: '/catalogue/deities/$id',
+  path: '/catalogue/deities/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminCatalogueDeitiesNewRoute =
+  AdminCatalogueDeitiesNewRouteImport.update({
+    id: '/catalogue/deities/new',
+    path: '/catalogue/deities/new',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueSacredHousesIndexRoute =
+  AdminCatalogueSacredHousesIndexRouteImport.update({
+    id: '/catalogue/sacred-houses/',
+    path: '/catalogue/sacred-houses/',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueSacredHousesIdRoute =
+  AdminCatalogueSacredHousesIdRouteImport.update({
+    id: '/catalogue/sacred-houses/$id',
+    path: '/catalogue/sacred-houses/$id',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueSacredHousesNewRoute =
+  AdminCatalogueSacredHousesNewRouteImport.update({
+    id: '/catalogue/sacred-houses/new',
+    path: '/catalogue/sacred-houses/new',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueServicesIndexRoute =
+  AdminCatalogueServicesIndexRouteImport.update({
+    id: '/catalogue/services/',
+    path: '/catalogue/services/',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueServicesIdRoute =
+  AdminCatalogueServicesIdRouteImport.update({
+    id: '/catalogue/services/$id',
+    path: '/catalogue/services/$id',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminCatalogueServicesNewRoute =
+  AdminCatalogueServicesNewRouteImport.update({
+    id: '/catalogue/services/new',
+    path: '/catalogue/services/new',
+    getParentRoute: () => AdminRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteWithChildren
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
@@ -93,9 +180,21 @@ export interface FileRoutesByFullPath {
   '/deities/$slug': typeof DeitiesSlugRoute
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
+  '/admin/': typeof AdminIndexRoute
   '/deities/': typeof DeitiesIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
+  '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
+  '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
+  '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
+  '/admin/catalogue/sacred-houses/new': typeof AdminCatalogueSacredHousesNewRoute
+  '/admin/catalogue/services/$id': typeof AdminCatalogueServicesIdRoute
+  '/admin/catalogue/services/new': typeof AdminCatalogueServicesNewRoute
+  '/admin/catalogue/deities/': typeof AdminCatalogueDeitiesIndexRoute
+  '/admin/catalogue/sacred-houses/': typeof AdminCatalogueSacredHousesIndexRoute
+  '/admin/catalogue/services/': typeof AdminCatalogueServicesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -107,13 +206,26 @@ export interface FileRoutesByTo {
   '/deities/$slug': typeof DeitiesSlugRoute
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
+  '/admin': typeof AdminIndexRoute
   '/deities': typeof DeitiesIndexRoute
   '/sacred-houses': typeof SacredHousesIndexRoute
   '/services': typeof ServicesIndexRoute
+  '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/catalogue': typeof AdminCatalogueIndexRoute
+  '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
+  '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
+  '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
+  '/admin/catalogue/sacred-houses/new': typeof AdminCatalogueSacredHousesNewRoute
+  '/admin/catalogue/services/$id': typeof AdminCatalogueServicesIdRoute
+  '/admin/catalogue/services/new': typeof AdminCatalogueServicesNewRoute
+  '/admin/catalogue/deities': typeof AdminCatalogueDeitiesIndexRoute
+  '/admin/catalogue/sacred-houses': typeof AdminCatalogueSacredHousesIndexRoute
+  '/admin/catalogue/services': typeof AdminCatalogueServicesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteWithChildren
   '/dashboard': typeof DashboardRoute
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
@@ -122,14 +234,27 @@ export interface FileRoutesById {
   '/deities/$slug': typeof DeitiesSlugRoute
   '/sacred-houses/$slug': typeof SacredHousesSlugRoute
   '/services/$slug': typeof ServicesSlugRoute
+  '/admin/': typeof AdminIndexRoute
   '/deities/': typeof DeitiesIndexRoute
   '/sacred-houses/': typeof SacredHousesIndexRoute
   '/services/': typeof ServicesIndexRoute
+  '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
+  '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
+  '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
+  '/admin/catalogue/sacred-houses/new': typeof AdminCatalogueSacredHousesNewRoute
+  '/admin/catalogue/services/$id': typeof AdminCatalogueServicesIdRoute
+  '/admin/catalogue/services/new': typeof AdminCatalogueServicesNewRoute
+  '/admin/catalogue/deities/': typeof AdminCatalogueDeitiesIndexRoute
+  '/admin/catalogue/sacred-houses/': typeof AdminCatalogueSacredHousesIndexRoute
+  '/admin/catalogue/services/': typeof AdminCatalogueServicesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/login'
     | '/olodumare'
@@ -138,9 +263,21 @@ export interface FileRouteTypes {
     | '/deities/$slug'
     | '/sacred-houses/$slug'
     | '/services/$slug'
+    | '/admin/'
     | '/deities/'
     | '/sacred-houses/'
     | '/services/'
+    | '/admin/catalogue/review'
+    | '/admin/catalogue/'
+    | '/admin/catalogue/deities/$id'
+    | '/admin/catalogue/deities/new'
+    | '/admin/catalogue/sacred-houses/$id'
+    | '/admin/catalogue/sacred-houses/new'
+    | '/admin/catalogue/services/$id'
+    | '/admin/catalogue/services/new'
+    | '/admin/catalogue/deities/'
+    | '/admin/catalogue/sacred-houses/'
+    | '/admin/catalogue/services/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -152,12 +289,25 @@ export interface FileRouteTypes {
     | '/deities/$slug'
     | '/sacred-houses/$slug'
     | '/services/$slug'
+    | '/admin'
     | '/deities'
     | '/sacred-houses'
     | '/services'
+    | '/admin/catalogue/review'
+    | '/admin/catalogue'
+    | '/admin/catalogue/deities/$id'
+    | '/admin/catalogue/deities/new'
+    | '/admin/catalogue/sacred-houses/$id'
+    | '/admin/catalogue/sacred-houses/new'
+    | '/admin/catalogue/services/$id'
+    | '/admin/catalogue/services/new'
+    | '/admin/catalogue/deities'
+    | '/admin/catalogue/sacred-houses'
+    | '/admin/catalogue/services'
   id:
     | '__root__'
     | '/'
+    | '/admin'
     | '/dashboard'
     | '/login'
     | '/olodumare'
@@ -166,13 +316,26 @@ export interface FileRouteTypes {
     | '/deities/$slug'
     | '/sacred-houses/$slug'
     | '/services/$slug'
+    | '/admin/'
     | '/deities/'
     | '/sacred-houses/'
     | '/services/'
+    | '/admin/catalogue/review'
+    | '/admin/catalogue/'
+    | '/admin/catalogue/deities/$id'
+    | '/admin/catalogue/deities/new'
+    | '/admin/catalogue/sacred-houses/$id'
+    | '/admin/catalogue/sacred-houses/new'
+    | '/admin/catalogue/services/$id'
+    | '/admin/catalogue/services/new'
+    | '/admin/catalogue/deities/'
+    | '/admin/catalogue/sacred-houses/'
+    | '/admin/catalogue/services/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRouteWithChildren
   DashboardRoute: typeof DashboardRoute
   LoginRoute: typeof LoginRoute
   OlodumareRoute: typeof OlodumareRoute
@@ -193,6 +356,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -222,6 +392,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/register'
       preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/api/health': {
       id: '/api/health'
@@ -272,11 +449,121 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ServicesSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/catalogue/': {
+      id: '/admin/catalogue/'
+      path: '/catalogue'
+      fullPath: '/admin/catalogue/'
+      preLoaderRoute: typeof AdminCatalogueIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/review': {
+      id: '/admin/catalogue/review'
+      path: '/catalogue/review'
+      fullPath: '/admin/catalogue/review'
+      preLoaderRoute: typeof AdminCatalogueReviewRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/deities/': {
+      id: '/admin/catalogue/deities/'
+      path: '/catalogue/deities'
+      fullPath: '/admin/catalogue/deities/'
+      preLoaderRoute: typeof AdminCatalogueDeitiesIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/deities/$id': {
+      id: '/admin/catalogue/deities/$id'
+      path: '/catalogue/deities/$id'
+      fullPath: '/admin/catalogue/deities/$id'
+      preLoaderRoute: typeof AdminCatalogueDeitiesIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/deities/new': {
+      id: '/admin/catalogue/deities/new'
+      path: '/catalogue/deities/new'
+      fullPath: '/admin/catalogue/deities/new'
+      preLoaderRoute: typeof AdminCatalogueDeitiesNewRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/sacred-houses/': {
+      id: '/admin/catalogue/sacred-houses/'
+      path: '/catalogue/sacred-houses'
+      fullPath: '/admin/catalogue/sacred-houses/'
+      preLoaderRoute: typeof AdminCatalogueSacredHousesIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/sacred-houses/$id': {
+      id: '/admin/catalogue/sacred-houses/$id'
+      path: '/catalogue/sacred-houses/$id'
+      fullPath: '/admin/catalogue/sacred-houses/$id'
+      preLoaderRoute: typeof AdminCatalogueSacredHousesIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/sacred-houses/new': {
+      id: '/admin/catalogue/sacred-houses/new'
+      path: '/catalogue/sacred-houses/new'
+      fullPath: '/admin/catalogue/sacred-houses/new'
+      preLoaderRoute: typeof AdminCatalogueSacredHousesNewRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/services/': {
+      id: '/admin/catalogue/services/'
+      path: '/catalogue/services'
+      fullPath: '/admin/catalogue/services/'
+      preLoaderRoute: typeof AdminCatalogueServicesIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/services/$id': {
+      id: '/admin/catalogue/services/$id'
+      path: '/catalogue/services/$id'
+      fullPath: '/admin/catalogue/services/$id'
+      preLoaderRoute: typeof AdminCatalogueServicesIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/catalogue/services/new': {
+      id: '/admin/catalogue/services/new'
+      path: '/catalogue/services/new'
+      fullPath: '/admin/catalogue/services/new'
+      preLoaderRoute: typeof AdminCatalogueServicesNewRouteImport
+      parentRoute: typeof AdminRoute
+    }
   }
 }
 
+interface AdminRouteChildren {
+  AdminIndexRoute: typeof AdminIndexRoute
+  AdminCatalogueReviewRoute: typeof AdminCatalogueReviewRoute
+  AdminCatalogueIndexRoute: typeof AdminCatalogueIndexRoute
+  AdminCatalogueDeitiesIdRoute: typeof AdminCatalogueDeitiesIdRoute
+  AdminCatalogueDeitiesNewRoute: typeof AdminCatalogueDeitiesNewRoute
+  AdminCatalogueSacredHousesIdRoute: typeof AdminCatalogueSacredHousesIdRoute
+  AdminCatalogueSacredHousesNewRoute: typeof AdminCatalogueSacredHousesNewRoute
+  AdminCatalogueServicesIdRoute: typeof AdminCatalogueServicesIdRoute
+  AdminCatalogueServicesNewRoute: typeof AdminCatalogueServicesNewRoute
+  AdminCatalogueDeitiesIndexRoute: typeof AdminCatalogueDeitiesIndexRoute
+  AdminCatalogueSacredHousesIndexRoute: typeof AdminCatalogueSacredHousesIndexRoute
+  AdminCatalogueServicesIndexRoute: typeof AdminCatalogueServicesIndexRoute
+}
+
+const AdminRouteChildren: AdminRouteChildren = {
+  AdminIndexRoute: AdminIndexRoute,
+  AdminCatalogueReviewRoute: AdminCatalogueReviewRoute,
+  AdminCatalogueIndexRoute: AdminCatalogueIndexRoute,
+  AdminCatalogueDeitiesIdRoute: AdminCatalogueDeitiesIdRoute,
+  AdminCatalogueDeitiesNewRoute: AdminCatalogueDeitiesNewRoute,
+  AdminCatalogueSacredHousesIdRoute: AdminCatalogueSacredHousesIdRoute,
+  AdminCatalogueSacredHousesNewRoute: AdminCatalogueSacredHousesNewRoute,
+  AdminCatalogueServicesIdRoute: AdminCatalogueServicesIdRoute,
+  AdminCatalogueServicesNewRoute: AdminCatalogueServicesNewRoute,
+  AdminCatalogueDeitiesIndexRoute: AdminCatalogueDeitiesIndexRoute,
+  AdminCatalogueSacredHousesIndexRoute: AdminCatalogueSacredHousesIndexRoute,
+  AdminCatalogueServicesIndexRoute: AdminCatalogueServicesIndexRoute,
+}
+
+const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRouteWithChildren,
   DashboardRoute: DashboardRoute,
   LoginRoute: LoginRoute,
   OlodumareRoute: OlodumareRoute,

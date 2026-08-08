@@ -134,10 +134,27 @@ bun run db:seed:domain   # approved spiritual-domain catalogue
   record
 
 Only `PUBLISHED` + `active` records appear publicly. The catalogue is
-database-driven: seeded records are development data, and future
-authorised administrators can add and publish more without code
-changes. Appointments are booked with Sacred Houses — individual
-members are never bookable.
+database-driven: seeded records are development data, and authorised
+staff manage records through the admin area without code changes.
+Appointments are booked with Sacred Houses — individual members are
+never bookable.
+
+### Admin catalogue (Step 3.5)
+
+The catalogue admin area lives at `/admin/catalogue` (deities,
+sacred-houses, services, plus an Admin-only `review` queue).
+
+- Workflow: `DRAFT → UNDER_REVIEW → APPROVED → PUBLISHED → ARCHIVED`,
+  with Admin able to return a submission to DRAFT with a required
+  reason. Publishing is only ever possible from APPROVED — for every
+  role.
+- CONTENT_MANAGER authors and submits; ADMIN (and SUPER_ADMIN) review,
+  approve, publish, unpublish and archive.
+- Editing substantive content (names, descriptions, focus areas,
+  members, deity relationships) on an APPROVED record returns it to
+  DRAFT; on a PUBLISHED record it is blocked until unpublished.
+- Grant staff roles to an existing registered account with:
+  `bun run admin:grant <email> <USER|CONTENT_MANAGER|ADMIN|SUPER_ADMIN>`
 
 ## Development Principles
 

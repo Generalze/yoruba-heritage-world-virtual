@@ -17,6 +17,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:seed": "bun run src/db/seed.ts",
     "db:seed:domain": "bun run src/db/seed-domain.ts",
+    "admin:grant": "bun run src/db/grant-role.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
