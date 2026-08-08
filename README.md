@@ -156,6 +156,27 @@ sacred-houses, services, plus an Admin-only `review` queue).
 - Grant staff roles to an existing registered account with:
   `bun run admin:grant <email> <USER|CONTENT_MANAGER|ADMIN|SUPER_ADMIN>`
 
+### Appointment scheduling foundation (Step 5)
+
+- Booking belongs to the SACRED HOUSE (capacity: one concurrent
+  appointment); members are never bookable. The House derives from the
+  selected service server-side.
+- Admin scheduling at `/admin/scheduling` (per-House booking settings,
+  weekly availability in the House's IANA timezone, date exceptions).
+  Booking is disabled by default; no hours are seeded.
+- Admin operations at `/admin/appointments` (filterable list, detail,
+  cancel with reason, reschedule, complete, no-show, private
+  representative assignment). No payment controls — confirmation
+  belongs to the future verified-payment layer only.
+- Appointments store UTC instants plus user/House timezone snapshots
+  and commercial snapshots; `PENDING_PAYMENT` holds expire lazily after
+  the configured hold and stop blocking availability immediately.
+- Statuses: PENDING_PAYMENT, CONFIRMED, CANCELLED, COMPLETED, NO_SHOW,
+  EXPIRED. Double-booking is prevented by a per-House row lock
+  (`SELECT … FOR UPDATE` on the booking-settings row) around every
+  interval allocation.
+- Timezone arithmetic uses `@js-temporal/polyfill` (free, local).
+
 ### User profile (Step 4)
 
 Self-service profile routes (authenticated, own data only):

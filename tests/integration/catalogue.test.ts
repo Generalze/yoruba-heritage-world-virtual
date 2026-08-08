@@ -491,14 +491,24 @@ describe('catalogue RBAC', () => {
 })
 
 describe('no public member booking', () => {
-  it('defines no member or booking routes in the route tree', () => {
+  it('defines no member/booking routes; appointment routes exist only under /admin', () => {
     const routeTree = readFileSync(
       join(process.cwd(), 'src', 'routeTree.gen.ts'),
       'utf8',
     )
     expect(routeTree).not.toMatch(/book/i)
     expect(routeTree).not.toMatch(/member/i)
-    expect(routeTree).not.toMatch(/appointment/i)
+    // Since Step 5, operational appointment routes exist — but ONLY in
+    // the admin area. No public appointment/booking route exists. The
+    // FileRoutesByFullPath map lists every route's FULL path.
+    const fullPathBlock =
+      routeTree.match(/interface FileRoutesByFullPath \{[\s\S]*?\n\}/)?.[0] ??
+      ''
+    expect(fullPathBlock.length).toBeGreaterThan(0)
+    const fullPaths = fullPathBlock.match(/'\/[^']*'/g) ?? []
+    const appointmentPaths = fullPaths.filter((p) => /appointment/i.test(p))
+    expect(appointmentPaths.length).toBeGreaterThan(0)
+    expect(appointmentPaths.every((p) => p.startsWith("'/admin/"))).toBe(true)
   })
 
   it('exposes members as plain name/type data with no identifiers or booking fields', async () => {

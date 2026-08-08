@@ -36,6 +36,9 @@ export const PERMISSION_CODES = [
   'services.manage',
   'catalogue.approve',
   'catalogue.publish',
+  'appointments.view',
+  'appointments.manage',
+  'availability.manage',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -113,7 +116,29 @@ export const PERMISSION_DEFINITIONS: Record<
     description:
       'Technical publication: publish APPROVED records, unpublish and archive operationally',
   },
+  'appointments.view': {
+    name: 'View appointments',
+    description: 'Inspect appointment records operationally',
+  },
+  'appointments.manage': {
+    name: 'Manage appointments',
+    description:
+      'Cancel, reschedule, complete, mark no-show and assign representatives',
+  },
+  'availability.manage': {
+    name: 'Manage scheduling availability',
+    description:
+      'Configure Sacred House booking settings, weekly availability and exceptions',
+  },
 }
+
+/** Appointment operations are ADMIN/SUPER_ADMIN only — catalogue
+ * authoring (CONTENT_MANAGER) never implies appointment access. */
+const APPOINTMENT_PERMISSIONS: Array<PermissionCode> = [
+  'appointments.view',
+  'appointments.manage',
+  'availability.manage',
+]
 
 const CATALOGUE_VIEW: Array<PermissionCode> = [
   'deities.view',
@@ -160,6 +185,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     ...CATALOGUE_MANAGE,
     'catalogue.approve',
     'catalogue.publish',
+    ...APPOINTMENT_PERMISSIONS,
   ],
   SUPER_ADMIN: [
     'account.self.read',
@@ -169,6 +195,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     ...CATALOGUE_MANAGE,
     'catalogue.approve',
     'catalogue.publish',
+    ...APPOINTMENT_PERMISSIONS,
   ],
 }
 
