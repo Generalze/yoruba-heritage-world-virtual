@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev --port 3000",
+    "dev": "bun --bun vite dev --port 3000",
     "build": "vite build",
     "start": "bun run server.ts",
-    "preview": "vite preview",
+    "preview": "bun --bun vite preview",
     "generate-routes": "tsr generate",
     "typecheck": "tsr generate && tsc --noEmit",
     "lint": "eslint",
@@ -15,6 +15,7 @@
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:seed": "bun run src/db/seed.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {

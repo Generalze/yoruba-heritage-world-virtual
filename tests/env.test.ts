@@ -25,4 +25,11 @@ describe('envSchema', () => {
     expect(() => envSchema.parse({ DATABASE_PORT: 'not-a-port' })).toThrow()
     expect(() => envSchema.parse({ DATABASE_NAME: '' })).toThrow()
   })
+
+  it('does not trust proxy headers unless explicitly enabled', () => {
+    expect(envSchema.parse({}).TRUST_PROXY).toBe(false)
+    expect(envSchema.parse({ TRUST_PROXY: 'false' }).TRUST_PROXY).toBe(false)
+    expect(envSchema.parse({ TRUST_PROXY: 'true' }).TRUST_PROXY).toBe(true)
+    expect(() => envSchema.parse({ TRUST_PROXY: 'banana' })).toThrow()
+  })
 })

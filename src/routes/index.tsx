@@ -1,4 +1,4 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/')({ component: Home })
 
@@ -17,12 +17,19 @@ function Home() {
           cultural practice.
         </p>
 
-        <div className="mt-10 inline-flex items-center gap-2 rounded-full border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300">
-          <span
-            className="h-2 w-2 rounded-full bg-emerald-500"
-            aria-hidden="true"
-          />
-          Application foundation running — Phase One, Step 1
+        <div className="mt-10 flex items-center justify-center gap-4">
+          <Link
+            to="/register"
+            className="rounded-md bg-amber-600 px-6 py-2.5 font-semibold text-stone-950 transition-colors hover:bg-amber-500"
+          >
+            Create account
+          </Link>
+          <Link
+            to="/login"
+            className="rounded-md border border-stone-700 px-6 py-2.5 font-semibold text-stone-200 transition-colors hover:border-amber-500 hover:text-amber-500"
+          >
+            Sign in
+          </Link>
         </div>
 
         <p className="mt-10 text-sm text-stone-500">
