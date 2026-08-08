@@ -523,9 +523,80 @@ async function loadAppointment(id: number) {
 }
 
 /**
- * Future payment layer calls this after VERIFIED payment. It is never
- * exposed through any public server function — no user or admin action
- * can confirm an appointment in Step 5.
+ * THE single authoritative confirmation implementation (Step 5 + Step 6
+ * share it — there are deliberately no diverging copies of these
+ * invariants). Caller contract:
+ *
+ * - MUST already hold the House scheduling lock for the appointment's
+ *   Sacred House (lockHouseScheduling as the transaction's first lock)
+ * - MUST pass a fresh in-lock clock (never a pre-lock timestamp)
+ *
+ * Enforces: PENDING_PAYMENT requirement, live (unexpired) reservation,
+ * defensive overlap protection, and the guarded CONFIRMED transition —
+ * the CAS re-requires status + unexpired hold so a concurrent
+ * transition yields zero affected rows and a refusal.
+ */
+export async function confirmReservationUnderLock(
+  tx: DbClient,
+  appointmentId: number,
+  inLockNowSql: string,
+): Promise<void> {
+  const row = (
+    await tx
+      .select()
+      .from(appointments)
+      .where(eq(appointments.id, appointmentId))
+      .limit(1)
+      .for('update')
+  ).at(0)
+  if (!row) throw new AppointmentError('Appointment not found.')
+  if (row.status !== 'PENDING_PAYMENT') {
+    throw new AppointmentError('Only pending reservations can be confirmed.')
+  }
+  if (!row.reservationExpiresAt || row.reservationExpiresAt <= inLockNowSql) {
+    throw new AppointmentError('This reservation has expired.')
+  }
+  // Defensive overlap re-check: an unexpired hold's interval cannot
+  // have been reallocated, so a conflict here means invariants broke
+  // upstream — refuse rather than double-book.
+  const conflicts = await tx
+    .select({ id: appointments.id })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.sacredHouseId, row.sacredHouseId),
+        lt(appointments.startsAtUtc, row.endsAtUtc),
+        gt(appointments.endsAtUtc, row.startsAtUtc),
+        BLOCKING(inLockNowSql),
+        sql`${appointments.id} != ${appointmentId}`,
+      ),
+    )
+    .limit(1)
+  if (conflicts.length > 0) {
+    throw new AppointmentError(
+      'This reservation can no longer be confirmed — its time has been reallocated.',
+    )
+  }
+  const result = await tx
+    .update(appointments)
+    .set({ status: 'CONFIRMED', reservationExpiresAt: null })
+    .where(
+      and(
+        eq(appointments.id, appointmentId),
+        eq(appointments.status, 'PENDING_PAYMENT'),
+        gt(appointments.reservationExpiresAt, inLockNowSql),
+      ),
+    )
+  if (result[0].affectedRows !== 1) {
+    throw new AppointmentError('Only pending reservations can be confirmed.')
+  }
+}
+
+/**
+ * The payment layer's settlement transaction (Step 6) and this trusted
+ * wrapper are the ONLY callers of confirmReservationUnderLock. It is
+ * never exposed through any public server function — no user or admin
+ * action can confirm an appointment directly.
  *
  * Confirmation solidifies the interval as a blocking appointment, so
  * it participates in the SAME per-House lock discipline as reservation
@@ -551,55 +622,7 @@ export async function confirmReservation(
     // hold look live. The caller-injected nowMs can only tighten the
     // check (max), never loosen it.
     const inLockNowSql = utcMsToSql(Math.max(nowMs, Date.now()))
-    const row = (
-      await tx
-        .select()
-        .from(appointments)
-        .where(eq(appointments.id, appointmentId))
-        .limit(1)
-        .for('update')
-    ).at(0)
-    if (!row) throw new AppointmentError('Appointment not found.')
-    if (row.status !== 'PENDING_PAYMENT') {
-      throw new AppointmentError('Only pending reservations can be confirmed.')
-    }
-    if (!row.reservationExpiresAt || row.reservationExpiresAt <= inLockNowSql) {
-      throw new AppointmentError('This reservation has expired.')
-    }
-    // Defensive overlap re-check: an unexpired hold's interval cannot
-    // have been reallocated, so a conflict here means invariants broke
-    // upstream — refuse rather than double-book.
-    const conflicts = await tx
-      .select({ id: appointments.id })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.sacredHouseId, row.sacredHouseId),
-          lt(appointments.startsAtUtc, row.endsAtUtc),
-          gt(appointments.endsAtUtc, row.startsAtUtc),
-          BLOCKING(inLockNowSql),
-          sql`${appointments.id} != ${appointmentId}`,
-        ),
-      )
-      .limit(1)
-    if (conflicts.length > 0) {
-      throw new AppointmentError(
-        'This reservation can no longer be confirmed — its time has been reallocated.',
-      )
-    }
-    const result = await tx
-      .update(appointments)
-      .set({ status: 'CONFIRMED', reservationExpiresAt: null })
-      .where(
-        and(
-          eq(appointments.id, appointmentId),
-          eq(appointments.status, 'PENDING_PAYMENT'),
-          gt(appointments.reservationExpiresAt, inLockNowSql),
-        ),
-      )
-    if (result[0].affectedRows !== 1) {
-      throw new AppointmentError('Only pending reservations can be confirmed.')
-    }
+    await confirmReservationUnderLock(tx, appointmentId, inLockNowSql)
   })
 
   await recordAuditEvent({

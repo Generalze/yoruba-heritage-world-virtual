@@ -491,24 +491,37 @@ describe('catalogue RBAC', () => {
 })
 
 describe('no public member booking', () => {
-  it('defines no member/booking routes; appointment routes exist only under /admin', () => {
+  it('books services only (never members); appointment routes are admin or owner-scoped', () => {
     const routeTree = readFileSync(
       join(process.cwd(), 'src', 'routeTree.gen.ts'),
       'utf8',
     )
-    expect(routeTree).not.toMatch(/book/i)
+    // The LOCKED rule: individual Sacred House members are never
+    // bookable — no member routes/calendars exist. Step 6's booking
+    // route targets a SERVICE; the House is derived server-side.
     expect(routeTree).not.toMatch(/member/i)
-    // Since Step 5, operational appointment routes exist — but ONLY in
-    // the admin area. No public appointment/booking route exists. The
-    // FileRoutesByFullPath map lists every route's FULL path.
     const fullPathBlock =
       routeTree.match(/interface FileRoutesByFullPath \{[\s\S]*?\n\}/)?.[0] ??
       ''
     expect(fullPathBlock.length).toBeGreaterThan(0)
-    const fullPaths = fullPathBlock.match(/'\/[^']*'/g) ?? []
+    const fullPaths = (fullPathBlock.match(/'\/[^']*'/g) ?? []).map((p) =>
+      p.slice(1, -1),
+    )
+    const bookingPaths = fullPaths.filter((p) => /book/i.test(p))
+    expect(bookingPaths).toEqual(['/book/$serviceSlug'])
     const appointmentPaths = fullPaths.filter((p) => /appointment/i.test(p))
     expect(appointmentPaths.length).toBeGreaterThan(0)
-    expect(appointmentPaths.every((p) => p.startsWith("'/admin/"))).toBe(true)
+    for (const path of appointmentPaths) {
+      // Admin area or the authenticated user's own pages — nothing else.
+      expect(
+        path.startsWith('/admin/') ||
+          path === '/appointments' ||
+          path.startsWith('/appointments/') ||
+          path.startsWith('/checkout/'),
+      ).toBe(true)
+    }
+    // No route ever offers confirmation as a page/action path.
+    expect(fullPaths.some((p) => /confirm/i.test(p))).toBe(false)
   })
 
   it('exposes members as plain name/type data with no identifiers or booking fields', async () => {

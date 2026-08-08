@@ -114,9 +114,34 @@ function DashboardPage() {
           </dl>
         </section>
 
+        <section className="mt-8 rounded-lg border border-stone-800 bg-stone-900 p-6">
+          <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+            Appointments & payments
+          </h2>
+          <div className="mt-4 flex flex-wrap gap-4 text-sm">
+            <Link
+              to="/services"
+              className="text-stone-300 hover:text-amber-500"
+            >
+              Browse services
+            </Link>
+            <Link
+              to="/appointments"
+              className="text-stone-300 hover:text-amber-500"
+            >
+              My appointments
+            </Link>
+            <Link
+              to="/payments"
+              className="text-stone-300 hover:text-amber-500"
+            >
+              Payment history
+            </Link>
+          </div>
+        </section>
+
         <p className="mt-8 text-sm text-stone-500">
-          Sacred Houses, appointments and Prayer Rooms arrive in later approved
-          stages.
+          Prayer Rooms and further features arrive in later approved stages.
         </p>
       </div>
     </main>
