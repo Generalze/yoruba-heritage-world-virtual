@@ -9,6 +9,7 @@ import { useServerFn } from '@tanstack/react-start'
 
 import { getCurrentUserFn } from '@/auth/actions'
 import {
+  acknowledgeGuidanceFn,
   cancelMyAppointmentFn,
   getMyAppointmentFn,
   getRescheduleSlotsFn,
@@ -19,6 +20,7 @@ import {
   formatUtcSqlInTimezone,
   msUntilUtcSql,
 } from '@/lib/display-time'
+import { LANGUAGE_LABELS, contentTypeLabel } from '@/lib/guidance-labels'
 
 /**
  * Owner appointment detail (spec §44/§45). Server-side ownership via
@@ -200,6 +202,11 @@ function AppointmentDetailPage() {
           ) : null}
         </section>
 
+        <GuidanceSection
+          guidance={data.guidance}
+          publicId={appointment.publicId}
+        />
+
         {holdLive ? (
           <Link
             to="/checkout/$appointmentPublicId"
@@ -312,5 +319,95 @@ function AppointmentDetailPage() {
         ) : null}
       </div>
     </main>
+  )
+}
+
+type GuidanceData = Awaited<ReturnType<typeof getMyAppointmentFn>>['guidance']
+
+/**
+ * Frozen spiritual guidance for this appointment (Step 7). Plain text
+ * rendered exclusively through React escaping — no HTML, no Markdown,
+ * no raw-markup injection APIs. Sections appear only for versions that
+ * were actually assigned and are visible for the current status.
+ */
+function GuidanceSection({
+  guidance,
+  publicId,
+}: {
+  guidance: GuidanceData
+  publicId: string
+}) {
+  const router = useRouter()
+  const acknowledge = useServerFn(acknowledgeGuidanceFn)
+  const [busyVersion, setBusyVersion] = useState<number | null>(null)
+  const [ackError, setAckError] = useState<string | null>(null)
+
+  if (guidance.setState === 'NONE' || guidance.items.length === 0) {
+    return null
+  }
+
+  async function handleAcknowledge(contentVersionId: number) {
+    setBusyVersion(contentVersionId)
+    setAckError(null)
+    try {
+      await acknowledge({ data: { publicId, contentVersionId } })
+      await router.invalidate()
+    } catch (error) {
+      setAckError(
+        error instanceof Error
+          ? error.message
+          : 'The acknowledgement could not be saved.',
+      )
+    } finally {
+      setBusyVersion(null)
+    }
+  }
+
+  return (
+    <section className="mt-6 space-y-4">
+      <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        Spiritual guidance from your Sacred House
+      </h2>
+      {guidance.items.map((item) => (
+        <article
+          key={item.contentVersionId}
+          className="rounded-lg border border-stone-800 bg-stone-900 p-6"
+        >
+          <p className="text-xs tracking-widest text-stone-500 uppercase">
+            {contentTypeLabel(item.contentType)}
+            {item.fallbackUsed
+              ? ` · shown in ${LANGUAGE_LABELS[item.language] ?? item.language}`
+              : ''}
+          </p>
+          <h3 className="mt-1 text-lg font-semibold">{item.title}</h3>
+          <p className="mt-3 text-sm leading-relaxed whitespace-pre-wrap text-stone-200">
+            {item.body}
+          </p>
+          {item.acknowledgementRequired ? (
+            item.acknowledgedAt ? (
+              <p className="mt-4 text-xs text-emerald-400">
+                ✓ You confirmed reading this guidance.
+              </p>
+            ) : (
+              <button
+                type="button"
+                disabled={busyVersion !== null}
+                onClick={() => void handleAcknowledge(item.contentVersionId)}
+                className="mt-4 rounded-md border border-amber-700 px-4 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+              >
+                {busyVersion === item.contentVersionId
+                  ? 'Saving…'
+                  : 'I have read this guidance'}
+              </button>
+            )
+          ) : null}
+        </article>
+      ))}
+      {ackError ? (
+        <p className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+          {ackError}
+        </p>
+      ) : null}
+    </section>
   )
 }

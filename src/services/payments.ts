@@ -22,6 +22,7 @@ import {
 } from '@/providers/payments/registry'
 import { PaymentProviderError } from '@/providers/payments/types'
 import { AppointmentError, confirmReservationUnderLock } from './appointments'
+import type { GuidanceAssignmentSummary } from './guidance'
 import { getOrCreateBookingSettings, lockHouseScheduling } from './scheduling'
 import type {
   PaymentAttemptStatus,
@@ -573,7 +574,14 @@ export async function settleVerifiedPayment(
   await getOrCreateBookingSettings(appointment.sacredHouseId)
 
   const result = await getDb().transaction(
-    async (tx): Promise<SettlementOutcome & { confirmed: boolean }> => {
+    async (
+      tx,
+    ): Promise<
+      SettlementOutcome & {
+        confirmed: boolean
+        guidance: GuidanceAssignmentSummary | null
+      }
+    > => {
       // Lock order: House → appointment → attempt (consistent with
       // every Step 5 path; the attempt row is always last).
       await lockHouseScheduling(tx, appointment.sacredHouseId)
@@ -607,6 +615,7 @@ export async function settleVerifiedPayment(
           reviewReason: attemptRow.reviewReason,
           alreadyProcessed: true,
           confirmed: false,
+          guidance: null,
         }
       }
 
@@ -628,6 +637,7 @@ export async function settleVerifiedPayment(
       let resolution: SettlementResolution = 'PAID_REQUIRES_REVIEW'
       let reviewReason: PaymentReviewReason | null = null
       let confirmed = false
+      let guidance: GuidanceAssignmentSummary | null = null
 
       if (existingSettlement) {
         reviewReason = 'DUPLICATE_SUCCESS'
@@ -654,8 +664,14 @@ export async function settleVerifiedPayment(
           apptRow.reservationExpiresAt > inLockNowSql
         if (live) {
           try {
-            // The ONE shared confirmation implementation (Step 5).
-            await confirmReservationUnderLock(tx, apptRow.id, inLockNowSql)
+            // The ONE shared confirmation implementation (Step 5); it
+            // also freezes the Step 7 guidance selection in this same
+            // transaction.
+            guidance = await confirmReservationUnderLock(
+              tx,
+              apptRow.id,
+              inLockNowSql,
+            )
             resolution = 'APPOINTMENT_CONFIRMED'
             confirmed = true
           } catch (error) {
@@ -733,6 +749,7 @@ export async function settleVerifiedPayment(
         reviewReason,
         alreadyProcessed: false,
         confirmed,
+        guidance,
       }
     },
   )
@@ -779,9 +796,22 @@ export async function settleVerifiedPayment(
           paymentAttemptId: result.attemptId,
         },
       })
+      if (result.guidance && !result.guidance.alreadyExisted) {
+        await recordAuditEvent({
+          actorUserId: null,
+          action: 'appointment.guidance_assigned',
+          entityType: 'appointment',
+          entityId: String(attempt.appointmentId),
+          metadata: {
+            selectionResult: result.guidance.selectionResult,
+            assignmentCount: result.guidance.assignmentCount,
+            contentVersionIds: result.guidance.contentVersionIds.slice(0, 50),
+          },
+        })
+      }
     }
   }
-  const { confirmed: _confirmed, ...outcome } = result
+  const { confirmed: _confirmed, guidance: _guidance, ...outcome } = result
   return outcome
 }
 

@@ -24,6 +24,8 @@ import {
   adminRemoveRepresentativeFn,
   adminRescheduleAppointmentFn,
 } from '@/services/appointment-actions'
+import { adminGetAppointmentGuidanceFn } from '@/services/spiritual-content-actions'
+import { LANGUAGE_LABELS, contentTypeLabel } from '@/lib/guidance-labels'
 
 export const Route = createFileRoute('/admin/appointments/$id')({
   params: {
@@ -38,7 +40,10 @@ export const Route = createFileRoute('/admin/appointments/$id')({
   loader: async ({ params }) => {
     const appointment = await adminGetAppointmentFn({ data: { id: params.id } })
     if (!appointment) throw notFound()
-    return appointment
+    const guidance = await adminGetAppointmentGuidanceFn({
+      data: { appointmentId: params.id },
+    })
+    return { ...appointment, guidanceSet: guidance }
   },
   component: AppointmentDetail,
 })
@@ -297,6 +302,70 @@ function AppointmentDetail() {
           </div>
         </section>
       ) : null}
+
+      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
+        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+          Spiritual guidance set (frozen at confirmation)
+        </h2>
+        {!appointment.guidanceSet ? (
+          <p className="mt-4 text-sm text-stone-500">
+            No guidance selection exists for this appointment (confirmed before
+            the guidance stage, or not yet confirmed).
+          </p>
+        ) : (
+          <>
+            <p className="mt-3 text-xs text-stone-500">
+              Result: {appointment.guidanceSet.set.selectionResult} ·{' '}
+              {appointment.guidanceSet.set.assignmentCount} assignment(s) ·
+              language snapshot:{' '}
+              {appointment.guidanceSet.set.preferredLanguageSnapshot ?? '—'}
+            </p>
+            {appointment.guidanceSet.assignments.length > 0 ? (
+              <table className="mt-4 w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-stone-800 text-xs tracking-wider text-stone-500 uppercase">
+                    <th className="py-2 pr-4">Title</th>
+                    <th className="py-2 pr-4">Type</th>
+                    <th className="py-2 pr-4">Lang</th>
+                    <th className="py-2 pr-4">Version</th>
+                    <th className="py-2 pr-4">Stage</th>
+                    <th className="py-2">Acknowledged</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {appointment.guidanceSet.assignments.map((assignment) => (
+                    <tr
+                      key={assignment.contentVersionId}
+                      className="border-b border-stone-900"
+                    >
+                      <td className="py-2 pr-4">{assignment.title}</td>
+                      <td className="py-2 pr-4">
+                        {contentTypeLabel(assignment.contentType)}
+                      </td>
+                      <td className="py-2 pr-4">
+                        {LANGUAGE_LABELS[assignment.language] ??
+                          assignment.language}
+                        {assignment.fallbackUsed ? ' (fallback)' : ''}
+                      </td>
+                      <td className="py-2 pr-4">v{assignment.versionNumber}</td>
+                      <td className="py-2 pr-4 text-stone-400">
+                        {assignment.visibilityStage.replaceAll('_', ' ')}
+                      </td>
+                      <td className="py-2">
+                        {assignment.acknowledgementRequired
+                          ? assignment.acknowledgedAt
+                            ? '✓ yes'
+                            : 'pending'
+                          : 'not required'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+          </>
+        )}
+      </section>
 
       <AdminError message={error} />
     </div>

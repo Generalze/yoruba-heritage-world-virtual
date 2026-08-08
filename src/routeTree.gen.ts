@@ -40,6 +40,10 @@ import { Route as AdminPaymentsIndexRouteImport } from './routes/admin.payments.
 import { Route as AdminPaymentsIdRouteImport } from './routes/admin.payments.$id'
 import { Route as AdminSchedulingIndexRouteImport } from './routes/admin.scheduling.index'
 import { Route as AdminSchedulingHouseIdRouteImport } from './routes/admin.scheduling.$houseId'
+import { Route as AdminSpiritualContentIndexRouteImport } from './routes/admin.spiritual-content.index'
+import { Route as AdminSpiritualContentIdRouteImport } from './routes/admin.spiritual-content.$id'
+import { Route as AdminSpiritualContentNewRouteImport } from './routes/admin.spiritual-content.new'
+import { Route as AdminSpiritualContentReviewRouteImport } from './routes/admin.spiritual-content.review'
 import { Route as ApiWebhooksProviderRouteImport } from './routes/api.webhooks.$provider'
 import { Route as PaymentsReceiptAttemptPublicIdRouteImport } from './routes/payments.receipt.$attemptPublicId'
 import { Route as PaymentsReturnProviderRouteImport } from './routes/payments.return.$provider'
@@ -209,6 +213,29 @@ const AdminSchedulingHouseIdRoute = AdminSchedulingHouseIdRouteImport.update({
   path: '/scheduling/$houseId',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminSpiritualContentIndexRoute =
+  AdminSpiritualContentIndexRouteImport.update({
+    id: '/spiritual-content/',
+    path: '/spiritual-content/',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminSpiritualContentIdRoute = AdminSpiritualContentIdRouteImport.update({
+  id: '/spiritual-content/$id',
+  path: '/spiritual-content/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSpiritualContentNewRoute =
+  AdminSpiritualContentNewRouteImport.update({
+    id: '/spiritual-content/new',
+    path: '/spiritual-content/new',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminSpiritualContentReviewRoute =
+  AdminSpiritualContentReviewRouteImport.update({
+    id: '/spiritual-content/review',
+    path: '/spiritual-content/review',
+    getParentRoute: () => AdminRoute,
+  } as any)
 const ApiWebhooksProviderRoute = ApiWebhooksProviderRouteImport.update({
   id: '/api/webhooks/$provider',
   path: '/api/webhooks/$provider',
@@ -307,6 +334,9 @@ export interface FileRoutesByFullPath {
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
   '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
+  '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
+  '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
   '/payments/return/$provider': typeof PaymentsReturnProviderRoute
@@ -314,6 +344,7 @@ export interface FileRoutesByFullPath {
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
   '/admin/payments/': typeof AdminPaymentsIndexRoute
   '/admin/scheduling/': typeof AdminSchedulingIndexRoute
+  '/admin/spiritual-content/': typeof AdminSpiritualContentIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -351,6 +382,9 @@ export interface FileRoutesByTo {
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
   '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
+  '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
+  '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
   '/payments/return/$provider': typeof PaymentsReturnProviderRoute
@@ -358,6 +392,7 @@ export interface FileRoutesByTo {
   '/admin/catalogue': typeof AdminCatalogueIndexRoute
   '/admin/payments': typeof AdminPaymentsIndexRoute
   '/admin/scheduling': typeof AdminSchedulingIndexRoute
+  '/admin/spiritual-content': typeof AdminSpiritualContentIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -397,6 +432,9 @@ export interface FileRoutesById {
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
   '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/scheduling/$houseId': typeof AdminSchedulingHouseIdRoute
+  '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
+  '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
+  '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
   '/payments/return/$provider': typeof PaymentsReturnProviderRoute
@@ -404,6 +442,7 @@ export interface FileRoutesById {
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
   '/admin/payments/': typeof AdminPaymentsIndexRoute
   '/admin/scheduling/': typeof AdminSchedulingIndexRoute
+  '/admin/spiritual-content/': typeof AdminSpiritualContentIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -444,6 +483,9 @@ export interface FileRouteTypes {
     | '/admin/catalogue/review'
     | '/admin/payments/$id'
     | '/admin/scheduling/$houseId'
+    | '/admin/spiritual-content/$id'
+    | '/admin/spiritual-content/new'
+    | '/admin/spiritual-content/review'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
     | '/payments/return/$provider'
@@ -451,6 +493,7 @@ export interface FileRouteTypes {
     | '/admin/catalogue/'
     | '/admin/payments/'
     | '/admin/scheduling/'
+    | '/admin/spiritual-content/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -488,6 +531,9 @@ export interface FileRouteTypes {
     | '/admin/catalogue/review'
     | '/admin/payments/$id'
     | '/admin/scheduling/$houseId'
+    | '/admin/spiritual-content/$id'
+    | '/admin/spiritual-content/new'
+    | '/admin/spiritual-content/review'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
     | '/payments/return/$provider'
@@ -495,6 +541,7 @@ export interface FileRouteTypes {
     | '/admin/catalogue'
     | '/admin/payments'
     | '/admin/scheduling'
+    | '/admin/spiritual-content'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -533,6 +580,9 @@ export interface FileRouteTypes {
     | '/admin/catalogue/review'
     | '/admin/payments/$id'
     | '/admin/scheduling/$houseId'
+    | '/admin/spiritual-content/$id'
+    | '/admin/spiritual-content/new'
+    | '/admin/spiritual-content/review'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
     | '/payments/return/$provider'
@@ -540,6 +590,7 @@ export interface FileRouteTypes {
     | '/admin/catalogue/'
     | '/admin/payments/'
     | '/admin/scheduling/'
+    | '/admin/spiritual-content/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -798,6 +849,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSchedulingHouseIdRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/spiritual-content/': {
+      id: '/admin/spiritual-content/'
+      path: '/spiritual-content'
+      fullPath: '/admin/spiritual-content/'
+      preLoaderRoute: typeof AdminSpiritualContentIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/spiritual-content/$id': {
+      id: '/admin/spiritual-content/$id'
+      path: '/spiritual-content/$id'
+      fullPath: '/admin/spiritual-content/$id'
+      preLoaderRoute: typeof AdminSpiritualContentIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/spiritual-content/new': {
+      id: '/admin/spiritual-content/new'
+      path: '/spiritual-content/new'
+      fullPath: '/admin/spiritual-content/new'
+      preLoaderRoute: typeof AdminSpiritualContentNewRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/spiritual-content/review': {
+      id: '/admin/spiritual-content/review'
+      path: '/spiritual-content/review'
+      fullPath: '/admin/spiritual-content/review'
+      preLoaderRoute: typeof AdminSpiritualContentReviewRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/api/webhooks/$provider': {
       id: '/api/webhooks/$provider'
       path: '/api/webhooks/$provider'
@@ -891,10 +970,14 @@ interface AdminRouteChildren {
   AdminCatalogueReviewRoute: typeof AdminCatalogueReviewRoute
   AdminPaymentsIdRoute: typeof AdminPaymentsIdRoute
   AdminSchedulingHouseIdRoute: typeof AdminSchedulingHouseIdRoute
+  AdminSpiritualContentIdRoute: typeof AdminSpiritualContentIdRoute
+  AdminSpiritualContentNewRoute: typeof AdminSpiritualContentNewRoute
+  AdminSpiritualContentReviewRoute: typeof AdminSpiritualContentReviewRoute
   AdminAppointmentsIndexRoute: typeof AdminAppointmentsIndexRoute
   AdminCatalogueIndexRoute: typeof AdminCatalogueIndexRoute
   AdminPaymentsIndexRoute: typeof AdminPaymentsIndexRoute
   AdminSchedulingIndexRoute: typeof AdminSchedulingIndexRoute
+  AdminSpiritualContentIndexRoute: typeof AdminSpiritualContentIndexRoute
   AdminCatalogueDeitiesIdRoute: typeof AdminCatalogueDeitiesIdRoute
   AdminCatalogueDeitiesNewRoute: typeof AdminCatalogueDeitiesNewRoute
   AdminCatalogueSacredHousesIdRoute: typeof AdminCatalogueSacredHousesIdRoute
@@ -912,10 +995,14 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminCatalogueReviewRoute: AdminCatalogueReviewRoute,
   AdminPaymentsIdRoute: AdminPaymentsIdRoute,
   AdminSchedulingHouseIdRoute: AdminSchedulingHouseIdRoute,
+  AdminSpiritualContentIdRoute: AdminSpiritualContentIdRoute,
+  AdminSpiritualContentNewRoute: AdminSpiritualContentNewRoute,
+  AdminSpiritualContentReviewRoute: AdminSpiritualContentReviewRoute,
   AdminAppointmentsIndexRoute: AdminAppointmentsIndexRoute,
   AdminCatalogueIndexRoute: AdminCatalogueIndexRoute,
   AdminPaymentsIndexRoute: AdminPaymentsIndexRoute,
   AdminSchedulingIndexRoute: AdminSchedulingIndexRoute,
+  AdminSpiritualContentIndexRoute: AdminSpiritualContentIndexRoute,
   AdminCatalogueDeitiesIdRoute: AdminCatalogueDeitiesIdRoute,
   AdminCatalogueDeitiesNewRoute: AdminCatalogueDeitiesNewRoute,
   AdminCatalogueSacredHousesIdRoute: AdminCatalogueSacredHousesIdRoute,

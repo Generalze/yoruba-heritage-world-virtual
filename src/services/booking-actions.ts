@@ -20,6 +20,7 @@ import {
   AppointmentError,
 } from './appointments'
 import { getPublishedServiceBySlug } from './catalogue'
+import { acknowledgeGuidance, getVisibleGuidance } from './guidance'
 import { canUserBookSpiritualService } from './profile'
 import { getOrCreateBookingSettings } from './scheduling'
 import {
@@ -264,9 +265,16 @@ export const getMyAppointmentFn = createServerFn({ method: 'GET' })
     )
     const settlement = await getSettlementForAppointment(appointment.id)
     const settings = await getOrCreateBookingSettings(appointment.sacredHouseId)
+    // Step 7: FROZEN guidance assignments only (never "current
+    // version"), filtered by the status/stage visibility rules.
+    const guidance = await getVisibleGuidance(
+      appointment.id,
+      appointment.status,
+    )
     // Owner-only view: includes the private request note; internal
     // representative assignments are deliberately NOT exposed.
     return {
+      guidance,
       appointment: {
         publicId: appointment.publicId,
         status: appointment.status,
@@ -343,6 +351,30 @@ export const rescheduleMyAppointmentFn = createServerFn({ method: 'POST' })
       data.newStartsAtUtc,
     )
     return { ok: true }
+  })
+
+/** "I have read this guidance" (never compliance certification).
+ * Ownership from the session; the version must be assigned to THIS
+ * appointment and currently visible. Idempotent; no un-acknowledge. */
+export const acknowledgeGuidanceFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      publicId: publicIdSchema,
+      contentVersionId: z.number().int().positive(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    const appointment = await requireOwnedAppointment(user.id, data.publicId)
+    return acknowledgeGuidance(
+      requestContext(),
+      {
+        id: appointment.id,
+        userId: appointment.userId,
+        status: appointment.status,
+      },
+      data.contentVersionId,
+    )
   })
 
 // --- Payment history & receipt ----------------------------------------------

@@ -33,6 +33,8 @@ import {
   mergeIntervals,
   subtractInterval,
 } from './scheduling'
+import { assignGuidanceForAppointmentUnderTx } from './guidance'
+import type { GuidanceAssignmentSummary } from './guidance'
 import type { MinuteInterval } from './scheduling'
 import type { RequestContext } from '@/auth/service'
 import type { AssignmentRole } from '@/db/schema'
@@ -535,12 +537,19 @@ async function loadAppointment(id: number) {
  * defensive overlap protection, and the guarded CONFIRMED transition —
  * the CAS re-requires status + unexpired hold so a concurrent
  * transition yields zero affected rows and a refusal.
+ *
+ * Step 7: after the guarded transition succeeds, the appointment's
+ * spiritual guidance selection runs in this SAME transaction (exactly
+ * once, idempotent via the guidance-set primary key). Every trusted
+ * confirmation caller therefore gets the frozen-guidance invariant; a
+ * genuine failure while writing the guidance set rolls back the
+ * confirmation itself — never a half-confirmed state.
  */
 export async function confirmReservationUnderLock(
   tx: DbClient,
   appointmentId: number,
   inLockNowSql: string,
-): Promise<void> {
+): Promise<GuidanceAssignmentSummary> {
   const row = (
     await tx
       .select()
@@ -590,6 +599,7 @@ export async function confirmReservationUnderLock(
   if (result[0].affectedRows !== 1) {
     throw new AppointmentError('Only pending reservations can be confirmed.')
   }
+  return assignGuidanceForAppointmentUnderTx(tx, appointmentId)
 }
 
 /**
@@ -615,14 +625,14 @@ export async function confirmReservation(
   const preRead = await loadAppointment(appointmentId)
   await getOrCreateBookingSettings(preRead.sacredHouseId)
 
-  await getDb().transaction(async (tx) => {
+  const guidance = await getDb().transaction(async (tx) => {
     await lockHouseScheduling(tx, preRead.sacredHouseId)
     // Re-sample the clock AFTER acquiring the lock: pre-lock latency
     // (pool waits, lock queues) must never make an already-expired
     // hold look live. The caller-injected nowMs can only tighten the
     // check (max), never loosen it.
     const inLockNowSql = utcMsToSql(Math.max(nowMs, Date.now()))
-    await confirmReservationUnderLock(tx, appointmentId, inLockNowSql)
+    return confirmReservationUnderLock(tx, appointmentId, inLockNowSql)
   })
 
   await recordAuditEvent({
@@ -634,6 +644,21 @@ export async function confirmReservation(
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
   })
+  if (!guidance.alreadyExisted) {
+    await recordAuditEvent({
+      actorUserId: null,
+      action: 'appointment.guidance_assigned',
+      entityType: 'appointment',
+      entityId: String(appointmentId),
+      metadata: {
+        selectionResult: guidance.selectionResult,
+        assignmentCount: guidance.assignmentCount,
+        contentVersionIds: guidance.contentVersionIds.slice(0, 50),
+      },
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    })
+  }
 }
 
 /**
