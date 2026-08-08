@@ -8,6 +8,7 @@ import {
   sacredHouseMembers,
   sacredHouses,
   services,
+  spiritualInterests,
 } from '@/db/schema'
 import type { MemberType } from '@/db/schema'
 
@@ -229,8 +230,54 @@ const APPROVED_DEITY_HOUSE_LINKS: ReadonlyArray<{
  * approved links).
  */
 
+/**
+ * Approved spiritual-interest catalogue (Step 4 §11 — explicitly
+ * approved product structure). System-controlled: never AI-generated,
+ * never user-editable, expanded only by deliberate product decision.
+ */
+const APPROVED_SPIRITUAL_INTERESTS: ReadonlyArray<{
+  code: string
+  name: string
+}> = [
+  { code: 'FERTILITY', name: 'Fertility' },
+  { code: 'CONCEPTION', name: 'Conception' },
+  { code: 'MOTHERHOOD', name: 'Motherhood' },
+  { code: 'FAMILY', name: 'Family' },
+  { code: 'PROSPERITY', name: 'Prosperity' },
+  { code: 'BUSINESS', name: 'Business' },
+  { code: 'EMPLOYMENT', name: 'Employment' },
+  { code: 'FINANCIAL_STABILITY', name: 'Financial Stability' },
+  { code: 'WELLBEING', name: 'Wellbeing' },
+  { code: 'PROTECTION', name: 'Protection' },
+  { code: 'PURIFICATION_CLEANSING', name: 'Purification / Cleansing' },
+  { code: 'FORGIVENESS', name: 'Forgiveness' },
+  { code: 'DIVINATION', name: 'Divination' },
+  { code: 'ANCESTRAL_REMEMBRANCE', name: 'Ancestral Remembrance' },
+  { code: 'VICTORY_OVER_ADVERSITY', name: 'Victory Over Adversity' },
+  { code: 'PERSONAL_DIRECTION', name: 'Personal Direction' },
+  { code: 'GRATITUDE', name: 'Gratitude' },
+  { code: 'THANKSGIVING', name: 'Thanksgiving' },
+]
+
+export async function seedSpiritualInterests(): Promise<void> {
+  const db = getDb()
+  for (const [i, interest] of APPROVED_SPIRITUAL_INTERESTS.entries()) {
+    await db
+      .insert(spiritualInterests)
+      .values({
+        code: interest.code,
+        name: interest.name,
+        sortOrder: (i + 1) * 10,
+      })
+      .onDuplicateKeyUpdate({
+        set: { name: interest.name, sortOrder: (i + 1) * 10 },
+      })
+  }
+}
+
 export async function seedDomain(): Promise<void> {
   const db = getDb()
+  await seedSpiritualInterests()
 
   for (const [i, deity] of APPROVED_DEITIES.entries()) {
     await db
@@ -356,7 +403,7 @@ export async function seedDomain(): Promise<void> {
 if (import.meta.main) {
   await seedDomain()
   console.log(
-    'Domain catalogue seeded (idempotent): 8 deities, 4 Sacred Houses, focus areas, service families, members, and explicit deity-house links.',
+    'Domain catalogue seeded (idempotent): 8 deities, 4 Sacred Houses, focus areas, service families, members, explicit deity-house links, and 18 spiritual interests.',
   )
   await getPool().end()
 }

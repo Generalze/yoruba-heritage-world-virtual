@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import {
+  Link,
   createFileRoute,
   redirect,
   useNavigate,
@@ -8,6 +9,7 @@ import {
 import { useServerFn } from '@tanstack/react-start'
 
 import { getCurrentUserFn, logoutFn } from '@/auth/actions'
+import { getMyCompletionFn } from '@/services/profile-actions'
 
 export const Route = createFileRoute('/dashboard')({
   // Server-side protection: unauthenticated visitors are redirected to
@@ -18,12 +20,15 @@ export const Route = createFileRoute('/dashboard')({
     if (!user) throw redirect({ to: '/login' })
     return { user }
   },
-  loader: ({ context }) => ({ user: context.user }),
+  loader: async ({ context }) => ({
+    user: context.user,
+    status: await getMyCompletionFn(),
+  }),
   component: DashboardPage,
 })
 
 function DashboardPage() {
-  const { user } = Route.useLoaderData()
+  const { user, status } = Route.useLoaderData()
   const logout = useServerFn(logoutFn)
   const router = useRouter()
   const navigate = useNavigate()
@@ -54,6 +59,36 @@ function DashboardPage() {
             {busy ? 'Signing out…' : 'Sign out'}
           </button>
         </div>
+
+        {status.completion.complete ? (
+          <p className="mt-6 rounded-md border border-emerald-900 bg-emerald-950/50 px-4 py-3 text-sm text-emerald-300">
+            Profile complete. Your account is ready for future service booking.{' '}
+            <Link
+              to="/profile"
+              className="text-emerald-200 underline hover:text-emerald-100"
+            >
+              View profile
+            </Link>
+          </p>
+        ) : (
+          <p className="mt-6 rounded-md border border-amber-900 bg-amber-950/40 px-4 py-3 text-sm text-amber-300">
+            Profile incomplete. Complete your profile before booking a spiritual
+            service.{' '}
+            <Link
+              to="/profile"
+              className="text-amber-200 underline hover:text-amber-100"
+            >
+              Complete your profile
+            </Link>
+          </p>
+        )}
+        {status.eligibility.reasons.includes('AGE_REQUIREMENT_NOT_MET') &&
+        status.completion.missingFields.length === 0 ? (
+          <p className="mt-3 rounded-md border border-stone-700 bg-stone-900 px-4 py-3 text-xs text-stone-400">
+            Note: spiritual-service booking requires being 18 or older. Your
+            account remains available for browsing.
+          </p>
+        ) : null}
 
         <section className="mt-8 rounded-lg border border-stone-800 bg-stone-900 p-6">
           <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">

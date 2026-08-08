@@ -156,6 +156,32 @@ sacred-houses, services, plus an Admin-only `review` queue).
 - Grant staff roles to an existing registered account with:
   `bun run admin:grant <email> <USER|CONTENT_MANAGER|ADMIN|SUPER_ADMIN>`
 
+### User profile (Step 4)
+
+Self-service profile routes (authenticated, own data only):
+
+- `/profile` — overview and completion status
+- `/profile/edit` — personal details (full name, preferred name, phone
+  in E.164, ISO country, IANA timezone, language `en`/`yo`, date of
+  birth)
+- `/profile/spiritual` — private spiritual interests (18 approved
+  categories; zero, one or many; never public, never inferred into a
+  deity/House)
+- `/profile/consents` — required notices (Terms, Privacy, Spiritual
+  Service Notice — versioned records) and the optional
+  updates/announcements preference
+
+Profile completion is computed server-side (all personal fields +
+required consents). Future spiritual-service booking eligibility
+additionally requires age ≥ 18, calculated from date of birth at
+evaluation time — interests and the optional marketing preference are
+never required. Consent versions are development placeholders
+(`v1`) in `src/services/profile.ts`; real legal text/versions replace
+them before production. The spiritual-interest catalogue seeds with
+`bun run db:seed:domain` (idempotent); migration `0003` adds
+`user_profiles`, `spiritual_interests`, `user_spiritual_interests`,
+`user_consents`.
+
 ## Development Principles
 
 - GitHub-first development
