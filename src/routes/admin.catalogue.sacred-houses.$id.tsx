@@ -189,8 +189,9 @@ function EditHousePage() {
         </AdminField>
         {house.status === 'APPROVED' ? (
           <p className="text-xs text-amber-500">
-            Changing content, focus areas or members of an approved House
-            returns it to DRAFT for re-approval.
+            Warning: editing this approved House (including focus areas or
+            members) removes its approval — it returns to DRAFT and must go
+            through review again before it can be published.
           </p>
         ) : null}
         {house.status === 'PUBLISHED' ? (

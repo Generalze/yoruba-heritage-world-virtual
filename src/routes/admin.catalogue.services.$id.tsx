@@ -206,8 +206,9 @@ function EditServicePage() {
         </p>
         {service.serviceStatus === 'APPROVED' ? (
           <p className="text-xs text-amber-500">
-            Changing the name, slug or description of an approved service
-            returns it to DRAFT for re-approval.
+            Warning: editing this approved service’s name, slug or description
+            removes its approval — it returns to DRAFT and must go through
+            review again before it can be published.
           </p>
         ) : null}
         <button

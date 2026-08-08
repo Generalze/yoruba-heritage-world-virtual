@@ -275,10 +275,20 @@ export async function updateDeity(
     (input.slug !== undefined && input.slug !== row.slug) ||
     (input.shortDescription !== undefined &&
       input.shortDescription !== row.shortDescription)
+  const operationalChanged =
+    input.sortOrder !== undefined && input.sortOrder !== row.sortOrder
 
   assertEditable(row.profileStatus, contentChanged)
-  // Operational edits on live records are an ADMIN concern.
+  // Operational fields on APPROVED/PUBLISHED records are ADMIN-only:
+  // a Content Manager can only affect them by returning the record to
+  // DRAFT via a substantive edit (which strips the approval).
   if (row.profileStatus === 'PUBLISHED') {
+    await requirePermission(actorId, 'catalogue.publish')
+  } else if (
+    row.profileStatus === 'APPROVED' &&
+    !contentChanged &&
+    operationalChanged
+  ) {
     await requirePermission(actorId, 'catalogue.publish')
   }
 
@@ -420,9 +430,17 @@ export async function updateSacredHouse(
     (input.slug !== undefined && input.slug !== row.slug) ||
     (input.shortDescription !== undefined &&
       input.shortDescription !== row.shortDescription)
+  const operationalChanged =
+    input.sortOrder !== undefined && input.sortOrder !== row.sortOrder
 
   assertEditable(row.status, contentChanged)
   if (row.status === 'PUBLISHED') {
+    await requirePermission(actorId, 'catalogue.publish')
+  } else if (
+    row.status === 'APPROVED' &&
+    !contentChanged &&
+    operationalChanged
+  ) {
     await requirePermission(actorId, 'catalogue.publish')
   }
 
@@ -829,6 +847,12 @@ export async function updateService(
     (input.slug !== undefined && input.slug !== row.slug) ||
     (input.shortDescription !== undefined &&
       input.shortDescription !== row.shortDescription)
+  const operationalChanged =
+    (input.sortOrder !== undefined && input.sortOrder !== row.sortOrder) ||
+    (input.durationMinutes !== undefined &&
+      input.durationMinutes !== row.durationMinutes) ||
+    (input.priceMinor !== undefined && input.priceMinor !== row.priceMinor) ||
+    (input.currency !== undefined && input.currency !== row.currency)
 
   // Reconnecting a service to a different Sacred House is structural
   // and only permitted while the record is a DRAFT.
@@ -853,6 +877,12 @@ export async function updateService(
 
   assertEditable(row.serviceStatus, contentChanged)
   if (row.serviceStatus === 'PUBLISHED') {
+    await requirePermission(actorId, 'catalogue.publish')
+  } else if (
+    row.serviceStatus === 'APPROVED' &&
+    !contentChanged &&
+    operationalChanged
+  ) {
     await requirePermission(actorId, 'catalogue.publish')
   }
 

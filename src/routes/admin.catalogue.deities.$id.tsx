@@ -168,8 +168,9 @@ function EditDeityPage() {
         </AdminField>
         {deity.profileStatus === 'APPROVED' ? (
           <p className="text-xs text-amber-500">
-            Changing content or relationships of an approved profile returns it
-            to DRAFT for re-approval.
+            Warning: editing this approved profile (including relationships)
+            removes its approval — the record returns to DRAFT and must go
+            through review again before it can be published.
           </p>
         ) : null}
         <button

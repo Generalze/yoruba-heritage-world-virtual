@@ -83,7 +83,8 @@ export const PERMISSION_DEFINITIONS: Record<
   },
   'deities.manage': {
     name: 'Manage deity profiles',
-    description: 'Create, edit, review, publish, unpublish, archive deities',
+    description:
+      'Create deity profiles, edit their content and relationships, and submit them for review',
   },
   'sacred_houses.view': {
     name: 'View Sacred Houses (admin)',
@@ -92,7 +93,7 @@ export const PERMISSION_DEFINITIONS: Record<
   'sacred_houses.manage': {
     name: 'Manage Sacred Houses',
     description:
-      'Create, edit, publish, archive Sacred Houses, members and focus areas',
+      'Create Sacred Houses, edit their content, focus areas and members, and submit them for review',
   },
   'services.view': {
     name: 'View services (admin)',
@@ -105,7 +106,7 @@ export const PERMISSION_DEFINITIONS: Record<
   'catalogue.approve': {
     name: 'Approve catalogue content',
     description:
-      'Cultural/spiritual approval authority: approve or return submitted catalogue records',
+      'Review authority: approve submitted catalogue records or return them to draft with a reason',
   },
   'catalogue.publish': {
     name: 'Publish catalogue content',

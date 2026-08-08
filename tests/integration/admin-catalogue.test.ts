@@ -297,14 +297,41 @@ describe('workflow', () => {
     expect(row.approvedAt).toBeNull()
   })
 
-  it('operational-only edit of an APPROVED record keeps the approval', async () => {
+  it('operational fields on APPROVED records are ADMIN-only; CM is denied', async () => {
     const id = await makeDraftDeity(contentManager)
     await deityWorkflow(contentManager, ctx, id, 'submit')
     await deityWorkflow(admin, ctx, id, 'approve')
-    await updateDeity(contentManager, ctx, id, { sortOrder: 555 })
-    const row = await deityRow(id)
+
+    // CONTENT_MANAGER cannot adjust operational fields while APPROVED…
+    await expectForbidden(() =>
+      updateDeity(contentManager, ctx, id, { sortOrder: 555 }),
+    )
+    let row = await deityRow(id)
+    expect(row.profileStatus).toBe('APPROVED')
+
+    // …ADMIN can, and the approval survives an operational-only change.
+    await updateDeity(admin, ctx, id, { sortOrder: 555 })
+    row = await deityRow(id)
     expect(row.profileStatus).toBe('APPROVED')
     expect(row.approvedBy).toBe(admin)
+    expect(row.sortOrder).toBe(555)
+  })
+
+  it('CM MAY edit substantive content on APPROVED — but the save atomically strips the approval', async () => {
+    const id = await makeDraftDeity(contentManager)
+    await deityWorkflow(contentManager, ctx, id, 'submit')
+    await deityWorkflow(admin, ctx, id, 'approve')
+
+    await updateDeity(contentManager, ctx, id, {
+      name: 'T35 CM Edit After Approval',
+      sortOrder: 777, // operational change rides along with the demotion
+    })
+    const row = await deityRow(id)
+    expect(row.name).toBe('T35 CM Edit After Approval')
+    expect(row.sortOrder).toBe(777)
+    expect(row.profileStatus).toBe('DRAFT')
+    expect(row.approvedBy).toBeNull()
+    expect(row.approvedAt).toBeNull()
   })
 
   it('PUBLISHED substantive edits are blocked; archive/restore work', async () => {
