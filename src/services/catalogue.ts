@@ -113,12 +113,21 @@ export async function getPublishedDeityBySlug(
     .orderBy(asc(deitySacredHouses.sortOrder))
 
   // Deity ↔ service links exist in the model but none are approved yet;
-  // this returns them if/when authorised links are added.
+  // this returns them if/when authorised links are added. The owning
+  // Sacred House must itself be publicly visible — a published service
+  // under a hidden House must never leak through a deity profile.
   const linkedServices = await db
     .select({ id: services.id, name: services.name, slug: services.slug })
     .from(deityServices)
     .innerJoin(services, eq(deityServices.serviceId, services.id))
-    .where(and(eq(deityServices.deityId, deity.id), publicServiceFilter))
+    .innerJoin(sacredHouses, eq(services.sacredHouseId, sacredHouses.id))
+    .where(
+      and(
+        eq(deityServices.deityId, deity.id),
+        publicServiceFilter,
+        publicHouseFilter,
+      ),
+    )
     .orderBy(asc(deityServices.sortOrder))
 
   return { ...deity, sacredHouses: houses, services: linkedServices }

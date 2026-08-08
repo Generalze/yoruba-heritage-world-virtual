@@ -38,11 +38,7 @@ function DeityPage() {
         <h1 className="mt-4 text-3xl font-bold">{deity.name}</h1>
         {deity.shortDescription ? (
           <p className="mt-4 text-stone-300">{deity.shortDescription}</p>
-        ) : (
-          <p className="mt-4 text-sm text-stone-500">
-            An approved profile description will be published here.
-          </p>
-        )}
+        ) : null}
 
         {deity.sacredHouses.length > 0 ? (
           <section className="mt-10">

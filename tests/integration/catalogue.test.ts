@@ -324,6 +324,69 @@ describe('relationships', () => {
     ])
   })
 
+  it('deity profiles never leak services whose Sacred House is not public', async () => {
+    const db = getDb()
+    const { deityServices } = await import('@/db/schema')
+
+    // PUBLISHED + active deity…
+    const deityInsert = await db.insert(deities).values({
+      code: 'T_LEAK_DEITY',
+      name: 'T Leak Deity',
+      slug: 't-leak-deity',
+      profileStatus: 'PUBLISHED',
+    })
+    const deityId = deityInsert[0].insertId
+    tempDeityIds.push(deityId)
+
+    // …linked to a PUBLISHED + active service under a DRAFT House.
+    const houseInsert = await db.insert(sacredHouses).values({
+      code: 'T_LEAK_HOUSE',
+      name: 'T Leak House',
+      slug: 't-leak-house',
+      status: 'DRAFT',
+    })
+    const houseId = houseInsert[0].insertId
+    tempHouseIds.push(houseId)
+    const serviceInsert = await db.insert(services).values({
+      sacredHouseId: houseId,
+      code: 'T_LEAK_SERVICE',
+      name: 'T Leak Service',
+      slug: 't-leak-service',
+      serviceStatus: 'PUBLISHED',
+    })
+    const serviceId = serviceInsert[0].insertId
+    await db.insert(deityServices).values({ deityId, serviceId })
+
+    try {
+      // DRAFT House: deity is public, its service must not be.
+      let profile = await getPublishedDeityBySlug('t-leak-deity')
+      expect(profile).not.toBeNull()
+      expect(profile!.services).toEqual([])
+
+      // PUBLISHED but inactive House: still hidden.
+      await db
+        .update(sacredHouses)
+        .set({ status: 'PUBLISHED', active: false })
+        .where(eq(sacredHouses.id, houseId))
+      profile = await getPublishedDeityBySlug('t-leak-deity')
+      expect(profile!.services).toEqual([])
+
+      // Positive control: once the House is publicly visible, the
+      // linked service appears — proving the join itself works.
+      await db
+        .update(sacredHouses)
+        .set({ status: 'PUBLISHED', active: true })
+        .where(eq(sacredHouses.id, houseId))
+      profile = await getPublishedDeityBySlug('t-leak-deity')
+      expect(profile!.services.map((s) => s.name)).toEqual(['T Leak Service'])
+    } finally {
+      // Service first: House deletion is RESTRICT while it exists.
+      await db.delete(services).where(eq(services.id, serviceId))
+      await db.delete(sacredHouses).where(eq(sacredHouses.id, houseId))
+      await db.delete(deities).where(eq(deities.id, deityId))
+    }
+  })
+
   it('deity profile connects Ọ̀ṣun to Abúlé Ọ̀ṣun and no unapproved houses', async () => {
     const osun = await getPublishedDeityBySlug('osun')
     expect(osun).not.toBeNull()
