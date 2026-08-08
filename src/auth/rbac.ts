@@ -41,6 +41,10 @@ export const PERMISSION_CODES = [
   'availability.manage',
   'payments.view',
   'payments.manage',
+  'spiritual_content.view',
+  'spiritual_content.manage',
+  'spiritual_content.approve',
+  'spiritual_content.publish',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -141,6 +145,26 @@ export const PERMISSION_DEFINITIONS: Record<
     description:
       'Operational payment review and provider re-verification — never manual fabrication of successful payments',
   },
+  'spiritual_content.view': {
+    name: 'View spiritual guidance content (staff)',
+    description:
+      'View the spiritual guidance content library in any status, including drafts',
+  },
+  'spiritual_content.manage': {
+    name: 'Manage spiritual guidance content',
+    description:
+      'Create content items, author and edit DRAFT versions, and submit them for review — never implies approval or publication',
+  },
+  'spiritual_content.approve': {
+    name: 'Approve spiritual guidance content',
+    description:
+      'Review authority: approve submitted guidance versions or return them to draft with a reason',
+  },
+  'spiritual_content.publish': {
+    name: 'Publish spiritual guidance content',
+    description:
+      'Publish APPROVED guidance versions, archive versions and deactivate items operationally',
+  },
 }
 
 /** Appointment operations are ADMIN/SUPER_ADMIN only — catalogue
@@ -157,6 +181,21 @@ const APPOINTMENT_PERMISSIONS: Array<PermissionCode> = [
 const PAYMENT_PERMISSIONS: Array<PermissionCode> = [
   'payments.view',
   'payments.manage',
+]
+
+/** Step 7 spiritual guidance content. CONTENT_MANAGER authors (view +
+ * manage); approval and publication are ADMIN/SUPER_ADMIN only —
+ * manage never implies either. Same two-staff-type model as the
+ * catalogue; no new roles. */
+const SPIRITUAL_CONTENT_AUTHORING: Array<PermissionCode> = [
+  'spiritual_content.view',
+  'spiritual_content.manage',
+]
+
+const SPIRITUAL_CONTENT_ALL: Array<PermissionCode> = [
+  ...SPIRITUAL_CONTENT_AUTHORING,
+  'spiritual_content.approve',
+  'spiritual_content.publish',
 ]
 
 const CATALOGUE_VIEW: Array<PermissionCode> = [
@@ -195,6 +234,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'account.self.update',
     ...CATALOGUE_VIEW,
     ...CATALOGUE_MANAGE,
+    ...SPIRITUAL_CONTENT_AUTHORING,
   ],
   ADMIN: [
     'account.self.read',
@@ -206,6 +246,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'catalogue.publish',
     ...APPOINTMENT_PERMISSIONS,
     ...PAYMENT_PERMISSIONS,
+    ...SPIRITUAL_CONTENT_ALL,
   ],
   SUPER_ADMIN: [
     'account.self.read',
@@ -217,6 +258,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'catalogue.publish',
     ...APPOINTMENT_PERMISSIONS,
     ...PAYMENT_PERMISSIONS,
+    ...SPIRITUAL_CONTENT_ALL,
   ],
 }
 

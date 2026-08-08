@@ -77,6 +77,7 @@ export const getAdminContextFn = createServerFn({ method: 'GET' }).handler(
         code.startsWith('sacred_houses.') ||
         code.startsWith('services.') ||
         code.startsWith('catalogue.') ||
+        code.startsWith('spiritual_content.') ||
         code === 'admin.access',
     )
     if (!relevant) return null

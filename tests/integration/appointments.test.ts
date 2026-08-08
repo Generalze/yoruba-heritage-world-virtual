@@ -223,6 +223,24 @@ afterAll(async () => {
       .where(inArray(appointments.sacredHouseId, houseIds))
     const apptIds = apptRows.map((row) => row.id)
     if (apptIds.length > 0) {
+      // Step 7 guidance rows are RESTRICT-linked to appointments.
+      const schema = await import('@/db/schema')
+      await db
+        .delete(schema.appointmentGuidanceAcknowledgements)
+        .where(
+          inArray(
+            schema.appointmentGuidanceAcknowledgements.appointmentId,
+            apptIds,
+          ),
+        )
+      await db
+        .delete(schema.appointmentGuidanceAssignments)
+        .where(
+          inArray(schema.appointmentGuidanceAssignments.appointmentId, apptIds),
+        )
+      await db
+        .delete(schema.appointmentGuidanceSets)
+        .where(inArray(schema.appointmentGuidanceSets.appointmentId, apptIds))
       await db
         .delete(appointmentRepresentatives)
         .where(inArray(appointmentRepresentatives.appointmentId, apptIds))
