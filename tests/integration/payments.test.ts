@@ -1036,6 +1036,32 @@ describe('verified payment settlement', () => {
     )
   })
 
+  it('settlement timestamps: webhook event time is kept; timestamp-less API verification gets the fresh settlement clock', async () => {
+    // Webhook convention: the provider EVENT timestamp is genuine
+    // provider truth and is stored as paid_at.
+    const first = await reserve(payerA)
+    const webhookAttempt = await insertAttempt(first.appointmentId, payerA)
+    const eventTime = '2026-08-01 00:00:00'
+    await settleVerifiedPayment(
+      successFor(webhookAttempt.reference, { paidAtSql: eventTime }),
+    )
+    expect((await readAttempt(webhookAttempt.id)).paidAt).toBe(eventTime)
+
+    // Direct API reconciliation (e.g. a paid Stripe Checkout Session)
+    // reports NO payment-completion time — paid_at must be the fresh
+    // in-lock settlement clock, never a fabricated object-creation time.
+    const second = await reserve(payerA)
+    const apiAttempt = await insertAttempt(second.appointmentId, payerA)
+    const beforeMs = Date.now()
+    await settleVerifiedPayment(
+      successFor(apiAttempt.reference, { paidAtSql: null }),
+    )
+    const paidAt = (await readAttempt(apiAttempt.id)).paidAt
+    expect(paidAt).not.toBeNull()
+    expect(sqlToUtcMs(paidAt!)).toBeGreaterThanOrEqual(beforeMs - 2000)
+    expect(paidAt).not.toBe(eventTime)
+  })
+
   it('settling the same success twice is a no-op the second time', async () => {
     const reservation = await reserve(payerA)
     const attempt = await insertAttempt(reservation.appointmentId, payerA)

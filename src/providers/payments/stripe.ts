@@ -68,14 +68,18 @@ const RELEVANT_EVENTS = new Set([
 ])
 
 /**
- * Stripe "special case" currencies (docs.stripe.com/currencies): ISO
- * 4217 treats them as zero-decimal but Stripe's API represents them as
- * two-decimal for backwards compatibility. Our ledger stores ISO minor
- * units, so amounts sent to / read from Stripe must be scaled — without
- * this, a UGX appointment would be charged at 1/100 of its price while
- * verification still "matched".
+ * Stripe CHARGE "special case" currencies (docs.stripe.com/currencies):
+ * ISO 4217 treats them as zero-decimal but Stripe's charge API keeps a
+ * two-decimal representation whose last two digits must be 00. Our
+ * ledger stores ISO minor units, so amounts sent to / read from Stripe
+ * must be scaled — without this, an ISK/UGX appointment would be
+ * charged at 1/100 of its price while verification still "matched".
+ *
+ * Deliberately ONLY ISK and UGX: Stripe's documented HUF/TWD special
+ * behavior concerns PAYOUTS — their normal charges remain ordinary
+ * two-decimal amounts and must not be scaled.
  */
-const STRIPE_TWO_DECIMAL_EXCEPTIONS = new Set(['UGX'])
+const STRIPE_TWO_DECIMAL_EXCEPTIONS = new Set(['ISK', 'UGX'])
 
 function toStripeAmount(amountMinor: number, currency: string): number {
   return STRIPE_TWO_DECIMAL_EXCEPTIONS.has(currency.toUpperCase())
@@ -267,14 +271,15 @@ export function createStripeProvider(cfg: StripeConfig): PaymentProvider {
           false,
         )
       }
-      // API reads have no event timestamp; a paid session stamps
-      // paid_at from the session creation time as the best provider
-      // truth available (webhooks carry the precise event time).
-      return normalizeSession(
-        session,
-        null,
-        session.created != null ? session.created * 1000 : null,
-      )
+      // Direct API verification carries NO payment-completion
+      // timestamp: session.created is the Checkout Session OBJECT
+      // creation time, not when the buyer paid, and must never be
+      // presented as a payment time. paidAtSql stays null here — the
+      // central settlement layer stamps its fresh in-lock settlement
+      // clock as the fallback. (Webhook success events keep using the
+      // provider EVENT timestamp — that is a genuine provider-reported
+      // time for the success notification.)
+      return normalizeSession(session, null, null)
     },
 
     async parseAndVerifyWebhook(

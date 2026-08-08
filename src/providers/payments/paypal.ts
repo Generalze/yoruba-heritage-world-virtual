@@ -431,19 +431,46 @@ export function createPaypalProvider(cfg: PaypalConfig): PaymentProvider {
       ) {
         return { ok: false, reason: 'missing_transmission_headers' }
       }
-      const event = parseJsonSafely(decodeRawBody(rawBody)) as {
+      // EXACT raw event text, retained untouched. PayPal's documented
+      // postback requirement: webhook_event must be posted back exactly
+      // as received — parse → object → JSON.stringify can normalize
+      // whitespace/key order/Unicode escapes and make verification
+      // fail. The raw text is validated (must be one JSON object) but
+      // never re-serialized, never stored, never logged.
+      const rawEventJson = decodeRawBody(rawBody)
+      const parsedForValidation = parseJsonSafely(rawEventJson)
+      if (
+        parsedForValidation === null ||
+        typeof parsedForValidation !== 'object' ||
+        Array.isArray(parsedForValidation)
+      ) {
+        return { ok: false, reason: 'unparseable_payload' }
+      }
+      const event = parsedForValidation as {
         id?: string
         event_type?: string
         resource?: PaypalCapture & {
           supplementary_data?: { related_ids?: { order_id?: string } }
         }
-      } | null
-      if (!event?.id || typeof event.event_type !== 'string') {
+      }
+      if (!event.id || typeof event.event_type !== 'string') {
         return { ok: false, reason: 'unparseable_payload' }
       }
       // Official verification API — PayPal itself authenticates the
-      // transmission against the configured webhook id.
+      // transmission against the configured webhook id. The POST body
+      // is built manually: every surrounding field is safely
+      // JSON-encoded, while webhook_event embeds the already-valid raw
+      // event JSON verbatim (JSON allows insignificant whitespace
+      // around an embedded value, so the result is well-formed).
       const token = await getAccessToken()
+      const verificationBody =
+        `{"auth_algo":${JSON.stringify(authAlgo)},` +
+        `"cert_url":${JSON.stringify(certUrl)},` +
+        `"transmission_id":${JSON.stringify(transmissionId)},` +
+        `"transmission_sig":${JSON.stringify(transmissionSig)},` +
+        `"transmission_time":${JSON.stringify(transmissionTime)},` +
+        `"webhook_id":${JSON.stringify(cfg.webhookId)},` +
+        `"webhook_event":${rawEventJson}}`
       const response = await providerRequest(
         transport,
         `${baseUrl}/v1/notifications/verify-webhook-signature`,
@@ -453,15 +480,7 @@ export function createPaypalProvider(cfg: PaypalConfig): PaymentProvider {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-            auth_algo: authAlgo,
-            cert_url: certUrl,
-            transmission_id: transmissionId,
-            transmission_sig: transmissionSig,
-            transmission_time: transmissionTime,
-            webhook_id: cfg.webhookId,
-            webhook_event: event,
-          }),
+          body: verificationBody,
         },
       )
       const verdict = (await readProviderJson(response)) as {
@@ -470,6 +489,8 @@ export function createPaypalProvider(cfg: PaypalConfig): PaymentProvider {
       if (!response.ok || verdict.verification_status !== 'SUCCESS') {
         return { ok: false, reason: 'verification_failed' }
       }
+      // Business handling uses the parsed event ONLY after PayPal has
+      // confirmed the transmission is authentic.
       const base = {
         ok: true as const,
         eventKey: event.id,

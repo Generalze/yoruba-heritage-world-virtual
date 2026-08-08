@@ -598,6 +598,97 @@ describe('Stripe adapter', () => {
     expect(oddResult.verified?.amountMinor).toBeNull()
   })
 
+  it('scales ISK exactly like UGX (Stripe charge special case) — both directions', async () => {
+    // Platform/ISO: 5 ISK is amountMinor = 5 (zero-decimal). Stripe's
+    // charge API represents ISK as two-decimal with trailing 00.
+    const { transport, calls } = captureTransport([
+      jsonResponse({
+        id: 'cs_isk_1',
+        url: 'https://checkout.stripe.com/c/pay/cs_isk_1',
+        status: 'open',
+        payment_status: 'unpaid',
+      }),
+    ])
+    const provider = createStripeProvider({
+      ...config,
+      currencies: ['ISK'],
+      transport,
+    })
+    await provider.initializePayment({
+      ...initInput,
+      attempt: { ...attempt, currency: 'ISK', amountMinor: 5 },
+    })
+    const params = new URLSearchParams(String(calls[0].init.body))
+    expect(params.get('line_items[0][price_data][unit_amount]')).toBe('500')
+
+    const iskEvent = {
+      id: 'evt_isk_1',
+      type: 'checkout.session.completed',
+      created: Math.floor(nowMs / 1000),
+      data: {
+        object: {
+          id: 'cs_isk_1',
+          payment_status: 'paid',
+          status: 'complete',
+          amount_total: 500,
+          currency: 'isk',
+          client_reference_id: attempt.publicId,
+        },
+      },
+    }
+    const verifier = createStripeProvider({ ...config, currencies: ['ISK'] })
+    const { rawBody, headers } = signedStripeWebhook(
+      iskEvent,
+      config.webhookSecret,
+      Math.floor(nowMs / 1000),
+    )
+    const result = await verifier.parseAndVerifyWebhook(rawBody, headers, nowMs)
+    expect(result.verified?.amountMinor).toBe(5)
+    expect(result.verified?.currency).toBe('ISK')
+
+    // Not divisible by 100 → null → AMOUNT_MISMATCH review, no guess.
+    const oddEvent = {
+      ...iskEvent,
+      id: 'evt_isk_2',
+      data: { object: { ...iskEvent.data.object, amount_total: 550 } },
+    }
+    const odd = signedStripeWebhook(
+      oddEvent,
+      config.webhookSecret,
+      Math.floor(nowMs / 1000),
+    )
+    const oddResult = await verifier.parseAndVerifyWebhook(
+      odd.rawBody,
+      odd.headers,
+      nowMs,
+    )
+    expect(oddResult.verified?.amountMinor).toBeNull()
+  })
+
+  it('never scales ordinary two-decimal currencies (USD unchanged; HUF/TWD are payout-only special cases)', async () => {
+    for (const currency of ['USD', 'HUF', 'TWD']) {
+      const { transport, calls } = captureTransport([
+        jsonResponse({
+          id: `cs_${currency}_1`,
+          url: 'https://checkout.stripe.com/x',
+          status: 'open',
+          payment_status: 'unpaid',
+        }),
+      ])
+      const provider = createStripeProvider({
+        ...config,
+        currencies: [currency],
+        transport,
+      })
+      await provider.initializePayment({
+        ...initInput,
+        attempt: { ...attempt, currency, amountMinor: 12_500 },
+      })
+      const params = new URLSearchParams(String(calls[0].init.body))
+      expect(params.get('line_items[0][price_data][unit_amount]')).toBe('12500')
+    }
+  })
+
   it('verify by session reports paid sessions and pending open sessions', async () => {
     const paid = createStripeProvider({
       ...config,
@@ -609,7 +700,9 @@ describe('Stripe adapter', () => {
           payment_intent: 'pi_test_1',
           amount_total: 12_500,
           currency: 'usd',
-          created: Math.floor(nowMs / 1000),
+          // Deliberately far in the past: the session OBJECT creation
+          // time must never be presented as a payment time.
+          created: Math.floor(nowMs / 1000) - 30 * 24 * 3600,
         }),
       ]).transport,
     })
@@ -618,6 +711,9 @@ describe('Stripe adapter', () => {
       providerCheckoutId: 'cs_test_123',
     })
     expect(verified.outcome).toBe('SUCCEEDED')
+    // Direct API verification carries no payment-completion timestamp —
+    // paidAtSql is null and settlement stamps its own fresh clock.
+    expect(verified.paidAtSql).toBeNull()
 
     const open = createStripeProvider({
       ...config,
@@ -910,6 +1006,75 @@ describe('PayPal adapter', () => {
       transmissionHeaders,
     )
     expect(bad.ok).toBe(false)
+  })
+
+  it('posts back the EXACT raw webhook event — never a re-serialized reconstruction', async () => {
+    // Deliberately NON-CANONICAL but valid JSON: unusual whitespace,
+    // unusual key ordering (event_type before id), escaped Unicode and
+    // nested formatting. PayPal's postback verification requires the
+    // original representation.
+    const rawEventText =
+      '{\n' +
+      '  "event_type" :\t"PAYMENT.CAPTURE.COMPLETED" ,\n' +
+      '  "id"  : "WH-EVT-RAW-1",\n' +
+      '  "resource" : {\n' +
+      '      "status" : "COMPLETED",\n' +
+      '      "id" : "CAP-9",\n' +
+      '      "amount" : { "currency_code" : "USD" ,  "value" : "5000.00" },\n' +
+      '      "custom_id" : "\\u0041d\\u00e9w\\u00e1l\\u00e9-attempt"\n' +
+      '  }\n' +
+      '}'
+    const rawBody = new TextEncoder().encode(rawEventText)
+    const { transport, calls } = captureTransport([
+      oauthResponse(),
+      jsonResponse({ verification_status: 'SUCCESS' }),
+    ])
+    const provider = createPaypalProvider({ ...config, transport })
+    const result = await provider.parseAndVerifyWebhook(
+      rawBody,
+      transmissionHeaders,
+    )
+    expect(result.ok).toBe(true)
+    expect(result.verified?.outcome).toBe('SUCCEEDED')
+    expect(result.verified?.amountMinor).toBe(500_000)
+
+    const verifyCall = calls.find((c) =>
+      c.url.includes('/v1/notifications/verify-webhook-signature'),
+    )
+    expect(verifyCall).toBeDefined()
+    const body = String(verifyCall!.init.body)
+    // The original bytes appear VERBATIM as the webhook_event value…
+    expect(body).toContain(`"webhook_event":${rawEventText}`)
+    // …inside a well-formed JSON document whose surrounding fields are
+    // safely encoded.
+    const parsedBody = JSON.parse(body) as Record<string, unknown>
+    expect(parsedBody.webhook_id).toBe(config.webhookId)
+    expect(parsedBody.auth_algo).toBe('SHA256withRSA')
+    expect(parsedBody.transmission_id).toBe('tid-1')
+    expect(parsedBody.webhook_event).toEqual(JSON.parse(rawEventText))
+
+    // Regression: the OLD parse→JSON.stringify approach produces a
+    // DIFFERENT representation (whitespace collapsed, key order
+    // normalized, \uXXXX escapes decoded) — proving it would not have
+    // posted back the original event.
+    const reserialized = JSON.stringify(JSON.parse(rawEventText))
+    expect(reserialized).not.toBe(rawEventText)
+    expect(body).not.toContain(`"webhook_event":${reserialized}`)
+  })
+
+  it('rejects malformed or non-object webhook JSON before contacting PayPal', async () => {
+    const provider = createPaypalProvider({
+      ...config,
+      transport: captureTransport([oauthResponse()]).transport,
+    })
+    for (const bad of ['not json {{{', '[1,2,3]', '"just a string"', 'null']) {
+      const result = await provider.parseAndVerifyWebhook(
+        new TextEncoder().encode(bad),
+        transmissionHeaders,
+      )
+      expect(result.ok).toBe(false)
+      expect(result.reason).toBe('unparseable_payload')
+    }
   })
 
   it('rejects webhooks missing transmission headers without calling PayPal', async () => {
