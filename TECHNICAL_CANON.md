@@ -601,6 +601,46 @@ Verified payment
   be produced in Step 12; no per-session human approval exists; no paid
   providers are called.
 
+## 10.6 Amendment — Deterministic Storyboard & Generation Manifest (Phase One, Step 13)
+
+```text
+Validated Recipe Snapshot
+→ Deterministic Storyboard (ordered scenes over the approved timeline)
+→ Provider-Neutral Generation Manifest (future tasks, no provider chosen)
+→ GENERATING_VISUALS
+→ future provider executor (Step 14+)
+```
+
+- GENERATING_VISUALS means ONLY that a validated manifest exists and is
+  ready for the future visual executor. No per-session human approval
+  exists at any point.
+- 8–12 scenes remains the NORMAL target where the approved duration
+  naturally supports it — it is never forced. Planning never pads with
+  invented content, never stretches prayer duration to hit a count, and
+  never adds spiritual actions, objects, clothing or rituals. Total
+  recipe duration is preserved exactly and SILENCE is preserved verbatim
+  as HOLD_PREVIOUS. Long CONTENT windows may be split into purely
+  PRESENTATIONAL sub-scenes by dividing the existing timeline only. A
+  bounded scene ceiling fails loudly rather than truncating silently.
+- Planning is provider-neutral: no provider is selected and none is
+  called. GENERATION_REQUIRED scenes carry structured, body-free intent
+  (House/Service, content type, theme, duration, Visual Bible
+  version+hash, approved rule references by identity, external-AI
+  policy, content id+hash). Visual Bible rules are referenced by stable
+  identity/category/order — sensitive rule text is never copied, and a
+  missing rule is never permission to invent.
+- Sacred bodies NEVER enter a storyboard or manifest under any policy;
+  APPROVED_TEXT_CONTEXT only permits the future stage to retrieve the
+  approved text server-side after another authority validation. Audio
+  requirements are NONE / EXISTING_HUMAN_AUDIO (the exact approved
+  media Step 11 selected) / TTS_PENDING (identity + policy only, never
+  speech text) — Step 13 synthesizes nothing.
+- Storyboards and manifests are immutable, append-only and canonically
+  hashed; loaders fail closed on payload/hash/binding/timeline
+  violations and never rebuild or heal. Current authority is
+  revalidated before every later generation or render stage, and no
+  provider expenditure occurs in Step 13.
+
 ---
 
 # 11. Visual Canon Database
