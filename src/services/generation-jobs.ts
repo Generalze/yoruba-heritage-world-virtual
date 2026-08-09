@@ -108,6 +108,16 @@ export const systemGenerationClock: GenerationClock = {
   now: () => new Date(),
 }
 
+/** What every lease-sensitive entry point accepts. A bare Date is the
+ * LEGACY form: it pins ONE instant, so a caller passing it gets no
+ * post-lock time authority at all — every reading returns that same
+ * instant. Live callers pass a GenerationClock. */
+export type ClockInput = GenerationClock | Date
+
+function resolveClock(input: ClockInput): GenerationClock {
+  return input instanceof Date ? { now: () => input } : input
+}
+
 // --- Enqueue (called INSIDE the confirmation transaction) -------------------
 
 /**
@@ -259,14 +269,22 @@ function toSqlDate(date: Date): Date {
  * Claims the next due QUEUED/RETRYING job under a bounded lease. Row
  * locking + in-lock recheck guarantee two workers can never own the
  * same live lease. Time is injectable for tests.
+ *
+ * LOCK-WAIT SAFETY: the SQL predicate is only a candidate pre-filter;
+ * the AUTHORITATIVE reading is taken after the candidate row is locked
+ * and every due-ness decision plus the granted lease window derive from
+ * it. A slow connection or a long SKIP LOCKED scan can therefore never
+ * hand out a lease that is already shortened or already expired.
  */
 async function claimDueJob(
   workerId: string,
-  now: Date,
+  clockInput: ClockInput,
   leaseMs: number,
   claimable: (jobs: typeof prayerGenerationJobs) => ReturnType<typeof and>,
 ): Promise<ClaimedJob | null> {
+  const clock = resolveClock(clockInput)
   return getDb().transaction(async (tx) => {
+    const scanNow = clock.now()
     const candidate = (
       await tx
         .select()
@@ -276,11 +294,11 @@ async function claimDueJob(
             claimable(prayerGenerationJobs),
             or(
               isNull(prayerGenerationJobs.nextAttemptAt),
-              lte(prayerGenerationJobs.nextAttemptAt, toSqlDate(now)),
+              lte(prayerGenerationJobs.nextAttemptAt, toSqlDate(scanNow)),
             ),
             or(
               isNull(prayerGenerationJobs.leaseExpiresAt),
-              lte(prayerGenerationJobs.leaseExpiresAt, toSqlDate(now)),
+              lte(prayerGenerationJobs.leaseExpiresAt, toSqlDate(scanNow)),
             ),
           ),
         )
@@ -289,14 +307,24 @@ async function claimDueJob(
         .for('update', { skipLocked: true })
     ).at(0)
     if (!candidate) return null
+    // Authoritative time: read ONLY after the candidate row is locked.
+    const grantedNow = clock.now()
+    if (
+      (candidate.nextAttemptAt != null &&
+        candidate.nextAttemptAt > grantedNow) ||
+      (candidate.leaseExpiresAt != null &&
+        candidate.leaseExpiresAt > grantedNow)
+    ) {
+      return null
+    }
     const leaseToken = randomUUID()
     const updated = await tx
       .update(prayerGenerationJobs)
       .set({
         leaseToken,
         leaseOwner: workerId.slice(0, 100),
-        leaseAcquiredAt: toSqlDate(now),
-        leaseExpiresAt: new Date(now.getTime() + leaseMs),
+        leaseAcquiredAt: toSqlDate(grantedNow),
+        leaseExpiresAt: new Date(grantedNow.getTime() + leaseMs),
       })
       .where(
         and(
@@ -304,7 +332,7 @@ async function claimDueJob(
           eq(prayerGenerationJobs.status, candidate.status),
           or(
             isNull(prayerGenerationJobs.leaseExpiresAt),
-            lte(prayerGenerationJobs.leaseExpiresAt, toSqlDate(now)),
+            lte(prayerGenerationJobs.leaseExpiresAt, toSqlDate(grantedNow)),
           ),
         ),
       )
@@ -320,10 +348,10 @@ async function claimDueJob(
  * resumes preparation (never one resuming a later stage). */
 export async function claimNextGenerationJob(
   workerId: string,
-  now: Date,
+  clockInput: ClockInput,
   leaseMs: number = DEFAULT_LEASE_MS,
 ): Promise<ClaimedJob | null> {
-  return claimDueJob(workerId, now, leaseMs, (jobs) =>
+  return claimDueJob(workerId, clockInput, leaseMs, (jobs) =>
     or(
       eq(jobs.status, 'QUEUED'),
       and(
@@ -339,10 +367,10 @@ export async function claimNextGenerationJob(
  * own queue so continuous preparation work cannot starve it. */
 export async function claimNextStoryboardJob(
   workerId: string,
-  now: Date,
+  clockInput: ClockInput,
   leaseMs: number = DEFAULT_LEASE_MS,
 ): Promise<ClaimedJob | null> {
-  return claimDueJob(workerId, now, leaseMs, (jobs) =>
+  return claimDueJob(workerId, clockInput, leaseMs, (jobs) =>
     or(
       eq(jobs.status, 'STORYBOARDING'),
       and(eq(jobs.status, 'RETRYING'), eq(jobs.resumeStatus, 'STORYBOARDING')),
@@ -360,9 +388,10 @@ export async function claimNextStoryboardJob(
 export async function renewGenerationLease(
   jobId: number,
   leaseToken: string,
-  clock: GenerationClock,
+  clockInput: ClockInput,
   leaseMs: number = DEFAULT_LEASE_MS,
 ): Promise<boolean> {
+  const clock = resolveClock(clockInput)
   return getDb().transaction(async (tx) => {
     const job = (
       await tx
@@ -415,7 +444,7 @@ export async function transitionGenerationJobUnderLease(
   leaseToken: string,
   from: GenerationJobStatus,
   to: GenerationJobStatus,
-  clock: GenerationClock,
+  clockInput: ClockInput,
   options: {
     eventCode?: string
     detailCode?: string
@@ -427,6 +456,7 @@ export async function transitionGenerationJobUnderLease(
   if (!isLegalTransition(from, to)) {
     throw new GenerationJobError(`Illegal transition ${from} → ${to}.`)
   }
+  const clock = resolveClock(clockInput)
   return getDb().transaction(async (tx) => {
     const job = (
       await tx
@@ -507,10 +537,16 @@ const LEASED_PROCESSING_STATUSES: Array<GenerationJobStatus> = [
  *   otherwise             → RETRYING (resume at the prior stage, due
  *                           on the deterministic bounded schedule)
  * The dead worker's stale token can no longer transition anything.
+ *
+ * LOCK-WAIT SAFETY: the sweep query only nominates candidates; each
+ * per-job transaction takes its authoritative reading AFTER the row
+ * lock, so a lease still live when the lock frees is never recovered
+ * and the retry timing is never derived from a pre-lock timestamp.
  */
 export async function recoverExpiredGenerationLeases(
-  now: Date,
+  clockInput: ClockInput,
 ): Promise<number> {
+  const clock = resolveClock(clockInput)
   const db = getDb()
   const stuck = await db
     .select({ id: prayerGenerationJobs.id })
@@ -518,7 +554,7 @@ export async function recoverExpiredGenerationLeases(
     .where(
       and(
         inArray(prayerGenerationJobs.status, LEASED_PROCESSING_STATUSES),
-        sql`${prayerGenerationJobs.leaseExpiresAt} <= ${toSqlDate(now)}`,
+        sql`${prayerGenerationJobs.leaseExpiresAt} <= ${toSqlDate(clock.now())}`,
       ),
     )
     .limit(100)
@@ -533,11 +569,13 @@ export async function recoverExpiredGenerationLeases(
           .limit(1)
           .for('update')
       ).at(0)
+      // Authoritative time: read ONLY after the row lock is held.
+      const freshNow = clock.now()
       if (
         !job ||
         !LEASED_PROCESSING_STATUSES.includes(job.status) ||
         job.leaseExpiresAt == null ||
-        job.leaseExpiresAt > now
+        job.leaseExpiresAt > freshNow
       ) {
         return false
       }
@@ -561,7 +599,7 @@ export async function recoverExpiredGenerationLeases(
           resumeStatus: exhausted ? null : job.status,
           nextAttemptAt: exhausted
             ? null
-            : new Date(now.getTime() + delayMinutes * 60_000),
+            : new Date(freshNow.getTime() + delayMinutes * 60_000),
           leaseToken: null,
           leaseOwner: null,
           leaseAcquiredAt: null,
@@ -608,8 +646,9 @@ export async function persistPreparedRecipeUnderLease(
   leaseToken: string,
   attempt: number,
   recipe: Extract<VideoRecipe, { status: 'RECIPE_READY' }>,
-  clock: GenerationClock,
+  clockInput: ClockInput,
 ): Promise<{ snapshotNumber: number } | null> {
+  const clock = resolveClock(clockInput)
   const recipeJsonText = JSON.stringify(recipe)
   const payloadSha256 = createHash('sha256')
     .update(recipeJsonText, 'utf8')
@@ -711,63 +750,101 @@ export function sanitizeErrorMessage(error: unknown): string {
   return message.replaceAll('\n', ' ').slice(0, 500)
 }
 
+/**
+ * Bounded retry-or-fail decision for a stage that could not finish.
+ *
+ * The caller's job snapshot is an entry ticket ONLY: attempt
+ * accounting is read back from the row under its own lock, in the SAME
+ * transaction that writes the decision, so a concurrent recovery sweep
+ * that already consumed an attempt cannot be silently clobbered. The
+ * CAS therefore guards status + lease token + the attempt count the
+ * decision was computed from, and the authoritative clock reading (and
+ * with it the bounded backoff) is taken after the lock. The transition
+ * is checked against the central legal map and recorded as an event in
+ * the same transaction.
+ */
 export async function scheduleRetryOrFail(
   job: typeof prayerGenerationJobs.$inferSelect,
   leaseToken: string,
-  clock: GenerationClock,
+  clockInput: ClockInput,
   errorCode: string,
   errorMessage: string | null,
   stage: GenerationJobStatus = 'PREPARING',
 ): Promise<'RETRYING' | 'FAILED' | 'LOST'> {
-  const nextAttempt = job.attemptCount + 1
-  if (nextAttempt >= job.maxAttempts) {
-    const ok = await transitionGenerationJobUnderLease(
-      job.id,
-      leaseToken,
-      stage,
-      'FAILED',
-      clock,
-      {
-        eventCode: 'max_attempts_exhausted',
-        detailCode: errorCode,
-        attemptNumber: nextAttempt,
-        clearLease: true,
-        patch: {
-          attemptCount: nextAttempt,
-          lastErrorCode: errorCode,
-          lastErrorMessage: errorMessage,
-          nextAttemptAt: null,
-          resumeStatus: null,
-        },
-      },
-    )
-    return ok ? 'FAILED' : 'LOST'
-  }
-  const delayMinutes =
-    RETRY_SCHEDULE_MINUTES[
-      Math.min(job.attemptCount, RETRY_SCHEDULE_MINUTES.length - 1)
-    ]
-  const ok = await transitionGenerationJobUnderLease(
-    job.id,
-    leaseToken,
-    stage,
-    'RETRYING',
-    clock,
-    {
-      eventCode: 'retry_scheduled',
-      detailCode: errorCode,
-      attemptNumber: nextAttempt,
-      clearLease: true,
-      patch: {
-        attemptCount: nextAttempt,
-        resumeStatus: stage,
-        nextAttemptAt: new Date(clock.now().getTime() + delayMinutes * 60_000),
+  const clock = resolveClock(clockInput)
+  return getDb().transaction(async (tx) => {
+    const current = (
+      await tx
+        .select({
+          id: prayerGenerationJobs.id,
+          status: prayerGenerationJobs.status,
+          attemptCount: prayerGenerationJobs.attemptCount,
+          maxAttempts: prayerGenerationJobs.maxAttempts,
+          leaseToken: prayerGenerationJobs.leaseToken,
+          leaseExpiresAt: prayerGenerationJobs.leaseExpiresAt,
+        })
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, job.id))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    // Authoritative time: read ONLY after the row lock is held.
+    const freshNow = clock.now()
+    if (
+      !current ||
+      current.status !== stage ||
+      current.leaseToken !== leaseToken ||
+      current.leaseExpiresAt == null ||
+      current.leaseExpiresAt <= freshNow
+    ) {
+      return 'LOST'
+    }
+    const attempt = current.attemptCount + 1
+    const exhausted = attempt >= current.maxAttempts
+    const to: GenerationJobStatus = exhausted ? 'FAILED' : 'RETRYING'
+    // Central state-machine authority — never bypass the map.
+    if (!isLegalTransition(stage, to)) {
+      throw new GenerationJobError(`Illegal transition ${stage} → ${to}.`)
+    }
+    const delayMinutes =
+      RETRY_SCHEDULE_MINUTES[
+        Math.min(current.attemptCount, RETRY_SCHEDULE_MINUTES.length - 1)
+      ]
+    const updated = await tx
+      .update(prayerGenerationJobs)
+      .set({
+        status: to,
+        attemptCount: attempt,
+        resumeStatus: exhausted ? null : stage,
+        nextAttemptAt: exhausted
+          ? null
+          : new Date(freshNow.getTime() + delayMinutes * 60_000),
+        leaseToken: null,
+        leaseOwner: null,
+        leaseAcquiredAt: null,
+        leaseExpiresAt: null,
         lastErrorCode: errorCode,
         lastErrorMessage: errorMessage,
-      },
-    },
-  )
-  return ok ? 'RETRYING' : 'LOST'
+      })
+      .where(
+        and(
+          eq(prayerGenerationJobs.id, current.id),
+          eq(prayerGenerationJobs.status, stage),
+          eq(prayerGenerationJobs.leaseToken, leaseToken),
+          eq(prayerGenerationJobs.attemptCount, current.attemptCount),
+        ),
+      )
+    if (updated[0].affectedRows !== 1) return 'LOST'
+    await tx.insert(prayerGenerationJobEvents).values({
+      generationJobId: current.id,
+      fromStatus: stage,
+      toStatus: to,
+      eventCode: exhausted ? 'max_attempts_exhausted' : 'retry_scheduled',
+      attemptNumber: attempt,
+      detailCode: errorCode,
+    })
+    return exhausted ? 'FAILED' : 'RETRYING'
+  })
 }
 
 // --- Preparation worker (Step 12 processing) --------------------------------
@@ -800,7 +877,9 @@ export async function runGenerationPreparationOnce(
 ): Promise<PreparationOutcome> {
   const build = dependencies.buildRecipe ?? buildValidatedVideoRecipe
   const validate = dependencies.validateRecipe ?? validateVideoRecipe
-  const claimed = await claimNextGenerationJob(workerId, clock.now())
+  // The claim receives the CLOCK, not a reading: the granted lease
+  // window must derive from the claim's own post-lock time.
+  const claimed = await claimNextGenerationJob(workerId, clock)
   if (!claimed) return { status: 'IDLE' }
   const { job, leaseToken } = claimed
   const attempt = job.attemptCount + 1
