@@ -6,6 +6,7 @@
     "dev": "bun --bun vite dev --port 3000",
     "build": "vite build",
     "start": "bun run server.ts",
+    "worker:generation": "bun run src/workers/prayer-generation-worker.ts",
     "preview": "bun --bun vite preview",
     "generate-routes": "tsr generate",
     "typecheck": "tsr generate && tsc --noEmit",

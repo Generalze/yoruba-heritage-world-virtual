@@ -16,6 +16,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as OlodumareRouteImport } from './routes/olodumare'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as AdminGenerationJobsRouteImport } from './routes/admin.generation-jobs'
 import { Route as AdminVideoRecipesRouteImport } from './routes/admin.video-recipes'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as AppointmentsIndexRouteImport } from './routes/appointments.index'
@@ -104,6 +105,11 @@ const RegisterRoute = RegisterRouteImport.update({
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminGenerationJobsRoute = AdminGenerationJobsRouteImport.update({
+  id: '/generation-jobs',
+  path: '/generation-jobs',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminVideoRecipesRoute = AdminVideoRecipesRouteImport.update({
@@ -401,6 +407,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
+  '/admin/generation-jobs': typeof AdminGenerationJobsRoute
   '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
@@ -463,6 +470,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
+  '/admin/generation-jobs': typeof AdminGenerationJobsRoute
   '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
@@ -527,6 +535,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
+  '/admin/generation-jobs': typeof AdminGenerationJobsRoute
   '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
@@ -592,6 +601,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/olodumare'
     | '/register'
+    | '/admin/generation-jobs'
     | '/admin/video-recipes'
     | '/api/health'
     | '/appointments/$publicId'
@@ -654,6 +664,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/olodumare'
     | '/register'
+    | '/admin/generation-jobs'
     | '/admin/video-recipes'
     | '/api/health'
     | '/appointments/$publicId'
@@ -717,6 +728,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/olodumare'
     | '/register'
+    | '/admin/generation-jobs'
     | '/admin/video-recipes'
     | '/api/health'
     | '/appointments/$publicId'
@@ -851,6 +863,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/generation-jobs': {
+      id: '/admin/generation-jobs'
+      path: '/generation-jobs'
+      fullPath: '/admin/generation-jobs'
+      preLoaderRoute: typeof AdminGenerationJobsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/video-recipes': {
@@ -1235,6 +1254,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteChildren {
+  AdminGenerationJobsRoute: typeof AdminGenerationJobsRoute
   AdminVideoRecipesRoute: typeof AdminVideoRecipesRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminAppointmentsIdRoute: typeof AdminAppointmentsIdRoute
@@ -1274,6 +1294,7 @@ interface AdminRouteChildren {
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminGenerationJobsRoute: AdminGenerationJobsRoute,
   AdminVideoRecipesRoute: AdminVideoRecipesRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminAppointmentsIdRoute: AdminAppointmentsIdRoute,
@@ -1344,13 +1365,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

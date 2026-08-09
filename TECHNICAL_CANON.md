@@ -569,6 +569,38 @@ Approved Session Plan (Step 9)
   CLOSED with machine-readable reasons the moment any upstream
   authority changes. Nothing is ever auto-healed.
 
+## 10.5 Amendment — Appointment-Bound Generation Orchestration (Phase One, Step 12)
+
+```text
+Verified payment
+→ CONFIRMED appointment (authoritative CAS)
+→ atomic DB generation enqueue (same transaction, lightweight)
+→ asynchronous PREPARING worker (DB-backed queue, bounded leases)
+→ validated immutable recipe snapshot (append-only, SHA-256 payload)
+→ STORYBOARDING
+→ future provider pipeline (Step 13+)
+```
+
+- ONE generation job per appointment (DB-unique) — payment/webhook
+  replays can never duplicate it. The confirmation transaction does
+  ONLY: CONFIRMED + guidance assignment + job insertion; recipe
+  building, media hashing and provider work never run inside it. The
+  guidance language snapshot is the authoritative generation language —
+  if it cannot be established, confirmation fails closed.
+- The variation seed is the SHA-256 of a versioned canonical string
+  (video-v1 | userId | appointmentId | serviceId | startsAtUtc), frozen
+  at confirmation; only the hash is ever stored or exposed.
+- The queue is DB-backed initially (no Redis/BullMQ): row-locked claims,
+  bounded lease tokens, stale-lease recovery to RETRYING, a central
+  legal-transition state machine, and a deterministic bounded retry
+  schedule (1m/5m/15m/60m/60m) with sanitized machine error codes.
+- Recipe snapshots are append-only and immutable; loaders re-verify the
+  payload SHA-256 and the embedded recipe hash and fail closed. EVERY
+  later generation/render stage must revalidate current authority
+  (loadAndValidateGenerationRecipe) before provider work. READY cannot
+  be produced in Step 12; no per-session human approval exists; no paid
+  providers are called.
+
 ---
 
 # 11. Visual Canon Database

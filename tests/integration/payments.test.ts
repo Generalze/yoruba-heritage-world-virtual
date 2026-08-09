@@ -342,6 +342,34 @@ beforeAll(async () => {
   }
 })
 
+async function purgeGenerationRowsForAppointments(
+  apptIds: Array<number>,
+): Promise<void> {
+  if (apptIds.length === 0) return
+  const db = getDb()
+  const { inArray: inArrayOp } = await import('drizzle-orm')
+  const {
+    prayerGenerationJobEvents,
+    prayerGenerationJobs,
+    prayerGenerationRecipeSnapshots,
+  } = await import('@/db/schema')
+  const jobs = await db
+    .select({ id: prayerGenerationJobs.id })
+    .from(prayerGenerationJobs)
+    .where(inArrayOp(prayerGenerationJobs.appointmentId, apptIds))
+  const jobIds = jobs.map((row) => row.id)
+  if (jobIds.length === 0) return
+  await db
+    .delete(prayerGenerationJobEvents)
+    .where(inArrayOp(prayerGenerationJobEvents.generationJobId, jobIds))
+  await db
+    .delete(prayerGenerationRecipeSnapshots)
+    .where(inArrayOp(prayerGenerationRecipeSnapshots.generationJobId, jobIds))
+  await db
+    .delete(prayerGenerationJobs)
+    .where(inArrayOp(prayerGenerationJobs.id, jobIds))
+}
+
 afterAll(async () => {
   const db = getDb()
   resetPaymentRegistryForTests()
@@ -394,6 +422,7 @@ afterAll(async () => {
       await db
         .delete(schema.appointmentGuidanceSets)
         .where(inArray(schema.appointmentGuidanceSets.appointmentId, apptIds))
+      await purgeGenerationRowsForAppointments(apptIds)
       await db.delete(appointments).where(inArray(appointments.id, apptIds))
     }
     await db

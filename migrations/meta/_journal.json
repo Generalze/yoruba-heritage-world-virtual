@@ -71,6 +71,13 @@
       "when": 1786243734164,
       "tag": "0009_ambitious_energizer",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1786256680393,
+      "tag": "0010_abnormal_whiplash",
+      "breakpoints": true
     }
   ]
 }
