@@ -47,10 +47,18 @@ async function main(): Promise<void> {
   console.log(`[${WORKER_ID}] prayer generation worker started (DB queue)`)
   let lastSweep = 0
   while (!shuttingDown) {
-    const now = new Date()
-    if (now.getTime() - lastSweep >= LEASE_SWEEP_INTERVAL_MS) {
-      lastSweep = now.getTime()
-      const recovered = await recoverExpiredGenerationLeases(now)
+    // Pacing only — how often the sweep RUNS, never lease/retry
+    // authority. Authority for recovery decisions and backoff comes
+    // exclusively from systemGenerationClock, read fresh after each
+    // candidate row's lock is held (see recoverExpiredGenerationLeases).
+    // Drawn from the same clock as everything else in this worker —
+    // one time source, not a second one via the global Date.
+    const nowMs = systemGenerationClock.now().getTime()
+    if (nowMs - lastSweep >= LEASE_SWEEP_INTERVAL_MS) {
+      lastSweep = nowMs
+      const recovered = await recoverExpiredGenerationLeases(
+        systemGenerationClock,
+      )
       if (recovered > 0) {
         console.log(`[${WORKER_ID}] recovered ${recovered} expired lease(s)`)
       }

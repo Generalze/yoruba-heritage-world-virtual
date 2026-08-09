@@ -94,6 +94,7 @@ import {
   claimNextStoryboardJob,
   recoverExpiredGenerationLeases,
   runGenerationPreparationOnce,
+  systemGenerationClock,
   transitionGenerationJobUnderLease,
 } from '@/services/generation-jobs'
 import {
@@ -1101,7 +1102,7 @@ describe('storyboard queue, lease and authority', () => {
     const queued = (await jobForAppointment(reservation.appointmentId))!
     await quiesceOtherJobs(queued.id)
     expect(queued.status).toBe('QUEUED')
-    expect(await claimNextStoryboardJob('t13-c', new Date())).toBeNull()
+    expect(await claimNextStoryboardJob('t13-c', systemGenerationClock)).toBeNull()
     // …but IS preparation-claimable (fair, independent queues).
     const prepared = await runGenerationPreparationOnce('t13-c', {
       now: () => new Date(),
@@ -1111,8 +1112,8 @@ describe('storyboard queue, lease and authority', () => {
     expect(storyboarding.status).toBe('STORYBOARDING')
 
     // Now it IS storyboard-claimable but NOT preparation-claimable.
-    expect(await claimNextGenerationJob('t13-c', new Date())).toBeNull()
-    const claim = await claimNextStoryboardJob('t13-c', new Date())
+    expect(await claimNextGenerationJob('t13-c', systemGenerationClock)).toBeNull()
+    const claim = await claimNextStoryboardJob('t13-c', systemGenerationClock)
     expect(claim?.job.id).toBe(queued.id)
 
     // A RETRYING job resuming STORYBOARDING is storyboard-claimable
@@ -1128,8 +1129,8 @@ describe('storyboard queue, lease and authority', () => {
         leaseExpiresAt: null,
       })
       .where(eq(prayerGenerationJobs.id, queued.id))
-    expect(await claimNextGenerationJob('t13-c', new Date())).toBeNull()
-    const resumeClaim = await claimNextStoryboardJob('t13-c', new Date())
+    expect(await claimNextGenerationJob('t13-c', systemGenerationClock)).toBeNull()
+    const resumeClaim = await claimNextStoryboardJob('t13-c', systemGenerationClock)
     expect(resumeClaim?.job.id).toBe(queued.id)
     // Release for later phases.
     await getDb()
@@ -1165,11 +1166,11 @@ describe('storyboard queue, lease and authority', () => {
     const clock = makeFakeClock(Date.now())
 
     // Crash 1 → RETRYING (resume STORYBOARDING), attempt 1.
-    const claim1 = await claimNextStoryboardJob('crash-1', clock.now())
+    const claim1 = await claimNextStoryboardJob('crash-1', clock)
     expect(claim1?.job.id).toBe(jobId)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
     let row = (await jobForAppointment(appointmentId))!
     expect(row.status).toBe('RETRYING')
@@ -1178,7 +1179,7 @@ describe('storyboard queue, lease and authority', () => {
 
     // Crash 2 → FAILED at max attempts, no snapshots, no crash loop.
     clock.advance(2 * 60_000)
-    const claim2 = await claimNextStoryboardJob('crash-2', clock.now())
+    const claim2 = await claimNextStoryboardJob('crash-2', clock)
     expect(claim2?.job.id).toBe(jobId)
     expect(
       await transitionGenerationJobUnderLease(
@@ -1191,13 +1192,13 @@ describe('storyboard queue, lease and authority', () => {
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
     row = (await jobForAppointment(appointmentId))!
     expect(row.status).toBe('FAILED')
     expect(row.attemptCount).toBe(2)
     expect(row.lastErrorCode).toBe('LEASE_EXPIRED')
-    expect(await recoverExpiredGenerationLeases(clock.now())).toBe(0)
+    expect(await recoverExpiredGenerationLeases(clock)).toBe(0)
     expect((await storyboardRows(jobId)).length).toBe(0)
   }, 240_000)
 
@@ -1214,7 +1215,7 @@ describe('storyboard queue, lease and authority', () => {
     const { jobId, appointmentId } = await makeStoryboardReadyJob(serviceId)
     const clock = makeFakeClock(Date.now())
 
-    const claim = await claimNextStoryboardJob('worker-A', clock.now())
+    const claim = await claimNextStoryboardJob('worker-A', clock)
     expect(claim?.job.id).toBe(jobId)
     const built = await buildValidatedGenerationStoryboard(jobId)
     expect(built.status).toBe('OK')
@@ -1223,7 +1224,7 @@ describe('storyboard queue, lease and authority', () => {
     // Lease lapses and is recovered before finalization.
     clock.advance(DEFAULT_LEASE_MS + 60_000)
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
     const persisted = await persistStoryboardManifestUnderLease(
       jobId,

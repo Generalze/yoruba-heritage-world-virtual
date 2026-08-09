@@ -112,6 +112,12 @@ export interface StoryboardScene {
   startMs: number
   endMs: number
   durationMs: number
+  /** The FULL original recipe-segment window, before any purely
+   * presentational split. A segment's audio requirement always spans
+   * this window — NEVER the narrower per-split window above — so a
+   * split visual never truncates or duplicates the underlying audio. */
+  segmentStartMs: number
+  segmentEndMs: number
   /** Presentational sub-scene index within one recipe segment. */
   splitIndex: number
   splitCount: number
@@ -235,6 +241,8 @@ export function canonicalStoryboard(
       startMs: scene.startMs,
       endMs: scene.endMs,
       durationMs: scene.durationMs,
+      segmentStartMs: scene.segmentStartMs,
+      segmentEndMs: scene.segmentEndMs,
       splitIndex: scene.splitIndex,
       splitCount: scene.splitCount,
       sourceMode: scene.sourceMode,
@@ -340,6 +348,9 @@ function planScenes(
   for (const segment of recipe.segments) {
     const segmentMs = Math.max(0, Math.round(segment.durationSeconds * 1000))
     const segmentStart = cursorMs
+    // FULL original segment window — constant across any presentational
+    // split below; the audio requirement always spans exactly this.
+    const segmentEnd = segmentStart + segmentMs
 
     if (segment.kind === 'SILENCE') {
       // Preserved EXACTLY — one scene, holding the previous visual.
@@ -354,8 +365,10 @@ function planScenes(
         contentType: null,
         themeCode: null,
         startMs: segmentStart,
-        endMs: segmentStart + segmentMs,
+        endMs: segmentEnd,
         durationMs: segmentMs,
+        segmentStartMs: segmentStart,
+        segmentEndMs: segmentEnd,
         splitIndex: 0,
         splitCount: 1,
         sourceMode: 'HOLD_PREVIOUS',
@@ -448,6 +461,8 @@ function planScenes(
         startMs,
         endMs,
         durationMs,
+        segmentStartMs: segmentStart,
+        segmentEndMs: segmentEnd,
         splitIndex: split,
         splitCount,
         sourceMode,
@@ -539,11 +554,14 @@ function buildManifest(
       })
     }
     if (scene.audio.mode !== 'NONE') {
+      // ALWAYS the full original recipe-segment window — never the
+      // narrower per-split scene window — so one audio requirement
+      // covers the whole segment regardless of any visual split.
       audioRequirements.push({
         ...scene.audio,
         sceneId: scene.sceneId,
-        startMs: scene.startMs,
-        endMs: scene.endMs,
+        startMs: scene.segmentStartMs,
+        endMs: scene.segmentEndMs,
       })
     }
   }
@@ -625,6 +643,39 @@ export async function buildValidatedGenerationStoryboard(
     return {
       status: 'GOVERNANCE_IMPOSSIBLE',
       reasons: ['generation_under_no_external_ai'],
+    }
+  }
+
+  // Fail CLOSED on an incoherent declared visual source. A declared
+  // visualMode must NEVER silently degrade to HOLD_PREVIOUS below —
+  // this is re-verified HERE, independently of Step 12's own recipe
+  // checks, so a tampered persisted recipe row with every checksum
+  // recomputed to match still cannot slip an incoherent segment
+  // through. NEVER invented or substituted: any violation aborts
+  // before a single scene is planned.
+  const incoherentSource = recipe.segments.some((segment) => {
+    if (segment.kind !== 'CONTENT') return false
+    if (
+      (segment.visualMode === 'LINKED_REFERENCE' ||
+        segment.visualMode === 'LIBRARY_MEDIA') &&
+      segment.visual == null
+    ) {
+      return true
+    }
+    if (
+      segment.visualMode === 'GENERATION_ALLOWED' &&
+      segment.generation == null
+    ) {
+      return true
+    }
+    // An approved visual AND a generation descriptor together are
+    // incoherent regardless of the declared mode.
+    return segment.visual != null && segment.generation != null
+  })
+  if (incoherentSource) {
+    return {
+      status: 'GOVERNANCE_IMPOSSIBLE',
+      reasons: ['incoherent_scene_source'],
     }
   }
 
@@ -987,10 +1038,197 @@ export type ValidatedManifest =
   | { status: 'INTEGRITY_FAILURE' }
   | { status: 'NOT_PREPARED' }
 
+/** Every scalar (non-array) field a persisted storyboard commits to. */
+const STORYBOARD_SCALAR_FIELDS: ReadonlyArray<keyof GenerationStoryboard> = [
+  'schemaVersion',
+  'generationJobId',
+  'serviceId',
+  'sacredHouseId',
+  'language',
+  'variationSeed',
+  'recipeSnapshotId',
+  'recipeSnapshotNumber',
+  'recipeSha256',
+  'templateVersionId',
+  'templateDefinitionSha256',
+  'visualBibleVersionId',
+  'visualBibleVersionNumber',
+  'visualBibleSha256',
+  'sceneCount',
+  'totalDurationMs',
+]
+
+/** Every scalar (non-array/object) field one storyboard scene commits
+ * to; `generationIntent`, `audio` and `bibleRuleRefs` are structural
+ * and compared separately below. */
+const STORYBOARD_SCENE_SCALAR_FIELDS: ReadonlyArray<keyof StoryboardScene> = [
+  'sceneId',
+  'order',
+  'recipeSegmentIndex',
+  'slotKey',
+  'kind',
+  'contentVersionId',
+  'contentSha256',
+  'contentType',
+  'themeCode',
+  'startMs',
+  'endMs',
+  'durationMs',
+  'segmentStartMs',
+  'segmentEndMs',
+  'splitIndex',
+  'splitCount',
+  'sourceMode',
+  'mediaAssetVersionId',
+  'mediaAssetId',
+  'mediaFileSha256',
+  'mediaAssetKind',
+]
+
+/**
+ * Field-by-field structural comparison of two storyboards — NEVER a
+ * checksum comparison. A persisted row tampered AND rehashed to match
+ * itself still cannot match a storyboard rebuilt independently from
+ * current authority.
+ */
+function diffStoryboards(
+  expected: GenerationStoryboard,
+  actual: GenerationStoryboard,
+  push: (reason: string) => void,
+): void {
+  for (const field of STORYBOARD_SCALAR_FIELDS) {
+    if (expected[field] !== actual[field]) {
+      push(`storyboard_field_changed:${field}`)
+    }
+  }
+  if (expected.scenes.length !== actual.scenes.length) {
+    push('storyboard_scene_count_mismatch')
+  }
+  const sceneCount = Math.min(expected.scenes.length, actual.scenes.length)
+  for (let index = 0; index < sceneCount; index += 1) {
+    const expectedScene = expected.scenes[index]
+    const actualScene = actual.scenes[index]
+    const tag = actualScene.sceneId || `#${index}`
+    for (const field of STORYBOARD_SCENE_SCALAR_FIELDS) {
+      if (expectedScene[field] !== actualScene[field]) {
+        push(`scene_field_changed:${tag}:${field}`)
+      }
+    }
+    // Composite fields (generation intent incl. externalAiPolicy /
+    // textContextAllowed / Visual Bible refs, and the audio
+    // requirement) compared as whole structural values.
+    if (
+      JSON.stringify(expectedScene.generationIntent) !==
+      JSON.stringify(actualScene.generationIntent)
+    ) {
+      push(`scene_generation_intent_changed:${tag}`)
+    }
+    if (
+      JSON.stringify(expectedScene.audio) !== JSON.stringify(actualScene.audio)
+    ) {
+      push(`scene_audio_changed:${tag}`)
+    }
+    if (
+      JSON.stringify(expectedScene.bibleRuleRefs) !==
+      JSON.stringify(actualScene.bibleRuleRefs)
+    ) {
+      push(`scene_bible_refs_changed:${tag}`)
+    }
+  }
+}
+
+/** Every scalar field a persisted manifest commits to. */
+const MANIFEST_SCALAR_FIELDS: ReadonlyArray<keyof GenerationManifest> = [
+  'schemaVersion',
+  'generationJobId',
+  'storyboardSnapshotId',
+  'storyboardSnapshotNumber',
+  'storyboardSha256',
+  'totalDurationMs',
+]
+
+/** Field-by-field structural comparison of two manifests — same
+ * rehash-resistant discipline as diffStoryboards. Covers task
+ * kind/duration/idempotency key, approved media and audio requirements
+ * as whole structural values (each array entry is fully self-describing). */
+function diffManifests(
+  expected: GenerationManifest,
+  actual: GenerationManifest,
+  push: (reason: string) => void,
+): void {
+  for (const field of MANIFEST_SCALAR_FIELDS) {
+    if (expected[field] !== actual[field]) {
+      push(`manifest_field_changed:${field}`)
+    }
+  }
+
+  if (expected.visualTasks.length !== actual.visualTasks.length) {
+    push('manifest_visual_task_count')
+  }
+  const taskCount = Math.min(
+    expected.visualTasks.length,
+    actual.visualTasks.length,
+  )
+  for (let index = 0; index < taskCount; index += 1) {
+    if (
+      JSON.stringify(expected.visualTasks[index]) !==
+      JSON.stringify(actual.visualTasks[index])
+    ) {
+      push(`manifest_visual_task_changed:${actual.visualTasks[index].taskId}`)
+    }
+  }
+
+  if (expected.approvedMedia.length !== actual.approvedMedia.length) {
+    push('manifest_approved_media_count')
+  }
+  const mediaCount = Math.min(
+    expected.approvedMedia.length,
+    actual.approvedMedia.length,
+  )
+  for (let index = 0; index < mediaCount; index += 1) {
+    if (
+      JSON.stringify(expected.approvedMedia[index]) !==
+      JSON.stringify(actual.approvedMedia[index])
+    ) {
+      push(
+        `manifest_approved_media_changed:${actual.approvedMedia[index].sceneId}`,
+      )
+    }
+  }
+
+  if (expected.audioRequirements.length !== actual.audioRequirements.length) {
+    push('manifest_audio_requirement_count')
+  }
+  const audioCount = Math.min(
+    expected.audioRequirements.length,
+    actual.audioRequirements.length,
+  )
+  for (let index = 0; index < audioCount; index += 1) {
+    if (
+      JSON.stringify(expected.audioRequirements[index]) !==
+      JSON.stringify(actual.audioRequirements[index])
+    ) {
+      push(
+        `manifest_audio_requirement_changed:${actual.audioRequirements[index].sceneId}`,
+      )
+    }
+  }
+}
+
 /**
  * Full current-authority validation of a persisted manifest. Step 14
  * MUST call this again immediately before ANY provider call — nothing
  * is ever silently rebuilt or healed.
+ *
+ * Rehash-resistant by construction: this NEVER trusts a persisted
+ * checksum as proof of validity — a tampered row with every checksum
+ * recomputed to match ITSELF is still tampered. Instead it rebuilds the
+ * deterministic EXPECTED storyboard from the CURRENT recipe + Visual
+ * Bible authority (the exact same authority
+ * buildValidatedGenerationStoryboard uses for a fresh build) and the
+ * EXPECTED manifest from that storyboard under the PERSISTED
+ * storyboard's own snapshot identity, then proves the persisted rows
+ * match the rebuilt ones FIELD BY FIELD.
  */
 export async function loadAndValidateGenerationManifest(
   jobId: number,
@@ -1009,7 +1247,7 @@ export async function loadAndValidateGenerationManifest(
   const storyboard = loadedStoryboard.storyboard
   const manifest = loadedManifest.manifest
 
-  // manifest ↔ storyboard binding
+  // Cheap identity binding between the two persisted rows themselves.
   if (
     loadedManifest.storyboardSnapshotId !== loadedStoryboard.snapshotId ||
     manifest.storyboardSha256 !== storyboard.storyboardSha256 ||
@@ -1018,7 +1256,6 @@ export async function loadAndValidateGenerationManifest(
     push('manifest_storyboard_binding')
   }
 
-  // job frozen-context binding
   const job = (
     await getDb()
       .select()
@@ -1028,148 +1265,41 @@ export async function loadAndValidateGenerationManifest(
   ).at(0)
   if (!job) {
     push('job_missing')
-  } else if (
-    storyboard.serviceId !== job.serviceIdSnapshot ||
-    storyboard.sacredHouseId !== job.sacredHouseIdSnapshot ||
-    storyboard.language !== job.languageSnapshot ||
-    storyboard.variationSeed !== job.variationSeed
-  ) {
-    push('job_context_binding')
+    return { status: 'INVALID', reasons }
   }
 
-  // storyboard ↔ recipe snapshot binding + CURRENT recipe authority
-  const recipeNow = await loadAndValidateGenerationRecipe(jobId)
-  if (recipeNow.status === 'NOT_PREPARED') push('recipe_not_prepared')
-  else if (recipeNow.status === 'INTEGRITY_FAILURE') {
-    push('recipe_integrity_failure')
-  } else if (recipeNow.status === 'INVALID') {
-    push('recipe_invalid')
-  } else {
-    if (recipeNow.snapshotId !== loadedStoryboard.recipeSnapshotId) {
-      push('recipe_snapshot_changed')
+  // Rebuild EXPECTED from CURRENT authority only — never from the
+  // persisted rows under test. This alone re-runs every Step 12/13
+  // governance rule (frozen job binding, NO_EXTERNAL_AI, the incoherent
+  // visual-source check, Visual Bible currency, scene ceiling, …).
+  const expectedBuild = await buildValidatedGenerationStoryboard(jobId)
+  if (expectedBuild.status !== 'OK') {
+    // Preserve the pre-existing Step 13 contract: a recipe-authority
+    // failure (RECIPE_NOT_VALID / RECIPE_NOT_PREPARED /
+    // RECIPE_INTEGRITY_FAILURE) must surface a reason prefixed
+    // `recipe_`. No extra prefix here — just the lowercased status.
+    push(expectedBuild.status.toLowerCase())
+    if ('reasons' in expectedBuild) {
+      for (const reason of expectedBuild.reasons) push(reason)
+    } else if ('sceneCount' in expectedBuild) {
+      push(`expected_scene_ceiling:${expectedBuild.sceneCount}`)
     }
-    if (recipeNow.recipe.recipeSha256 !== storyboard.recipeSha256) {
-      push('recipe_hash_changed')
-    }
-    // Media ids/hashes must still correspond to the recipe.
-    const recipeVisuals = new Map(
-      recipeNow.recipe.segments
-        .filter((segment) => segment.visual != null)
-        .map((segment) => [
-          segment.segmentIndex,
-          segment.visual!.mediaAssetVersionId +
-            ':' +
-            segment.visual!.fileSha256,
-        ]),
-    )
-    for (const scene of storyboard.scenes) {
-      if (scene.sourceMode !== 'APPROVED_MEDIA') continue
-      const expected = recipeVisuals.get(scene.recipeSegmentIndex)
-      if (
-        expected == null ||
-        expected !== `${scene.mediaAssetVersionId}:${scene.mediaFileSha256}`
-      ) {
-        push(`media_binding:${scene.sceneId}`)
-      }
-    }
-    // No illegal generated scene under NO_EXTERNAL_AI.
-    const policyBySegment = new Map(
-      recipeNow.recipe.segments.map((segment) => [
-        segment.segmentIndex,
-        segment.externalAiPolicy,
-      ]),
-    )
-    for (const scene of storyboard.scenes) {
-      if (scene.sourceMode !== 'GENERATION_REQUIRED') continue
-      if (policyBySegment.get(scene.recipeSegmentIndex) === 'NO_EXTERNAL_AI') {
-        push(`generation_under_no_external_ai:${scene.sceneId}`)
-      }
-    }
+    return { status: 'INVALID', reasons }
   }
 
-  // Scene order / timeline / duration integrity.
-  let cursor = 0
-  let expectedOrder = 0
-  for (const scene of storyboard.scenes) {
-    if (scene.order !== expectedOrder) push(`scene_order:${scene.sceneId}`)
-    expectedOrder += 1
-    if (scene.startMs !== cursor) push(`scene_start:${scene.sceneId}`)
-    if (scene.endMs - scene.startMs !== scene.durationMs) {
-      push(`scene_duration:${scene.sceneId}`)
-    }
-    cursor = scene.endMs
-    if (scene.sourceMode === 'GENERATION_REQUIRED') {
-      if (!scene.generationIntent) push(`missing_intent:${scene.sceneId}`)
-      else if (
-        storyboard.visualBibleSha256 == null ||
-        scene.generationIntent.visualBibleSha256 !==
-          storyboard.visualBibleSha256 ||
-        scene.generationIntent.visualBibleVersionId !==
-          storyboard.visualBibleVersionId
-      ) {
-        push(`intent_bible_binding:${scene.sceneId}`)
-      }
-    }
-  }
-  if (cursor !== storyboard.totalDurationMs) push('total_duration')
-  if (storyboard.sceneCount !== storyboard.scenes.length) push('scene_count')
-  if (storyboard.scenes.length > MAX_SCENES) push('scene_ceiling')
+  // (a) Persisted storyboard vs. the freshly rebuilt expected one.
+  diffStoryboards(expectedBuild.storyboard, storyboard, push)
 
-  // Visual Bible must STILL verify when generated scenes exist.
-  if (storyboard.scenes.some((scene) => scene.generationIntent != null)) {
-    const bibleNow = await loadPublishedVisualBible(storyboard.sacredHouseId)
-    if (bibleNow.status !== 'OK') {
-      push(`visual_bible_${bibleNow.status.toLowerCase()}`)
-    } else if (
-      bibleNow.versionId !== storyboard.visualBibleVersionId ||
-      bibleNow.definitionSha256 !== storyboard.visualBibleSha256
-    ) {
-      push('visual_bible_changed')
-    }
-  }
-
-  // Deterministic task ids / idempotency keys + task↔scene coherence.
-  const generatedScenes = storyboard.scenes.filter(
-    (scene) => scene.sourceMode === 'GENERATION_REQUIRED',
+  // (b) Persisted manifest vs. the expected manifest rebuilt from that
+  // same expected storyboard, under the PERSISTED storyboard's own
+  // snapshot id/number (the manifest must reference the row that was
+  // actually saved).
+  const expectedManifest = buildManifest(
+    expectedBuild.storyboard,
+    loadedStoryboard.snapshotId,
+    loadedStoryboard.snapshotNumber,
   )
-  if (manifest.visualTasks.length !== generatedScenes.length) {
-    push('visual_task_count')
-  }
-  for (const task of manifest.visualTasks) {
-    const scene = storyboard.scenes.find(
-      (candidate) => candidate.sceneId === task.sceneId,
-    )
-    if (!scene || scene.sourceMode !== 'GENERATION_REQUIRED') {
-      push(`task_scene_binding:${task.taskId}`)
-      continue
-    }
-    if (task.taskId !== `task-${scene.sceneId}`) push(`task_id:${task.taskId}`)
-    if (task.durationMs !== scene.durationMs)
-      push(`task_duration:${task.taskId}`)
-    // Loaded JSON is UNTRUSTED — read the raw value rather than
-    // trusting the declared literal type.
-    if (
-      (task as { requiresAuthorityRevalidation?: unknown })
-        .requiresAuthorityRevalidation !== true
-    ) {
-      push(`task_revalidation_flag:${task.taskId}`)
-    }
-    const expectedKey = computeVisualTaskIdempotencyKey({
-      generationJobId: storyboard.generationJobId,
-      storyboardSha256: storyboard.storyboardSha256,
-      sceneId: scene.sceneId,
-    })
-    if (task.idempotencyKey !== expectedKey) {
-      push(`task_idempotency:${task.taskId}`)
-    }
-  }
-  // Approved media scenes must create NO paid-generation task.
-  for (const scene of storyboard.scenes) {
-    if (scene.sourceMode !== 'APPROVED_MEDIA') continue
-    if (manifest.visualTasks.some((task) => task.sceneId === scene.sceneId)) {
-      push(`unexpected_task:${scene.sceneId}`)
-    }
-  }
+  diffManifests(expectedManifest, manifest, push)
 
   return reasons.length === 0
     ? { status: 'VALID', storyboard, manifest }
@@ -1217,7 +1347,12 @@ export async function runStoryboardPlanningOnce(
 ): Promise<StoryboardPlanningOutcome> {
   const buildStoryboard =
     dependencies.buildStoryboard ?? buildValidatedGenerationStoryboard
-  const claimed = await claimNextStoryboardJob(workerId, clock.now())
+  // Assumed seam with Bravo's Step 13 clock-injection change: the
+  // second positional parameter becomes the GenerationClock itself
+  // (mirroring renewGenerationLease/transitionGenerationJobUnderLease,
+  // which already take `clock`, not `clock.now()`), replacing the bare
+  // `now: Date` in the same position.
+  const claimed = await claimNextStoryboardJob(workerId, clock)
   if (!claimed) return { status: 'IDLE' }
   const { job, leaseToken } = claimed
   const attempt = job.attemptCount + 1

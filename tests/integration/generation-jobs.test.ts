@@ -98,6 +98,7 @@ import {
   recoverExpiredGenerationLeases,
   renewGenerationLease,
   runGenerationPreparationOnce,
+  systemGenerationClock,
   transitionGenerationJobUnderLease,
 } from '@/services/generation-jobs'
 import { buildValidatedVideoRecipe } from '@/services/video-recipes'
@@ -740,7 +741,7 @@ describe('atomic confirmation enqueue', () => {
       })
     const legacyId = inserted[0].insertId
     // Nothing spontaneously creates a job for it.
-    await recoverExpiredGenerationLeases(new Date())
+    await recoverExpiredGenerationLeases(systemGenerationClock)
     expect(await jobForAppointment(legacyId)).toBeUndefined()
   })
 })
@@ -752,10 +753,11 @@ describe('queue, lease and state machine', () => {
     const job = (await jobForAppointment(appointmentId))!
     await quiesceOtherJobs(job.id)
     const t0 = new Date()
+    const clockAtT0 = { now: () => t0 }
 
     const [claimA, claimB] = await Promise.all([
-      claimNextGenerationJob('worker-A', t0),
-      claimNextGenerationJob('worker-B', t0),
+      claimNextGenerationJob('worker-A', clockAtT0),
+      claimNextGenerationJob('worker-B', clockAtT0),
     ])
     const claims = [claimA, claimB].filter(
       (claim) => claim != null && claim.job.id === job.id,
@@ -812,7 +814,9 @@ describe('queue, lease and state machine', () => {
     // Lease expiry: recovery returns the job to RETRYING and the old
     // token becomes powerless.
     const t1 = new Date(t0.getTime() + 10 * 60_000)
-    expect(await recoverExpiredGenerationLeases(t1)).toBeGreaterThanOrEqual(1)
+    expect(
+      await recoverExpiredGenerationLeases({ now: () => t1 }),
+    ).toBeGreaterThanOrEqual(1)
     const recovered = (await jobForAppointment(appointmentId))!
     expect(recovered.status).toBe('RETRYING')
     expect(recovered.resumeStatus).toBe('PREPARING')
@@ -1200,7 +1204,7 @@ describe('lease hardening', () => {
 
     // Recovery counts the crashed attempt against the budget.
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
     const recovered = (await jobForAppointment(appointmentId))!
     expect(recovered.status).toBe('RETRYING')
@@ -1244,7 +1248,7 @@ describe('lease hardening', () => {
     const clock = makeFakeClock(Date.now())
 
     // Worker A claims and moves to PREPARING…
-    const claimed = await claimNextGenerationJob('worker-A', clock.now())
+    const claimed = await claimNextGenerationJob('worker-A', clock)
     expect(claimed?.job.id).toBe(job.id)
     const leaseToken = claimed!.leaseToken
     expect(
@@ -1267,7 +1271,7 @@ describe('lease hardening', () => {
     // …but its lease expires and is recovered before finalization.
     clock.advance(DEFAULT_LEASE_MS + 60_000)
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
 
     // The stale worker's atomic finalize must insert NOTHING.
@@ -1297,7 +1301,7 @@ describe('lease hardening', () => {
     const clock = makeFakeClock(Date.now())
 
     // Crash 1: claim → PREPARING → lease lapses → RETRYING, attempt 1.
-    const claim1 = await claimNextGenerationJob('crash-1', clock.now())
+    const claim1 = await claimNextGenerationJob('crash-1', clock)
     expect(claim1?.job.id).toBe(job.id)
     expect(
       await transitionGenerationJobUnderLease(
@@ -1310,7 +1314,7 @@ describe('lease hardening', () => {
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
     let row = (await jobForAppointment(appointmentId))!
     expect(row.status).toBe('RETRYING')
@@ -1318,7 +1322,7 @@ describe('lease hardening', () => {
 
     // Crash 2: due again → PREPARING → lease lapses → FAILED, attempt 2.
     clock.advance(2 * 60_000)
-    const claim2 = await claimNextGenerationJob('crash-2', clock.now())
+    const claim2 = await claimNextGenerationJob('crash-2', clock)
     expect(claim2?.job.id).toBe(job.id)
     expect(
       await transitionGenerationJobUnderLease(
@@ -1331,7 +1335,7 @@ describe('lease hardening', () => {
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
     expect(
-      await recoverExpiredGenerationLeases(clock.now()),
+      await recoverExpiredGenerationLeases(clock),
     ).toBeGreaterThanOrEqual(1)
     row = (await jobForAppointment(appointmentId))!
     expect(row.status).toBe('FAILED')
@@ -1345,7 +1349,7 @@ describe('lease hardening', () => {
       events.some((event) => event.eventCode === 'lease_expired_max_attempts'),
     ).toBe(true)
     // No infinite loop: nothing left to recover for this job.
-    expect(await recoverExpiredGenerationLeases(clock.now())).toBe(0)
+    expect(await recoverExpiredGenerationLeases(clock)).toBe(0)
 
     // FAILED → CANCELLED is an EXPLICIT legal edge (central map).
     expect(isLegalTransition('FAILED', 'CANCELLED')).toBe(true)
