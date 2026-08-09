@@ -1340,7 +1340,9 @@ export async function runStoryboardPlanningOnce(
 ): Promise<StoryboardPlanningOutcome> {
   const buildStoryboard =
     dependencies.buildStoryboard ?? buildValidatedGenerationStoryboard
-  const claimed = await claimNextStoryboardJob(workerId, clock.now())
+  // The claim receives the CLOCK, not a reading: the granted lease
+  // window must derive from the claim's own post-lock time.
+  const claimed = await claimNextStoryboardJob(workerId, clock)
   if (!claimed) return { status: 'IDLE' }
   const { job, leaseToken } = claimed
   const attempt = job.attemptCount + 1

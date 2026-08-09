@@ -1322,21 +1322,40 @@ describe('the builder fails closed on impossible recipes', () => {
     expect((await manifestRows(jobId)).length).toBe(0)
   }, 300_000)
 
-  it('a segment whose declared visual mode has no source is GOVERNANCE_IMPOSSIBLE', async () => {
+  it('a segment claiming BOTH an approved visual and a generation descriptor is GOVERNANCE_IMPOSSIBLE', async () => {
     const serviceId = nextService()
-    const themeA = `H13_INCOA_${RUN_KEY}`
-    const themeB = `H13_INCOB_${RUN_KEY}`
-    for (const theme of [themeA, themeB]) {
-      await makeEligibleSacred({ themeCode: theme, durationHintSeconds: 20 })
-      await makeEligibleMedia({
-        assetKind: 'IMAGE',
-        contentType: 'PRAYER',
-        themeCode: theme,
-      })
-    }
+    const visualTheme = `H13_INCOA_${RUN_KEY}`
+    const generationTheme = `H13_INCOB_${RUN_KEY}`
+    // Slot 1 resolves to an APPROVED library visual. Slot 2 is a CHANT
+    // for which no library visual exists, so Step 11 emits a future
+    // GENERATION descriptor instead.
+    await makeEligibleSacred({
+      themeCode: visualTheme,
+      durationHintSeconds: 20,
+    })
+    await makeEligibleMedia({
+      assetKind: 'IMAGE',
+      contentType: 'PRAYER',
+      themeCode: visualTheme,
+    })
+    await makeEligibleSacred({
+      themeCode: generationTheme,
+      contentType: 'CHANT',
+      externalAiPolicy: 'METADATA_ONLY',
+      durationHintSeconds: 20,
+    })
     await makeServiceTemplate(serviceId, [
-      filterSlot({ slotKey: 'MAIN_PRAYER', position: 1, themeCode: themeA }),
-      filterSlot({ slotKey: 'CLOSING_PRAYER', position: 2, themeCode: themeB }),
+      filterSlot({
+        slotKey: 'MAIN_PRAYER',
+        position: 1,
+        themeCode: visualTheme,
+      }),
+      filterSlot({
+        slotKey: 'CLOSING_PRAYER',
+        position: 2,
+        themeCode: generationTheme,
+        contentType: 'CHANT',
+      }),
     ])
     const { jobId } = await makeStoryboardReadyJob(serviceId)
 
@@ -1344,9 +1363,20 @@ describe('the builder fails closed on impossible recipes', () => {
       // Two CONTENT segments: only the SECOND is corrupted, so the
       // leading-scene rule cannot mask this reason.
       expect(recipe.segments.length).toBeGreaterThanOrEqual(2)
-      const segment = recipe.segments[1]
-      segment.visualMode = 'LIBRARY_MEDIA'
-      segment.visual = null
+      const approved = recipe.segments.find((s) => s.visual != null)
+      const generated = recipe.segments.find((s) => s.generation != null)
+      if (!approved?.visual || !generated) {
+        throw new Error('expected an approved visual AND a generation segment')
+      }
+      // ONE segment now claims BOTH an already-approved visual source
+      // AND a future paid generation task. No coherent source can be
+      // chosen for it, and nothing may be invented to break the tie.
+      generated.visual = approved.visual
+      // This combination only survives CURRENT Step 11/12 authority when
+      // the segment carries no content identity — an identified segment
+      // is refused earlier as generation_mode_inconsistent.
+      generated.contentVersionId = null
+      generated.contentSha256 = null
     })
     expect((await loadAndValidateGenerationRecipe(jobId)).status).toBe('VALID')
 
