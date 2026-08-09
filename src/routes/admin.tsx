@@ -104,6 +104,22 @@ function AdminLayout() {
                 Prayer Templates
               </Link>
             ) : null}
+            {admin.permissions.includes('media.view') ? (
+              <Link
+                to="/admin/media-assets"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Media
+              </Link>
+            ) : null}
+            {admin.permissions.includes('media.view') ? (
+              <Link
+                to="/admin/visual-bibles"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Visual Bibles
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}

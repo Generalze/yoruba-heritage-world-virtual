@@ -35,3 +35,7 @@ Thumbs.db
 
 # --- Local database data (if ever mounted locally) ---
 db-data/
+
+# --- Private media storage (Step 10) ---
+# Uploaded media binaries are NEVER committed.
+var/media/

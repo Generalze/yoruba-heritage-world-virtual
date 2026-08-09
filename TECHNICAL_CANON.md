@@ -492,6 +492,47 @@ Validated resolved session plan (ordered slots + exact content versions + hashes
   future orchestration may only operate inside these approved
   boundaries.
 
+## 10.3 Amendment — Approved Media Asset Library & Visual Bibles (Phase One, Step 10)
+
+The approved media authority layer the future autonomous recipe engine
+consumes:
+
+```text
+Approved Media (rights + consent + integrity gates)
++
+Approved Visual Bible (hashed, human-authored visual canon per House)
+→ runtime-eligible media pool
+→ Step 11 recipe engine
+```
+
+- Media assets (AUDIO/IMAGE/VIDEO) follow the shared human workflow
+  (DRAFT → UNDER_REVIEW → APPROVED → PUBLISHED → ARCHIVED); binaries
+  live in PRIVATE storage behind a `MediaStorageProvider` abstraction
+  (local adapter now, S3-compatible later) with server-generated keys
+  and a server-computed SHA-256 of the exact stored bytes.
+- Runtime eligibility is COMPUTED per call from independent gates:
+  asset active + version PUBLISHED + rights CLEARED + runtime enabled
+  + storage object present + byte-hash match + supported type +
+  (identifiable person ⇒ consent GRANTED). Hash mismatch or a missing
+  object fails closed and is never auto-healed; rights or consent
+  withdrawal removes future eligibility immediately. No
+  per-appointment media approval exists.
+- Human-recorded sacred audio remains PREFERRED: exact links attach a
+  PUBLISHED sacred content version to a PUBLISHED media version
+  (PRIMARY_AUDIO / ALTERNATE_AUDIO / VISUAL_REFERENCE), and the Step 8
+  voice policy governs use — HUMAN_RECORDED_REQUIRED accepts only
+  eligible linked HUMAN_RECORDED audio; TEXT_ONLY needs none. No TTS
+  exists yet.
+- Real-person voice cloning or likeness generation is NEVER implied by
+  rights clearance, publication, ordinary consent or
+  DERIVATIVE_GENERATION_ALLOWED; `voice_clone_authorized` defaults
+  false and requires explicit documented permission.
+- Each Sacred House has ONE canonical versioned Visual Bible of
+  human-authored ordered rules (environment, symbols, prohibitions,
+  negative-prompt guidance, …); published versions carry a
+  deterministic definition SHA-256 that the runtime loader re-verifies,
+  failing closed on corruption.
+
 ---
 
 # 11. Visual Canon Database

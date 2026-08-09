@@ -36,6 +36,8 @@ import { Route as AdminAppointmentsIndexRouteImport } from './routes/admin.appoi
 import { Route as AdminAppointmentsIdRouteImport } from './routes/admin.appointments.$id'
 import { Route as AdminCatalogueIndexRouteImport } from './routes/admin.catalogue.index'
 import { Route as AdminCatalogueReviewRouteImport } from './routes/admin.catalogue.review'
+import { Route as AdminMediaAssetsIndexRouteImport } from './routes/admin.media-assets.index'
+import { Route as AdminMediaAssetsIdRouteImport } from './routes/admin.media-assets.$id'
 import { Route as AdminPaymentsIndexRouteImport } from './routes/admin.payments.index'
 import { Route as AdminPaymentsIdRouteImport } from './routes/admin.payments.$id'
 import { Route as AdminPrayerTemplatesIndexRouteImport } from './routes/admin.prayer-templates.index'
@@ -53,6 +55,8 @@ import { Route as AdminSpiritualContentIndexRouteImport } from './routes/admin.s
 import { Route as AdminSpiritualContentIdRouteImport } from './routes/admin.spiritual-content.$id'
 import { Route as AdminSpiritualContentNewRouteImport } from './routes/admin.spiritual-content.new'
 import { Route as AdminSpiritualContentReviewRouteImport } from './routes/admin.spiritual-content.review'
+import { Route as AdminVisualBiblesIndexRouteImport } from './routes/admin.visual-bibles.index'
+import { Route as AdminVisualBiblesIdRouteImport } from './routes/admin.visual-bibles.$id'
 import { Route as ApiWebhooksProviderRouteImport } from './routes/api.webhooks.$provider'
 import { Route as PaymentsReceiptAttemptPublicIdRouteImport } from './routes/payments.receipt.$attemptPublicId'
 import { Route as PaymentsReturnProviderRouteImport } from './routes/payments.return.$provider'
@@ -202,6 +206,16 @@ const AdminCatalogueReviewRoute = AdminCatalogueReviewRouteImport.update({
   path: '/catalogue/review',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminMediaAssetsIndexRoute = AdminMediaAssetsIndexRouteImport.update({
+  id: '/media-assets/',
+  path: '/media-assets/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminMediaAssetsIdRoute = AdminMediaAssetsIdRouteImport.update({
+  id: '/media-assets/$id',
+  path: '/media-assets/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminPaymentsIndexRoute = AdminPaymentsIndexRouteImport.update({
   id: '/payments/',
   path: '/payments/',
@@ -294,6 +308,16 @@ const AdminSpiritualContentReviewRoute =
     path: '/spiritual-content/review',
     getParentRoute: () => AdminRoute,
   } as any)
+const AdminVisualBiblesIndexRoute = AdminVisualBiblesIndexRouteImport.update({
+  id: '/visual-bibles/',
+  path: '/visual-bibles/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminVisualBiblesIdRoute = AdminVisualBiblesIdRouteImport.update({
+  id: '/visual-bibles/$id',
+  path: '/visual-bibles/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
 const ApiWebhooksProviderRoute = ApiWebhooksProviderRouteImport.update({
   id: '/api/webhooks/$provider',
   path: '/api/webhooks/$provider',
@@ -390,6 +414,7 @@ export interface FileRoutesByFullPath {
   '/services/': typeof ServicesIndexRoute
   '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/media-assets/$id': typeof AdminMediaAssetsIdRoute
   '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/prayer-templates/$id': typeof AdminPrayerTemplatesIdRoute
   '/admin/prayer-templates/new': typeof AdminPrayerTemplatesNewRoute
@@ -402,16 +427,19 @@ export interface FileRoutesByFullPath {
   '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
   '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
   '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
+  '/admin/visual-bibles/$id': typeof AdminVisualBiblesIdRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
   '/payments/return/$provider': typeof PaymentsReturnProviderRoute
   '/admin/appointments/': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/media-assets/': typeof AdminMediaAssetsIndexRoute
   '/admin/payments/': typeof AdminPaymentsIndexRoute
   '/admin/prayer-templates/': typeof AdminPrayerTemplatesIndexRoute
   '/admin/sacred-content/': typeof AdminSacredContentIndexRoute
   '/admin/scheduling/': typeof AdminSchedulingIndexRoute
   '/admin/spiritual-content/': typeof AdminSpiritualContentIndexRoute
+  '/admin/visual-bibles/': typeof AdminVisualBiblesIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -447,6 +475,7 @@ export interface FileRoutesByTo {
   '/services': typeof ServicesIndexRoute
   '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/media-assets/$id': typeof AdminMediaAssetsIdRoute
   '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/prayer-templates/$id': typeof AdminPrayerTemplatesIdRoute
   '/admin/prayer-templates/new': typeof AdminPrayerTemplatesNewRoute
@@ -459,16 +488,19 @@ export interface FileRoutesByTo {
   '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
   '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
   '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
+  '/admin/visual-bibles/$id': typeof AdminVisualBiblesIdRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
   '/payments/return/$provider': typeof PaymentsReturnProviderRoute
   '/admin/appointments': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue': typeof AdminCatalogueIndexRoute
+  '/admin/media-assets': typeof AdminMediaAssetsIndexRoute
   '/admin/payments': typeof AdminPaymentsIndexRoute
   '/admin/prayer-templates': typeof AdminPrayerTemplatesIndexRoute
   '/admin/sacred-content': typeof AdminSacredContentIndexRoute
   '/admin/scheduling': typeof AdminSchedulingIndexRoute
   '/admin/spiritual-content': typeof AdminSpiritualContentIndexRoute
+  '/admin/visual-bibles': typeof AdminVisualBiblesIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -506,6 +538,7 @@ export interface FileRoutesById {
   '/services/': typeof ServicesIndexRoute
   '/admin/appointments/$id': typeof AdminAppointmentsIdRoute
   '/admin/catalogue/review': typeof AdminCatalogueReviewRoute
+  '/admin/media-assets/$id': typeof AdminMediaAssetsIdRoute
   '/admin/payments/$id': typeof AdminPaymentsIdRoute
   '/admin/prayer-templates/$id': typeof AdminPrayerTemplatesIdRoute
   '/admin/prayer-templates/new': typeof AdminPrayerTemplatesNewRoute
@@ -518,16 +551,19 @@ export interface FileRoutesById {
   '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
   '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
   '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
+  '/admin/visual-bibles/$id': typeof AdminVisualBiblesIdRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
   '/payments/return/$provider': typeof PaymentsReturnProviderRoute
   '/admin/appointments/': typeof AdminAppointmentsIndexRoute
   '/admin/catalogue/': typeof AdminCatalogueIndexRoute
+  '/admin/media-assets/': typeof AdminMediaAssetsIndexRoute
   '/admin/payments/': typeof AdminPaymentsIndexRoute
   '/admin/prayer-templates/': typeof AdminPrayerTemplatesIndexRoute
   '/admin/sacred-content/': typeof AdminSacredContentIndexRoute
   '/admin/scheduling/': typeof AdminSchedulingIndexRoute
   '/admin/spiritual-content/': typeof AdminSpiritualContentIndexRoute
+  '/admin/visual-bibles/': typeof AdminVisualBiblesIndexRoute
   '/admin/catalogue/deities/$id': typeof AdminCatalogueDeitiesIdRoute
   '/admin/catalogue/deities/new': typeof AdminCatalogueDeitiesNewRoute
   '/admin/catalogue/sacred-houses/$id': typeof AdminCatalogueSacredHousesIdRoute
@@ -566,6 +602,7 @@ export interface FileRouteTypes {
     | '/services/'
     | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/media-assets/$id'
     | '/admin/payments/$id'
     | '/admin/prayer-templates/$id'
     | '/admin/prayer-templates/new'
@@ -578,16 +615,19 @@ export interface FileRouteTypes {
     | '/admin/spiritual-content/$id'
     | '/admin/spiritual-content/new'
     | '/admin/spiritual-content/review'
+    | '/admin/visual-bibles/$id'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
     | '/payments/return/$provider'
     | '/admin/appointments/'
     | '/admin/catalogue/'
+    | '/admin/media-assets/'
     | '/admin/payments/'
     | '/admin/prayer-templates/'
     | '/admin/sacred-content/'
     | '/admin/scheduling/'
     | '/admin/spiritual-content/'
+    | '/admin/visual-bibles/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -623,6 +663,7 @@ export interface FileRouteTypes {
     | '/services'
     | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/media-assets/$id'
     | '/admin/payments/$id'
     | '/admin/prayer-templates/$id'
     | '/admin/prayer-templates/new'
@@ -635,16 +676,19 @@ export interface FileRouteTypes {
     | '/admin/spiritual-content/$id'
     | '/admin/spiritual-content/new'
     | '/admin/spiritual-content/review'
+    | '/admin/visual-bibles/$id'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
     | '/payments/return/$provider'
     | '/admin/appointments'
     | '/admin/catalogue'
+    | '/admin/media-assets'
     | '/admin/payments'
     | '/admin/prayer-templates'
     | '/admin/sacred-content'
     | '/admin/scheduling'
     | '/admin/spiritual-content'
+    | '/admin/visual-bibles'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -681,6 +725,7 @@ export interface FileRouteTypes {
     | '/services/'
     | '/admin/appointments/$id'
     | '/admin/catalogue/review'
+    | '/admin/media-assets/$id'
     | '/admin/payments/$id'
     | '/admin/prayer-templates/$id'
     | '/admin/prayer-templates/new'
@@ -693,16 +738,19 @@ export interface FileRouteTypes {
     | '/admin/spiritual-content/$id'
     | '/admin/spiritual-content/new'
     | '/admin/spiritual-content/review'
+    | '/admin/visual-bibles/$id'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
     | '/payments/return/$provider'
     | '/admin/appointments/'
     | '/admin/catalogue/'
+    | '/admin/media-assets/'
     | '/admin/payments/'
     | '/admin/prayer-templates/'
     | '/admin/sacred-content/'
     | '/admin/scheduling/'
     | '/admin/spiritual-content/'
+    | '/admin/visual-bibles/'
     | '/admin/catalogue/deities/$id'
     | '/admin/catalogue/deities/new'
     | '/admin/catalogue/sacred-houses/$id'
@@ -933,6 +981,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCatalogueReviewRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/media-assets/': {
+      id: '/admin/media-assets/'
+      path: '/media-assets'
+      fullPath: '/admin/media-assets/'
+      preLoaderRoute: typeof AdminMediaAssetsIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/media-assets/$id': {
+      id: '/admin/media-assets/$id'
+      path: '/media-assets/$id'
+      fullPath: '/admin/media-assets/$id'
+      preLoaderRoute: typeof AdminMediaAssetsIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/payments/': {
       id: '/admin/payments/'
       path: '/payments'
@@ -1052,6 +1114,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSpiritualContentReviewRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/visual-bibles/': {
+      id: '/admin/visual-bibles/'
+      path: '/visual-bibles'
+      fullPath: '/admin/visual-bibles/'
+      preLoaderRoute: typeof AdminVisualBiblesIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/visual-bibles/$id': {
+      id: '/admin/visual-bibles/$id'
+      path: '/visual-bibles/$id'
+      fullPath: '/admin/visual-bibles/$id'
+      preLoaderRoute: typeof AdminVisualBiblesIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/api/webhooks/$provider': {
       id: '/api/webhooks/$provider'
       path: '/api/webhooks/$provider'
@@ -1143,6 +1219,7 @@ interface AdminRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
   AdminAppointmentsIdRoute: typeof AdminAppointmentsIdRoute
   AdminCatalogueReviewRoute: typeof AdminCatalogueReviewRoute
+  AdminMediaAssetsIdRoute: typeof AdminMediaAssetsIdRoute
   AdminPaymentsIdRoute: typeof AdminPaymentsIdRoute
   AdminPrayerTemplatesIdRoute: typeof AdminPrayerTemplatesIdRoute
   AdminPrayerTemplatesNewRoute: typeof AdminPrayerTemplatesNewRoute
@@ -1155,13 +1232,16 @@ interface AdminRouteChildren {
   AdminSpiritualContentIdRoute: typeof AdminSpiritualContentIdRoute
   AdminSpiritualContentNewRoute: typeof AdminSpiritualContentNewRoute
   AdminSpiritualContentReviewRoute: typeof AdminSpiritualContentReviewRoute
+  AdminVisualBiblesIdRoute: typeof AdminVisualBiblesIdRoute
   AdminAppointmentsIndexRoute: typeof AdminAppointmentsIndexRoute
   AdminCatalogueIndexRoute: typeof AdminCatalogueIndexRoute
+  AdminMediaAssetsIndexRoute: typeof AdminMediaAssetsIndexRoute
   AdminPaymentsIndexRoute: typeof AdminPaymentsIndexRoute
   AdminPrayerTemplatesIndexRoute: typeof AdminPrayerTemplatesIndexRoute
   AdminSacredContentIndexRoute: typeof AdminSacredContentIndexRoute
   AdminSchedulingIndexRoute: typeof AdminSchedulingIndexRoute
   AdminSpiritualContentIndexRoute: typeof AdminSpiritualContentIndexRoute
+  AdminVisualBiblesIndexRoute: typeof AdminVisualBiblesIndexRoute
   AdminCatalogueDeitiesIdRoute: typeof AdminCatalogueDeitiesIdRoute
   AdminCatalogueDeitiesNewRoute: typeof AdminCatalogueDeitiesNewRoute
   AdminCatalogueSacredHousesIdRoute: typeof AdminCatalogueSacredHousesIdRoute
@@ -1177,6 +1257,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
   AdminAppointmentsIdRoute: AdminAppointmentsIdRoute,
   AdminCatalogueReviewRoute: AdminCatalogueReviewRoute,
+  AdminMediaAssetsIdRoute: AdminMediaAssetsIdRoute,
   AdminPaymentsIdRoute: AdminPaymentsIdRoute,
   AdminPrayerTemplatesIdRoute: AdminPrayerTemplatesIdRoute,
   AdminPrayerTemplatesNewRoute: AdminPrayerTemplatesNewRoute,
@@ -1189,13 +1270,16 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminSpiritualContentIdRoute: AdminSpiritualContentIdRoute,
   AdminSpiritualContentNewRoute: AdminSpiritualContentNewRoute,
   AdminSpiritualContentReviewRoute: AdminSpiritualContentReviewRoute,
+  AdminVisualBiblesIdRoute: AdminVisualBiblesIdRoute,
   AdminAppointmentsIndexRoute: AdminAppointmentsIndexRoute,
   AdminCatalogueIndexRoute: AdminCatalogueIndexRoute,
+  AdminMediaAssetsIndexRoute: AdminMediaAssetsIndexRoute,
   AdminPaymentsIndexRoute: AdminPaymentsIndexRoute,
   AdminPrayerTemplatesIndexRoute: AdminPrayerTemplatesIndexRoute,
   AdminSacredContentIndexRoute: AdminSacredContentIndexRoute,
   AdminSchedulingIndexRoute: AdminSchedulingIndexRoute,
   AdminSpiritualContentIndexRoute: AdminSpiritualContentIndexRoute,
+  AdminVisualBiblesIndexRoute: AdminVisualBiblesIndexRoute,
   AdminCatalogueDeitiesIdRoute: AdminCatalogueDeitiesIdRoute,
   AdminCatalogueDeitiesNewRoute: AdminCatalogueDeitiesNewRoute,
   AdminCatalogueSacredHousesIdRoute: AdminCatalogueSacredHousesIdRoute,
