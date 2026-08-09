@@ -16,6 +16,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as OlodumareRouteImport } from './routes/olodumare'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as AdminVideoRecipesRouteImport } from './routes/admin.video-recipes'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as AppointmentsIndexRouteImport } from './routes/appointments.index'
 import { Route as AppointmentsPublicIdRouteImport } from './routes/appointments.$publicId'
@@ -103,6 +104,11 @@ const RegisterRoute = RegisterRouteImport.update({
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminVideoRecipesRoute = AdminVideoRecipesRouteImport.update({
+  id: '/video-recipes',
+  path: '/video-recipes',
   getParentRoute: () => AdminRoute,
 } as any)
 const ApiHealthRoute = ApiHealthRouteImport.update({
@@ -395,6 +401,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
+  '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
   '/book/$serviceSlug': typeof BookServiceSlugRoute
@@ -456,6 +463,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
+  '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
   '/book/$serviceSlug': typeof BookServiceSlugRoute
@@ -519,6 +527,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/olodumare': typeof OlodumareRoute
   '/register': typeof RegisterRoute
+  '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
   '/book/$serviceSlug': typeof BookServiceSlugRoute
@@ -583,6 +592,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/olodumare'
     | '/register'
+    | '/admin/video-recipes'
     | '/api/health'
     | '/appointments/$publicId'
     | '/book/$serviceSlug'
@@ -644,6 +654,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/olodumare'
     | '/register'
+    | '/admin/video-recipes'
     | '/api/health'
     | '/appointments/$publicId'
     | '/book/$serviceSlug'
@@ -706,6 +717,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/olodumare'
     | '/register'
+    | '/admin/video-recipes'
     | '/api/health'
     | '/appointments/$publicId'
     | '/book/$serviceSlug'
@@ -839,6 +851,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/video-recipes': {
+      id: '/admin/video-recipes'
+      path: '/video-recipes'
+      fullPath: '/admin/video-recipes'
+      preLoaderRoute: typeof AdminVideoRecipesRouteImport
       parentRoute: typeof AdminRoute
     }
     '/api/health': {
@@ -1216,6 +1235,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteChildren {
+  AdminVideoRecipesRoute: typeof AdminVideoRecipesRoute
   AdminIndexRoute: typeof AdminIndexRoute
   AdminAppointmentsIdRoute: typeof AdminAppointmentsIdRoute
   AdminCatalogueReviewRoute: typeof AdminCatalogueReviewRoute
@@ -1254,6 +1274,7 @@ interface AdminRouteChildren {
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminVideoRecipesRoute: AdminVideoRecipesRoute,
   AdminIndexRoute: AdminIndexRoute,
   AdminAppointmentsIdRoute: AdminAppointmentsIdRoute,
   AdminCatalogueReviewRoute: AdminCatalogueReviewRoute,

@@ -533,6 +533,42 @@ Approved Visual Bible (hashed, human-authored visual canon per House)
   deterministic definition SHA-256 that the runtime loader re-verifies,
   failing closed on corruption.
 
+## 10.4 Amendment — Validated Video Recipe Engine (Phase One, Step 11)
+
+```text
+Approved Session Plan (Step 9)
++ Approved Media (Step 10)
++ Verified Visual Bible
+→ Validated Deterministic Video Recipe
+→ future generation/render job (Step 12+)
+```
+
+- The recipe engine snapshots every render-significant authority:
+  context (Service → authoritatively derived House, language, seed),
+  template version + definition SHA-256, Visual Bible version + hash
+  when used, ordered segments with exact sacred content version +
+  content SHA-256, selected media version + file SHA-256, audio mode
+  (NONE / HUMAN_RECORDED / LINKED_HUMAN_AUDIO / TTS_ALLOWED_PENDING),
+  visual mode (LINKED_REFERENCE / LIBRARY_MEDIA / GENERATION_ALLOWED /
+  HOLD_PREVIOUS), external-AI and voice policies, durations, and a
+  final canonical `recipeSha256`. Recipes carry NO sacred bodies,
+  storage keys, consent references, rights notes or user PII.
+- HUMAN_RECORDED_REQUIRED sacred text fails the recipe closed when no
+  eligible linked human recording exists; APPROVED_TTS_ALLOWED without
+  human audio yields TTS_ALLOWED_PENDING (no TTS exists yet).
+  GENERATION_ALLOWED descriptors are safe metadata only, require a
+  verified published Visual Bible, and never contain sacred text —
+  APPROVED_TEXT_CONTEXT bodies are retrieved server-side by the future
+  stage.
+- Same service + language + variation seed + committed DB state →
+  byte-identical recipe; different seeds may select different APPROVED
+  media. No per-session human approval exists.
+- `validateVideoRecipe()` re-checks every CURRENT authority (template
+  and Visual Bible hashes, sacred/media eligibility and hashes, scope
+  and language applicability, voice policy, recipe hash) and fails
+  CLOSED with machine-readable reasons the moment any upstream
+  authority changes. Nothing is ever auto-healed.
+
 ---
 
 # 11. Visual Canon Database

@@ -120,6 +120,14 @@ function AdminLayout() {
                 Visual Bibles
               </Link>
             ) : null}
+            {admin.permissions.includes('media.view') ? (
+              <Link
+                to="/admin/video-recipes"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Recipes
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}
