@@ -783,33 +783,62 @@ describe('sacred media links', () => {
       }),
     )
 
-    // HUMAN_RECORDED_REQUIRED → only the human-recorded candidate.
-    const strict = await resolveSacredAudioCandidates(
-      sacred.versionId,
-      'HUMAN_RECORDED_REQUIRED',
-    )
+    // The voice policy comes from the AUTHORITATIVE stored Step 8
+    // profile (HUMAN_RECORDED_REQUIRED here) — the API accepts no
+    // caller policy that could downgrade it. Only the human-recorded
+    // candidate qualifies.
+    const strict = await resolveSacredAudioCandidates(sacred.versionId)
+    expect(strict.voicePolicy).toBe('HUMAN_RECORDED_REQUIRED')
     expect(strict.candidates.length).toBe(1)
     expect(strict.candidates[0].sourceType).toBe('HUMAN_RECORDED')
-    // APPROVED_TTS_ALLOWED → any eligible linked human audio.
-    const relaxed = await resolveSacredAudioCandidates(
-      sacred.versionId,
-      'APPROVED_TTS_ALLOWED',
+
+    // APPROVED_TTS_ALLOWED (stored on its own fixture) → eligible
+    // linked HUMAN-provenance audio only; machine-generated audio is
+    // excluded because Step 10 has no approved TTS stage.
+    const relaxedSacred = await makeSacredVersionFixture({
+      voicePolicy: 'APPROVED_TTS_ALLOWED',
+    })
+    const aiAudio = await makeEligibleMedia(
+      {},
+      { language: 'en', sourceType: 'AI_GENERATED' },
     )
+    for (const media of [humanAudio, licensedAudio, aiAudio]) {
+      await createSacredMediaLink(adminId, ctx, {
+        contentVersionId: relaxedSacred.versionId,
+        mediaAssetVersionId: media.versionId,
+        role: 'ALTERNATE_AUDIO',
+      })
+    }
+    const relaxed = await resolveSacredAudioCandidates(relaxedSacred.versionId)
+    expect(relaxed.voicePolicy).toBe('APPROVED_TTS_ALLOWED')
     expect(relaxed.candidates.length).toBe(2)
-    // TEXT_ONLY → none required.
-    const none = await resolveSacredAudioCandidates(
-      sacred.versionId,
-      'TEXT_ONLY',
-    )
+    expect(
+      relaxed.candidates.some(
+        (candidate) => candidate.mediaAssetVersionId === aiAudio.versionId,
+      ),
+    ).toBe(false)
+
+    // TEXT_ONLY (stored) → none required, even with links present.
+    const textOnlySacred = await makeSacredVersionFixture({
+      voicePolicy: 'TEXT_ONLY',
+    })
+    await createSacredMediaLink(adminId, ctx, {
+      contentVersionId: textOnlySacred.versionId,
+      mediaAssetVersionId: humanAudio.versionId,
+      role: 'PRIMARY_AUDIO',
+    })
+    const none = await resolveSacredAudioCandidates(textOnlySacred.versionId)
+    expect(none.voicePolicy).toBe('TEXT_ONLY')
     expect(none.candidates.length).toBe(0)
+
+    // A version without a sacred runtime profile is refused outright.
+    await expectError(() => resolveSacredAudioCandidates(999_999_999))
 
     // Runtime-disabled linked audio drops out of candidates.
     await setMediaRuntimeEnabled(adminId, ctx, humanAudio.versionId, false)
-    const afterDisable = await resolveSacredAudioCandidates(
-      sacred.versionId,
-      'HUMAN_RECORDED_REQUIRED',
-    )
+    const afterDisable = await resolveSacredAudioCandidates(sacred.versionId)
     expect(afterDisable.candidates.length).toBe(0)
+    await setMediaAssetActive(adminId, ctx, aiAudio.assetId, false)
 
     for (const fixture of [humanAudio, licensedAudio, image, yoAudio]) {
       await setMediaAssetActive(adminId, ctx, fixture.assetId, false)
@@ -1088,4 +1117,136 @@ describe('guards', () => {
       )
     }
   })
+})
+
+// --- Step 10 hardening regressions ------------------------------------------
+
+describe('media hardening', () => {
+  it('CM cannot mark voice cloning authorized in create or draft update', async () => {
+    const assetId = await makeAsset()
+    const denied = await expectError(() =>
+      makeVersion(assetId, { voiceCloneAuthorized: true }),
+    )
+    expect(denied.message).toContain('cloning-consent')
+    const version = await makeVersion(assetId)
+    expect((await loadMediaVersion(version.id)).voiceCloneAuthorized).toBe(
+      false,
+    )
+    await expectError(() =>
+      updateDraftMediaVersion(
+        cmId,
+        ctx,
+        version.id,
+        baseMeta({ voiceCloneAuthorized: true }),
+      ),
+    )
+    expect((await loadMediaVersion(version.id)).voiceCloneAuthorized).toBe(
+      false,
+    )
+  }, 60_000)
+
+  it('contentType/themeCode freeze after review contact; assetKind freezes once a version exists', async () => {
+    const theme = `T10_FRZ_${RUN_KEY}`
+    const assetId = await makeAsset({ contentType: 'PRAYER', themeCode: theme })
+    const assetRow = () =>
+      getDb()
+        .select()
+        .from(mediaAssets)
+        .where(eq(mediaAssets.id, assetId))
+        .limit(1)
+        .then((rows) => rows[0])
+    const before = await assetRow()
+
+    // Kind change refused as soon as ANY version exists (even DRAFT).
+    const draft = await makeVersion(assetId)
+    const kindError = await expectError(() =>
+      updateMediaAsset(cmId, ctx, assetId, {
+        code: before.code,
+        assetKind: 'IMAGE',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        contentType: 'PRAYER',
+        themeCode: theme,
+      }),
+    )
+    expect(kindError.message).toContain('kind cannot change')
+
+    // Pre-freeze, selection metadata is still correctable.
+    await updateMediaAsset(cmId, ctx, assetId, {
+      code: before.code,
+      assetKind: 'AUDIO',
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+      serviceId: null,
+      contentType: 'BLESSING',
+      themeCode: theme,
+    })
+    expect((await assetRow()).contentType).toBe('BLESSING')
+
+    // After review contact: contentType/themeCode are FROZEN.
+    await submitMediaVersion(cmId, ctx, draft.id)
+    await expectError(() =>
+      updateMediaAsset(cmId, ctx, assetId, {
+        code: before.code,
+        assetKind: 'AUDIO',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        contentType: 'PRAYER',
+        themeCode: theme,
+      }),
+    )
+    await expectError(() =>
+      updateMediaAsset(cmId, ctx, assetId, {
+        code: before.code,
+        assetKind: 'AUDIO',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        contentType: 'BLESSING',
+        themeCode: `T10_OTHER_${RUN_KEY}`,
+      }),
+    )
+    const after = await assetRow()
+    expect(after.contentType).toBe('BLESSING')
+    expect(after.themeCode).toBe(theme)
+  }, 60_000)
+
+  it('a losing concurrent upload leaves one version and removes its orphan object', async () => {
+    // Record every stored key so the loser's object can be checked.
+    const recordedKeys: Array<string> = []
+    const recordingStorage = {
+      put: async (bytes: Uint8Array, extension: string) => {
+        const result = await storage.put(bytes, extension)
+        recordedKeys.push(result.storageKey)
+        return result
+      },
+      get: (storageKey: string) => storage.get(storageKey),
+      exists: (storageKey: string) => storage.exists(storageKey),
+      remove: (storageKey: string) => storage.remove(storageKey),
+    }
+    setMediaStorageForTests(recordingStorage)
+    try {
+      const assetId = await makeAsset()
+      const results = await Promise.allSettled([
+        makeVersion(assetId),
+        makeVersion(assetId),
+      ])
+      expect(results.filter((r) => r.status === 'fulfilled').length).toBe(1)
+      const rows = await getDb()
+        .select()
+        .from(mediaAssetVersions)
+        .where(eq(mediaAssetVersions.assetId, assetId))
+      expect(rows.length).toBe(1)
+      expect(recordedKeys.length).toBe(2)
+      // Exactly the winner's object remains; the loser's was removed.
+      const winnerKey = rows[0].storageKey
+      for (const key of recordedKeys) {
+        expect(await storage.exists(key)).toBe(key === winnerKey)
+      }
+    } finally {
+      setMediaStorageForTests(storage)
+    }
+  }, 60_000)
 })

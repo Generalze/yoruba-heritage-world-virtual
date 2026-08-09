@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
@@ -27,6 +27,10 @@ export interface MediaStorageProvider {
   /** Returns the exact stored bytes, or null when the object is missing. */
   get: (storageKey: string) => Promise<Uint8Array | null>
   exists: (storageKey: string) => Promise<boolean>
+  /** Best-effort object removal — used ONLY to clean up an object whose
+   * database transaction failed (no row ever referenced it). Never a
+   * destructive-delete path for governed media. */
+  remove: (storageKey: string) => Promise<void>
 }
 
 /** Extensions the platform accepts — bounded, non-executable. */
@@ -91,6 +95,15 @@ export class LocalMediaStorageProvider implements MediaStorageProvider {
       return true
     } catch {
       return false
+    }
+  }
+
+  async remove(storageKey: string): Promise<void> {
+    if (!isValidStorageKey(storageKey)) return
+    try {
+      await unlink(join(this.rootDir, storageKey))
+    } catch {
+      // best-effort: a missing object is already the desired state
     }
   }
 }

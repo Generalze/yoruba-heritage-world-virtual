@@ -17,6 +17,7 @@ import {
   mediaAssetVersions,
   mediaAssets,
   sacredContentMediaLinks,
+  sacredContentVersionProfiles,
   sacredHouses,
   services,
   spiritualContentItems,
@@ -149,6 +150,15 @@ function validateMetadata(
   if (!input.containsIdentifiablePerson && input.consentStatus === 'PENDING') {
     throw new MediaError(
       'Consent tracking only applies to media containing an identifiable person.',
+    )
+  }
+  // Step 10 has NO cloning-consent workflow: authorization cannot be
+  // recorded through authoring metadata at all. The column stays at
+  // its FALSE default until an explicit documented-permission workflow
+  // exists in a later approved stage.
+  if (input.voiceCloneAuthorized) {
+    throw new MediaError(
+      'Voice-clone authorization cannot be granted — no cloning-consent workflow exists yet.',
     )
   }
   return input
@@ -326,16 +336,38 @@ export async function updateMediaAsset(
   await getDb().transaction(async (tx) => {
     const row = await lockMediaAsset(tx, assetId)
     const frozen = await isAssetStructureFrozen(assetId, tx)
+    // Selection-affecting metadata (content type, theme) freezes with
+    // the rest of the structure after first review contact — changing
+    // published semantics requires a NEW asset.
     const structuralChange =
       input.code !== row.code ||
       input.assetKind !== row.assetKind ||
       input.scopeType !== row.scopeType ||
       (input.sacredHouseId ?? null) !== row.sacredHouseId ||
-      (input.serviceId ?? null) !== row.serviceId
+      (input.serviceId ?? null) !== row.serviceId ||
+      (input.contentType ?? null) !== row.contentType ||
+      (input.themeCode ?? null) !== row.themeCode
     if (frozen && structuralChange) {
       throw new MediaError(
-        'This asset has reviewed versions — its code, kind and scope are frozen. Create a new asset instead.',
+        'This asset has reviewed versions — its code, kind, scope, content type and theme are frozen. Create a new asset instead.',
       )
+    }
+    // The kind is frozen as soon as ANY version exists: stored binaries
+    // were validated against it and must stay compatible.
+    if (input.assetKind !== row.assetKind) {
+      const hasVersions =
+        (
+          await tx
+            .select({ id: mediaAssetVersions.id })
+            .from(mediaAssetVersions)
+            .where(eq(mediaAssetVersions.assetId, assetId))
+            .limit(1)
+        ).length > 0
+      if (hasVersions) {
+        throw new MediaError(
+          'This asset already has uploaded versions — its kind cannot change. Create a new asset instead.',
+        )
+      }
     }
     const scope = frozen
       ? {
@@ -352,8 +384,8 @@ export async function updateMediaAsset(
         scopeType: scope.scopeType,
         sacredHouseId: scope.sacredHouseId,
         serviceId: scope.serviceId,
-        contentType: input.contentType,
-        themeCode: input.themeCode,
+        contentType: frozen ? row.contentType : input.contentType,
+        themeCode: frozen ? row.themeCode : input.themeCode,
       })
       .where(eq(mediaAssets.id, assetId))
   })
@@ -458,54 +490,76 @@ export async function createMediaVersion(
   }
   const fileSha256 = computeFileSha256(bytes)
   const { storageKey } = await storage.put(bytes, extension)
-  const result = await getDb().transaction(async (tx) => {
-    const asset = await lockMediaAsset(tx, assetId)
-    const working = await tx
-      .select({ id: mediaAssetVersions.id })
-      .from(mediaAssetVersions)
-      .where(
-        and(
-          eq(mediaAssetVersions.assetId, assetId),
-          inArray(mediaAssetVersions.status, WORKING_STATUSES),
-        ),
-      )
-      .limit(1)
-    if (working.length > 0) {
-      throw new MediaError(
-        'A working version (draft, under review or approved) already exists for this asset.',
-      )
-    }
-    const latest = (
-      await tx
-        .select({ versionNumber: mediaAssetVersions.versionNumber })
+  let result: { id: number; versionNumber: number; fileSha256: string }
+  try {
+    result = await getDb().transaction(async (tx) => {
+      const asset = await lockMediaAsset(tx, assetId)
+      // Revalidate against the AUTHORITATIVE locked kind — the
+      // pre-lock read may have raced a concurrent asset change.
+      if (!MEDIA_MIME_TYPES[asset.assetKind][mimeType]) {
+        throw new MediaError(
+          'Unsupported ' + asset.assetKind + ' media type: ' + mimeType + '.',
+        )
+      }
+      if (bytes.length > MEDIA_MAX_BYTES[asset.assetKind]) {
+        throw new MediaError(
+          'Media upload exceeds the size limit for this kind.',
+        )
+      }
+      const working = await tx
+        .select({ id: mediaAssetVersions.id })
         .from(mediaAssetVersions)
-        .where(eq(mediaAssetVersions.assetId, assetId))
-        .orderBy(desc(mediaAssetVersions.versionNumber))
+        .where(
+          and(
+            eq(mediaAssetVersions.assetId, assetId),
+            inArray(mediaAssetVersions.status, WORKING_STATUSES),
+          ),
+        )
         .limit(1)
-    ).at(0)
-    const versionNumber = (latest?.versionNumber ?? 0) + 1
-    const inserted = await tx.insert(mediaAssetVersions).values({
-      assetId: asset.id,
-      versionNumber,
-      sourceType: metadata.sourceType,
-      language: metadata.language,
-      mimeType,
-      byteSize: bytes.length,
-      durationSeconds: metadata.durationSeconds,
-      width: metadata.width,
-      height: metadata.height,
-      storageKey,
-      fileSha256,
-      containsIdentifiablePerson: metadata.containsIdentifiablePerson,
-      consentStatus: metadata.consentStatus,
-      consentReference: metadata.consentReference,
-      externalAiPolicy: metadata.externalAiPolicy,
-      voiceCloneAuthorized: metadata.voiceCloneAuthorized,
-      status: 'DRAFT',
-      createdBy: actorId,
+      if (working.length > 0) {
+        throw new MediaError(
+          'A working version (draft, under review or approved) already exists for this asset.',
+        )
+      }
+      const latest = (
+        await tx
+          .select({ versionNumber: mediaAssetVersions.versionNumber })
+          .from(mediaAssetVersions)
+          .where(eq(mediaAssetVersions.assetId, assetId))
+          .orderBy(desc(mediaAssetVersions.versionNumber))
+          .limit(1)
+      ).at(0)
+      const versionNumber = (latest?.versionNumber ?? 0) + 1
+      const inserted = await tx.insert(mediaAssetVersions).values({
+        assetId: asset.id,
+        versionNumber,
+        sourceType: metadata.sourceType,
+        language: metadata.language,
+        mimeType,
+        byteSize: bytes.length,
+        durationSeconds: metadata.durationSeconds,
+        width: metadata.width,
+        height: metadata.height,
+        storageKey,
+        fileSha256,
+        containsIdentifiablePerson: metadata.containsIdentifiablePerson,
+        consentStatus: metadata.consentStatus,
+        consentReference: metadata.consentReference,
+        externalAiPolicy: metadata.externalAiPolicy,
+        voiceCloneAuthorized: metadata.voiceCloneAuthorized,
+        status: 'DRAFT',
+        createdBy: actorId,
+      })
+      return { id: inserted[0].insertId, versionNumber, fileSha256 }
     })
-    return { id: inserted[0].insertId, versionNumber, fileSha256 }
-  })
+  } catch (error) {
+    // The bytes were stored before the transaction: if the DB path
+    // failed (concurrency conflict, validation, driver failure),
+    // remove the freshly stored object so no orphan accumulates.
+    // Best-effort — no DB row ever references this key on failure.
+    await storage.remove(storageKey).catch(() => undefined)
+    throw error
+  }
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'media.version_created',
@@ -1409,20 +1463,57 @@ export async function removeSacredMediaLink(
   })
 }
 
+/** Media source types that are machine-generated audio — never valid
+ * sacred-audio candidates in Step 10 (no TTS/generation stage exists). */
+const GENERATED_AUDIO_SOURCE_TYPES: ReadonlyArray<string> = [
+  'AI_GENERATED',
+  'OPENART_CREATED',
+  'KLING_GENERATED',
+]
+
 /**
- * Sacred-audio candidates for one sacred content version, honoring the
- * Step 8 voice policy:
+ * Sacred-audio candidates for one sacred content version. The voice
+ * policy is loaded from the AUTHORITATIVE Step 8 sacred runtime
+ * profile — callers cannot downgrade HUMAN_RECORDED_REQUIRED or force
+ * TEXT_ONLY:
  * - HUMAN_RECORDED_REQUIRED → only eligible linked HUMAN_RECORDED audio
- * - APPROVED_TTS_ALLOWED    → any eligible linked human audio (future
- *   approved TTS is a LATER stage; nothing here calls one)
+ * - APPROVED_TTS_ALLOWED    → eligible linked human-provenance audio
+ *   (machine-generated audio is ALWAYS excluded — Step 10 has no
+ *   approved TTS stage)
  * - TEXT_ONLY               → no sacred audio required (empty list)
  * Every candidate passes full runtime eligibility (incl. byte hash).
  */
 export async function resolveSacredAudioCandidates(
   contentVersionId: number,
-  voicePolicy: string,
   storage: MediaStorageProvider = getMediaStorage(),
 ) {
+  const sacred = (
+    await getDb()
+      .select({
+        contentDomain: spiritualContentItems.contentDomain,
+        voicePolicy: sacredContentVersionProfiles.voicePolicy,
+      })
+      .from(spiritualContentVersions)
+      .innerJoin(
+        spiritualContentItems,
+        eq(spiritualContentVersions.contentItemId, spiritualContentItems.id),
+      )
+      .innerJoin(
+        sacredContentVersionProfiles,
+        eq(
+          sacredContentVersionProfiles.contentVersionId,
+          spiritualContentVersions.id,
+        ),
+      )
+      .where(eq(spiritualContentVersions.id, contentVersionId))
+      .limit(1)
+  ).at(0)
+  if (!sacred || sacred.contentDomain !== 'SACRED_RUNTIME') {
+    throw new MediaError(
+      'Sacred audio candidates require a sacred runtime content version.',
+    )
+  }
+  const voicePolicy = sacred.voicePolicy
   // TEXT_ONLY sacred content requires no audio — empty candidate list.
   const rows =
     voicePolicy === 'TEXT_ONLY'
@@ -1466,6 +1557,11 @@ export async function resolveSacredAudioCandidates(
       voicePolicy === 'HUMAN_RECORDED_REQUIRED' &&
       row.version.sourceType !== 'HUMAN_RECORDED'
     ) {
+      continue
+    }
+    // No TTS/generation stage exists: machine-generated audio can
+    // never voice sacred text in Step 10, regardless of policy.
+    if (GENERATED_AUDIO_SOURCE_TYPES.includes(row.version.sourceType)) {
       continue
     }
     const check = await isMediaAssetRuntimeEligible(
