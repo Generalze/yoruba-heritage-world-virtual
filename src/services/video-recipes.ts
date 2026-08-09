@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, gt } from 'drizzle-orm'
 
 import { getDb } from '@/db'
 import {
@@ -446,9 +446,23 @@ export async function buildValidatedVideoRecipe(
       if (voicePolicy === 'TEXT_ONLY') {
         audioMode = 'NONE'
       } else {
-        const candidates = [...audioResolution.candidates].sort(
-          (a, b) => a.mediaAssetVersionId - b.mediaAssetVersionId,
-        )
+        // CONTEXT AUTHORITY: linked audio must also be applicable to
+        // THIS Service/House and the recipe language — out-of-context
+        // audio is never selected, so a RECIPE_READY result can never
+        // fail its own validator on audio scope.
+        const candidates = audioResolution.candidates
+          .filter(
+            (candidate) =>
+              isScopeApplicable(
+                {
+                  scopeType: candidate.scopeType,
+                  serviceId: candidate.scopeServiceId,
+                  sacredHouseId: candidate.scopeSacredHouseId,
+                },
+                context,
+              ) && isLanguageCompatible(candidate.language, language),
+          )
+          .sort((a, b) => a.mediaAssetVersionId - b.mediaAssetVersionId)
         if (candidates.length > 0) {
           const rng = seededRng(
             variationSeed,
@@ -486,32 +500,59 @@ export async function buildValidatedVideoRecipe(
       let generation: RecipeGenerationDescriptor | null = null
 
       // A. Eligible linked VISUAL_REFERENCE (scope+language checked).
-      const linkedRows = await getDb()
-        .select({
-          link: sacredContentMediaLinks,
-          version: mediaAssetVersions,
-          asset: mediaAssets,
-        })
-        .from(sacredContentMediaLinks)
-        .innerJoin(
-          mediaAssetVersions,
-          eq(
-            sacredContentMediaLinks.mediaAssetVersionId,
-            mediaAssetVersions.id,
-          ),
-        )
-        .innerJoin(mediaAssets, eq(mediaAssetVersions.assetId, mediaAssets.id))
-        .where(
-          and(
-            eq(
-              sacredContentMediaLinks.contentVersionId,
-              selection.contentVersionId,
-            ),
-            eq(sacredContentMediaLinks.role, 'VISUAL_REFERENCE'),
-          ),
-        )
-        .orderBy(asc(sacredContentMediaLinks.id))
-        .limit(50)
+      // COMPLETE keyset enumeration — no silent candidate 51+ omission.
+      const linkedRows: Array<{
+        link: typeof sacredContentMediaLinks.$inferSelect
+        version: typeof mediaAssetVersions.$inferSelect
+        asset: typeof mediaAssets.$inferSelect
+      }> = []
+      {
+        const PAGE_SIZE = 200
+        const LINK_CEILING = 10_000
+        let afterLinkId = 0
+        for (;;) {
+          const page = await getDb()
+            .select({
+              link: sacredContentMediaLinks,
+              version: mediaAssetVersions,
+              asset: mediaAssets,
+            })
+            .from(sacredContentMediaLinks)
+            .innerJoin(
+              mediaAssetVersions,
+              eq(
+                sacredContentMediaLinks.mediaAssetVersionId,
+                mediaAssetVersions.id,
+              ),
+            )
+            .innerJoin(
+              mediaAssets,
+              eq(mediaAssetVersions.assetId, mediaAssets.id),
+            )
+            .where(
+              and(
+                eq(
+                  sacredContentMediaLinks.contentVersionId,
+                  selection.contentVersionId,
+                ),
+                eq(sacredContentMediaLinks.role, 'VISUAL_REFERENCE'),
+                afterLinkId > 0
+                  ? gt(sacredContentMediaLinks.id, afterLinkId)
+                  : undefined,
+              ),
+            )
+            .orderBy(asc(sacredContentMediaLinks.id))
+            .limit(PAGE_SIZE)
+          linkedRows.push(...page)
+          if (linkedRows.length > LINK_CEILING) {
+            throw new VideoRecipeError(
+              'Visual reference link enumeration exceeded the safety ceiling.',
+            )
+          }
+          if (page.length < PAGE_SIZE) break
+          afterLinkId = page[page.length - 1].link.id
+        }
+      }
       const linkedCandidates = []
       for (const row of linkedRows) {
         if (!isScopeApplicable(row.asset, context)) continue
@@ -790,6 +831,80 @@ export async function validateVideoRecipe(
     if (sacred.profile.voicePolicy !== segment.voicePolicy) {
       push(`voice_policy_changed:${tag}`)
     }
+    // SEMANTIC authority: the segment must still describe the exact
+    // current sacred content identity — item, language, type, theme,
+    // scope applicability and external AI policy.
+    if (sacred.item.id !== segment.contentItemId) {
+      push(`content_item_mismatch:${tag}`)
+    }
+    if (sacred.version.language !== recipe.language) {
+      push(`content_language_mismatch:${tag}`)
+    }
+    if (sacred.item.contentType !== segment.contentType) {
+      push(`content_type_changed:${tag}`)
+    }
+    if (sacred.profile.themeCode !== segment.themeCode) {
+      push(`content_theme_changed:${tag}`)
+    }
+    if (
+      !isScopeApplicable(
+        {
+          scopeType: sacred.item.scopeType,
+          serviceId: sacred.item.serviceId,
+          sacredHouseId: sacred.item.sacredHouseId,
+        },
+        context,
+      )
+    ) {
+      push(`content_scope_inapplicable:${tag}`)
+    }
+    if (sacred.profile.externalAiPolicy !== segment.externalAiPolicy) {
+      push(`ai_policy_changed:${tag}`)
+    }
+
+    // GENERATION descriptors: mode/descriptor coherence plus current
+    // authoritative semantics — independent of the recipe checksum.
+    if (
+      (segment.visualMode === 'GENERATION_ALLOWED') !==
+      (segment.generation != null)
+    ) {
+      push(`generation_mode_inconsistent:${tag}`)
+    }
+    if (segment.generation != null && segment.visual != null) {
+      push(`generation_mode_inconsistent:${tag}`)
+    }
+    if (segment.generation) {
+      const descriptor = segment.generation
+      if (sacred.profile.externalAiPolicy === 'NO_EXTERNAL_AI') {
+        push(`generation_ai_policy_forbidden:${tag}`)
+      }
+      if (
+        descriptor.serviceId !== recipe.serviceId ||
+        descriptor.sacredHouseId !== recipe.sacredHouseId
+      ) {
+        push(`generation_context_mismatch:${tag}`)
+      }
+      if (
+        descriptor.contentType !== sacred.item.contentType ||
+        descriptor.themeCode !== sacred.profile.themeCode
+      ) {
+        push(`generation_content_mismatch:${tag}`)
+      }
+      if (
+        !recipe.visualBible ||
+        descriptor.visualBibleId !== recipe.visualBible.visualBibleId ||
+        descriptor.visualBibleVersionId !== recipe.visualBible.versionId ||
+        descriptor.visualBibleSha256 !== recipe.visualBible.definitionSha256
+      ) {
+        push(`generation_bible_mismatch:${tag}`)
+      }
+      if (
+        descriptor.textContextAllowed !==
+        (sacred.profile.externalAiPolicy === 'APPROVED_TEXT_CONTEXT')
+      ) {
+        push(`generation_text_context_mismatch:${tag}`)
+      }
+    }
 
     // Selected media authority (audio + visual snapshots).
     const mediaChecks: Array<{
@@ -843,10 +958,15 @@ export async function validateVideoRecipe(
       }
     }
 
-    // HUMAN_RECORDED_REQUIRED must STILL have its valid human audio.
-    if (segment.voicePolicy === 'HUMAN_RECORDED_REQUIRED') {
-      if (!segment.audio || segment.audioMode !== 'HUMAN_RECORDED') {
-        push(`human_audio_missing:${tag}`)
+    // LINK AUTHORITY: any selected linked audio must STILL be a current
+    // eligible PRIMARY/ALTERNATE audio candidate for this exact sacred
+    // version — removing the governing link invalidates immediately.
+    if (
+      segment.audioMode === 'HUMAN_RECORDED' ||
+      segment.audioMode === 'LINKED_HUMAN_AUDIO'
+    ) {
+      if (!segment.audio) {
+        push(`audio_snapshot_missing:${tag}`)
       } else {
         try {
           const audioNow = await resolveSacredAudioCandidates(
@@ -859,10 +979,43 @@ export async function validateVideoRecipe(
                 segment.audio!.mediaAssetVersionId,
             )
           ) {
-            push(`human_audio_no_longer_linked:${tag}`)
+            push(`audio_no_longer_linked:${tag}`)
           }
         } catch {
-          push(`human_audio_unresolvable:${tag}`)
+          push(`audio_unresolvable:${tag}`)
+        }
+      }
+    }
+    if (segment.voicePolicy === 'HUMAN_RECORDED_REQUIRED') {
+      if (!segment.audio || segment.audioMode !== 'HUMAN_RECORDED') {
+        push(`human_audio_missing:${tag}`)
+      }
+    }
+
+    // LINKED_REFERENCE visuals must STILL hold the exact link.
+    if (segment.visualMode === 'LINKED_REFERENCE') {
+      if (!segment.visual) {
+        push(`visual_snapshot_missing:${tag}`)
+      } else {
+        const linkRow = await getDb()
+          .select({ id: sacredContentMediaLinks.id })
+          .from(sacredContentMediaLinks)
+          .where(
+            and(
+              eq(
+                sacredContentMediaLinks.contentVersionId,
+                segment.contentVersionId,
+              ),
+              eq(
+                sacredContentMediaLinks.mediaAssetVersionId,
+                segment.visual.mediaAssetVersionId,
+              ),
+              eq(sacredContentMediaLinks.role, 'VISUAL_REFERENCE'),
+            ),
+          )
+          .limit(1)
+        if (linkRow.length === 0) {
+          push(`visual_link_missing:${tag}`)
         }
       }
     }

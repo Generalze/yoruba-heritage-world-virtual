@@ -61,6 +61,8 @@ import {
   createMediaVersion,
   createSacredMediaLink,
   publishMediaVersion,
+  removeSacredMediaLink,
+  resolveSacredAudioCandidates,
   setMediaRightsStatus,
   setMediaRuntimeEnabled,
   submitMediaVersion,
@@ -75,6 +77,7 @@ import {
 import {
   VideoRecipeError,
   buildValidatedVideoRecipe,
+  computeRecipeSha256,
   validateVideoRecipe,
 } from '@/services/video-recipes'
 import type { SlotInput } from '@/services/prayer-templates'
@@ -387,7 +390,7 @@ beforeAll(async () => {
   // A pool of dedicated services on the main House (one per scenario)
   // plus one on the second (bible-less) House.
   servicePool = []
-  for (let i = 0; i < 14; i += 1) {
+  for (let i = 0; i < 22; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `T11S${i}_${key}`.toUpperCase(),
@@ -1181,4 +1184,350 @@ describe('guards', () => {
     expect(routeTree).not.toMatch(/prayer.?room/i)
     expect(routeTree).not.toMatch(/fullPath: '\/video/)
   })
+})
+
+// --- Step 11 hardening regressions ------------------------------------------
+
+describe('recipe hardening', () => {
+  it('linked audio must be applicable to the context and language', async () => {
+    const serviceId = nextService()
+    const unrelatedService = nextService()
+    const theme = `T11_HAC_${RUN_KEY}`
+    const sacred = await makeEligibleSacred({
+      themeCode: theme,
+      voicePolicy: 'HUMAN_RECORDED_REQUIRED',
+    })
+    await makeEligibleMedia({
+      assetKind: 'IMAGE',
+      contentType: 'PRAYER',
+      themeCode: theme,
+    })
+    await makeServiceTemplate(serviceId, [filterSlot({ themeCode: theme })])
+
+    // Only audio scoped to an UNRELATED service + a yo-language audio:
+    // HUMAN_RECORDED_REQUIRED must fail closed.
+    const unrelatedAudio = await makeEligibleMedia({
+      assetKind: 'AUDIO',
+      scopeType: 'SERVICE',
+      serviceId: unrelatedService,
+      language: 'en',
+      sourceType: 'HUMAN_RECORDED',
+    })
+    await linkMedia(sacred.versionId, unrelatedAudio.versionId, 'PRIMARY_AUDIO')
+    const failed = await buildValidatedVideoRecipe({
+      serviceId,
+      language: 'en',
+      variationSeed: 's',
+    })
+    expect(failed.status).toBe('RECIPE_UNAVAILABLE')
+    if (failed.status === 'RECIPE_UNAVAILABLE') {
+      expect(
+        failed.reasons.some((reason) => reason.startsWith('no_human_audio')),
+      ).toBe(true)
+    }
+
+    // A House-scoped applicable audio resolves — and the READY recipe
+    // passes its own validator (no out-of-context self-invalidation).
+    const houseAudio = await makeEligibleMedia({
+      assetKind: 'AUDIO',
+      scopeType: 'SACRED_HOUSE',
+      sacredHouseId: houseId,
+      language: 'en',
+      sourceType: 'HUMAN_RECORDED',
+    })
+    await linkMedia(sacred.versionId, houseAudio.versionId, 'ALTERNATE_AUDIO')
+    const ready = await buildValidatedVideoRecipe({
+      serviceId,
+      language: 'en',
+      variationSeed: 's',
+    })
+    expect(ready.status).toBe('RECIPE_READY')
+    if (ready.status === 'RECIPE_READY') {
+      expect(ready.segments[0].audio?.mediaAssetVersionId).toBe(
+        houseAudio.versionId,
+      )
+      expect((await validateVideoRecipe(ready)).status).toBe('VALID')
+    }
+
+    // APPROVED_TTS_ALLOWED with only out-of-context audio → PENDING.
+    const svcTts = nextService()
+    const themeTts = `T11_HTC_${RUN_KEY}`
+    const ttsSacred = await makeEligibleSacred({
+      themeCode: themeTts,
+      voicePolicy: 'APPROVED_TTS_ALLOWED',
+    })
+    await linkMedia(
+      ttsSacred.versionId,
+      unrelatedAudio.versionId,
+      'PRIMARY_AUDIO',
+    )
+    await makeServiceTemplate(svcTts, [filterSlot({ themeCode: themeTts })])
+    const pending = await buildValidatedVideoRecipe({
+      serviceId: svcTts,
+      language: 'en',
+      variationSeed: 's',
+    })
+    expect(pending.status).toBe('RECIPE_READY')
+    if (pending.status === 'RECIPE_READY') {
+      expect(pending.segments[0].audioMode).toBe('TTS_ALLOWED_PENDING')
+    }
+  }, 240_000)
+
+  it('link enumeration reaches audio candidate 201+ and visual candidate 51+', async () => {
+    const db = getDb()
+    const serviceId = nextService()
+    const theme = `T11_LNK_${RUN_KEY}`
+    const sacred = await makeEligibleSacred({
+      themeCode: theme,
+      voicePolicy: 'HUMAN_RECORDED_REQUIRED',
+    })
+    await makeServiceTemplate(serviceId, [filterSlot({ themeCode: theme })])
+
+    // Bulk INELIGIBLE published media (runtime disabled) to pad the
+    // link lists past the old truncation points.
+    async function bulkDisabledMedia(
+      kind: 'AUDIO' | 'IMAGE',
+      count: number,
+      codeTag: string,
+    ): Promise<Array<number>> {
+      for (let start = 0; start < count; start += 100) {
+        await db.insert(mediaAssets).values(
+          Array.from({ length: Math.min(100, count - start) }, (_, i) => ({
+            publicId: crypto.randomUUID(),
+            code: `${CODE_PREFIX}_${codeTag}_${start + i}`,
+            assetKind: kind,
+            scopeType: 'PLATFORM' as const,
+            createdBy: cmId,
+          })),
+        )
+      }
+      const assetRows = await db
+        .select({ id: mediaAssets.id })
+        .from(mediaAssets)
+        .where(like(mediaAssets.code, `${CODE_PREFIX}\\_${codeTag}\\_%`))
+      createdAssetIds.push(...assetRows.map((row) => row.id))
+      const ordered = [...assetRows].sort((a, b) => a.id - b.id)
+      for (let start = 0; start < ordered.length; start += 100) {
+        await db.insert(mediaAssetVersions).values(
+          ordered.slice(start, start + 100).map((row) => ({
+            assetId: row.id,
+            versionNumber: 1,
+            status: 'PUBLISHED' as const,
+            sourceType: 'HUMAN_RECORDED' as const,
+            mimeType: kind === 'AUDIO' ? 'audio/mpeg' : 'image/png',
+            byteSize: 64,
+            storageKey: `zz/${crypto.randomUUID().replaceAll('-', '')}.${
+              kind === 'AUDIO' ? 'mp3' : 'png'
+            }`,
+            fileSha256: 'e'.repeat(64),
+            rightsStatus: 'CLEARED' as const,
+            consentStatus: 'NOT_APPLICABLE' as const,
+            runtimeEnabled: false,
+            publishedAt: new Date(),
+            createdBy: cmId,
+          })),
+        )
+      }
+      const versionRows = await db
+        .select({ id: mediaAssetVersions.id })
+        .from(mediaAssetVersions)
+        .where(
+          inArray(
+            mediaAssetVersions.assetId,
+            ordered.map((row) => row.id),
+          ),
+        )
+      return versionRows.map((row) => row.id).sort((a, b) => a - b)
+    }
+
+    // 205 ineligible audio links, THEN one eligible (highest link id).
+    const deadAudio = await bulkDisabledMedia('AUDIO', 205, 'DA')
+    for (let start = 0; start < deadAudio.length; start += 100) {
+      await db.insert(sacredContentMediaLinks).values(
+        deadAudio.slice(start, start + 100).map((versionId) => ({
+          contentVersionId: sacred.versionId,
+          mediaAssetVersionId: versionId,
+          role: 'ALTERNATE_AUDIO' as const,
+          sortOrder: 0,
+          createdBy: adminId,
+        })),
+      )
+    }
+    const liveAudio = await makeEligibleMedia({
+      assetKind: 'AUDIO',
+      language: 'en',
+      sourceType: 'HUMAN_RECORDED',
+    })
+    await linkMedia(sacred.versionId, liveAudio.versionId, 'ALTERNATE_AUDIO')
+    const audioNow = await resolveSacredAudioCandidates(sacred.versionId)
+    // The single eligible candidate sits BEYOND the old 200-link cut.
+    expect(audioNow.candidates.length).toBe(1)
+    expect(audioNow.candidates[0].mediaAssetVersionId).toBe(liveAudio.versionId)
+
+    // 59 ineligible visual links, THEN one eligible (highest link id).
+    const deadVisuals = await bulkDisabledMedia('IMAGE', 59, 'DV')
+    await db.insert(sacredContentMediaLinks).values(
+      deadVisuals.map((versionId) => ({
+        contentVersionId: sacred.versionId,
+        mediaAssetVersionId: versionId,
+        role: 'VISUAL_REFERENCE' as const,
+        sortOrder: 0,
+        createdBy: adminId,
+      })),
+    )
+    const liveVisual = await makeEligibleMedia({
+      assetKind: 'IMAGE',
+      contentType: 'PRAYER',
+    })
+    await linkMedia(sacred.versionId, liveVisual.versionId, 'VISUAL_REFERENCE')
+
+    const recipe = await buildValidatedVideoRecipe({
+      serviceId,
+      language: 'en',
+      variationSeed: 's',
+    })
+    expect(recipe.status).toBe('RECIPE_READY')
+    if (recipe.status === 'RECIPE_READY') {
+      expect(recipe.segments[0].audio?.mediaAssetVersionId).toBe(
+        liveAudio.versionId,
+      )
+      expect(recipe.segments[0].visualMode).toBe('LINKED_REFERENCE')
+      expect(recipe.segments[0].visual?.mediaAssetVersionId).toBe(
+        liveVisual.versionId,
+      )
+    }
+  }, 240_000)
+
+  it('removing the governing link invalidates the recipe immediately', async () => {
+    const serviceId = nextService()
+    const theme = `T11_LRM_${RUN_KEY}`
+    const sacred = await makeEligibleSacred({
+      themeCode: theme,
+      voicePolicy: 'HUMAN_RECORDED_REQUIRED',
+    })
+    const audio = await makeEligibleMedia({
+      assetKind: 'AUDIO',
+      language: 'en',
+      sourceType: 'HUMAN_RECORDED',
+    })
+    await linkMedia(sacred.versionId, audio.versionId, 'PRIMARY_AUDIO')
+    const visual = await makeEligibleMedia({
+      assetKind: 'VIDEO',
+      contentType: 'PRAYER',
+    })
+    await linkMedia(sacred.versionId, visual.versionId, 'VISUAL_REFERENCE')
+    await makeServiceTemplate(serviceId, [filterSlot({ themeCode: theme })])
+    const recipe = await buildValidatedVideoRecipe({
+      serviceId,
+      language: 'en',
+      variationSeed: 's',
+    })
+    expect(recipe.status).toBe('RECIPE_READY')
+    if (recipe.status !== 'RECIPE_READY') return
+    expect(recipe.segments[0].visualMode).toBe('LINKED_REFERENCE')
+    expect((await validateVideoRecipe(recipe)).status).toBe('VALID')
+
+    // Remove the AUDIO link → invalid; restore → valid.
+    const audioLink = (
+      await getDb()
+        .select({ id: sacredContentMediaLinks.id })
+        .from(sacredContentMediaLinks)
+        .where(eq(sacredContentMediaLinks.mediaAssetVersionId, audio.versionId))
+        .limit(1)
+    ).at(0)!
+    await removeSacredMediaLink(adminId, ctx, audioLink.id)
+    let result = await validateVideoRecipe(recipe)
+    expect(result.status).toBe('INVALID')
+    if (result.status === 'INVALID') {
+      expect(
+        result.reasons.some((reason) =>
+          reason.startsWith('audio_no_longer_linked'),
+        ),
+      ).toBe(true)
+    }
+    await linkMedia(sacred.versionId, audio.versionId, 'PRIMARY_AUDIO')
+    expect((await validateVideoRecipe(recipe)).status).toBe('VALID')
+
+    // Remove the VISUAL_REFERENCE link → invalid.
+    const visualLink = (
+      await getDb()
+        .select({ id: sacredContentMediaLinks.id })
+        .from(sacredContentMediaLinks)
+        .where(
+          eq(sacredContentMediaLinks.mediaAssetVersionId, visual.versionId),
+        )
+        .limit(1)
+    ).at(0)!
+    await removeSacredMediaLink(adminId, ctx, visualLink.id)
+    result = await validateVideoRecipe(recipe)
+    expect(result.status).toBe('INVALID')
+    if (result.status === 'INVALID') {
+      expect(
+        result.reasons.some((reason) =>
+          reason.startsWith('visual_link_missing'),
+        ),
+      ).toBe(true)
+    }
+  }, 240_000)
+
+  it('semantic validation catches mutated descriptors even with a recomputed hash', async () => {
+    const serviceId = nextService()
+    const theme = `T11_SEM_${RUN_KEY}`
+    await makeEligibleSacred({
+      themeCode: theme,
+      externalAiPolicy: 'METADATA_ONLY',
+      contentType: 'CHANT',
+    })
+    await makeServiceTemplate(serviceId, [
+      filterSlot({ themeCode: theme, contentType: 'CHANT' }),
+    ])
+    const recipe = await buildValidatedVideoRecipe({
+      serviceId,
+      language: 'en',
+      variationSeed: 's',
+    })
+    expect(recipe.status).toBe('RECIPE_READY')
+    if (recipe.status !== 'RECIPE_READY') return
+    expect(recipe.segments[0].generation).not.toBeNull()
+    expect((await validateVideoRecipe(recipe)).status).toBe('VALID')
+
+    // Mutate descriptor semantics AND recompute a matching checksum:
+    // semantic validation must STILL reject it.
+    const mutated = JSON.parse(JSON.stringify(recipe)) as typeof recipe
+    ;(
+      mutated.segments[0].generation as { textContextAllowed: boolean }
+    ).textContextAllowed = true
+    const { recipeSha256: _drop, ...mutatedBody } = mutated
+    ;(mutated as { recipeSha256: string }).recipeSha256 =
+      computeRecipeSha256(mutatedBody)
+    const result = await validateVideoRecipe(mutated)
+    expect(result.status).toBe('INVALID')
+    if (result.status === 'INVALID') {
+      expect(result.reasons).not.toContain('recipe_hash_mismatch')
+      expect(
+        result.reasons.some((reason) =>
+          reason.startsWith('generation_text_context_mismatch'),
+        ),
+      ).toBe(true)
+    }
+
+    // Mutating the recorded AI policy (again with recomputed hash) is
+    // also caught against the current authoritative profile.
+    const mutatedPolicy = JSON.parse(JSON.stringify(recipe)) as typeof recipe
+    ;(
+      mutatedPolicy.segments[0] as { externalAiPolicy: string }
+    ).externalAiPolicy = 'APPROVED_TEXT_CONTEXT'
+    const { recipeSha256: _drop2, ...mutatedPolicyBody } = mutatedPolicy
+    ;(mutatedPolicy as { recipeSha256: string }).recipeSha256 =
+      computeRecipeSha256(mutatedPolicyBody)
+    const policyResult = await validateVideoRecipe(mutatedPolicy)
+    expect(policyResult.status).toBe('INVALID')
+    if (policyResult.status === 'INVALID') {
+      expect(
+        policyResult.reasons.some((reason) =>
+          reason.startsWith('ai_policy_changed'),
+        ),
+      ).toBe(true)
+    }
+  }, 240_000)
 })
