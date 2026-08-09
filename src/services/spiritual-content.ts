@@ -327,14 +327,23 @@ async function isStructureFrozen(
   return evidence.length > 0
 }
 
+/**
+ * Structural/operational item editing. When the calling surface passes
+ * expectedDomain (guidance actions pass GUIDANCE, sacred actions
+ * SACRED_RUNTIME), a cross-domain target is refused INSIDE the row
+ * lock before any mutation — Step 7 routes can never retarget sacred
+ * items and vice versa. Domain is read from the immutable row, never
+ * from browser input.
+ */
 export async function updateContentItem(
   actorId: number,
   ctx: RequestContext,
   itemId: number,
   input: AnyContentItemInput,
+  expectedDomain?: ContentDomain,
 ): Promise<void> {
   await requirePermission(actorId, 'spiritual_content.manage')
-  await getDb().transaction(async (tx) => {
+  const domain = await getDb().transaction(async (tx) => {
     const row = (
       await tx
         .select()
@@ -344,6 +353,9 @@ export async function updateContentItem(
         .for('update')
     ).at(0)
     if (!row) throw new SpiritualContentError('Content item not found.')
+    if (expectedDomain && row.contentDomain !== expectedDomain) {
+      throw new SpiritualContentError('Content item not found.')
+    }
     const frozen = await isStructureFrozen(itemId, tx)
     const structuralChange =
       input.code !== row.code ||
@@ -384,10 +396,11 @@ export async function updateContentItem(
         sortOrder: input.sortOrder,
       })
       .where(eq(spiritualContentItems.id, itemId))
+    return row.contentDomain
   })
   await recordAuditEvent({
     actorUserId: actorId,
-    action: 'spiritual_content.item_updated',
+    action: `${auditPrefix(domain)}.item_updated`,
     entityType: 'spiritual_content_item',
     entityId: String(itemId),
     metadata: { sortOrder: input.sortOrder },
@@ -410,6 +423,7 @@ export async function setContentItemActive(
   ctx: RequestContext,
   itemId: number,
   active: boolean,
+  expectedDomain?: ContentDomain,
 ): Promise<void> {
   // Grants are read BEFORE the transaction (a lock-holding transaction
   // must never acquire a second pool connection); which grant is
@@ -421,16 +435,22 @@ export async function setContentItemActive(
     actorId,
     'spiritual_content.publish',
   )
-  await getDb().transaction(async (tx) => {
+  const domain = await getDb().transaction(async (tx) => {
     const item = (
       await tx
-        .select({ id: spiritualContentItems.id })
+        .select({
+          id: spiritualContentItems.id,
+          contentDomain: spiritualContentItems.contentDomain,
+        })
         .from(spiritualContentItems)
         .where(eq(spiritualContentItems.id, itemId))
         .limit(1)
         .for('update')
     ).at(0)
     if (!item) throw new SpiritualContentError('Content item not found.')
+    if (expectedDomain && item.contentDomain !== expectedDomain) {
+      throw new SpiritualContentError('Content item not found.')
+    }
     const hasPublicationEvidence =
       (
         await tx
@@ -450,12 +470,13 @@ export async function setContentItemActive(
       .update(spiritualContentItems)
       .set({ active })
       .where(eq(spiritualContentItems.id, itemId))
+    return item.contentDomain
   })
   await recordAuditEvent({
     actorUserId: actorId,
     action: active
-      ? 'spiritual_content.item_updated'
-      : 'spiritual_content.item_deactivated',
+      ? `${auditPrefix(domain)}.item_updated`
+      : `${auditPrefix(domain)}.item_deactivated`,
     entityType: 'spiritual_content_item',
     entityId: String(itemId),
     metadata: { active },

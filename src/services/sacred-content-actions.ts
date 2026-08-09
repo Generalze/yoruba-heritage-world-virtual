@@ -137,9 +137,15 @@ export const updateSacredContentItemFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: idSchema, item: sacredItemSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    // Domain check: this route must never retarget a guidance item.
-    await getContentItemDetail(data.id, 'SACRED_RUNTIME')
-    await updateContentItem(actor.id, requestContext(), data.id, data.item)
+    // Domain enforced INSIDE the item row lock — this route must never
+    // retarget a guidance item.
+    await updateContentItem(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.item,
+      'SACRED_RUNTIME',
+    )
     return { ok: true }
   })
 
@@ -147,8 +153,13 @@ export const setSacredContentActiveFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: idSchema, active: z.boolean() }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    await getContentItemDetail(data.id, 'SACRED_RUNTIME')
-    await setContentItemActive(actor.id, requestContext(), data.id, data.active)
+    await setContentItemActive(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.active,
+      'SACRED_RUNTIME',
+    )
     return { ok: true }
   })
 

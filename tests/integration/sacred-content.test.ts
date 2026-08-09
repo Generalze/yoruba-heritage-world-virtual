@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { eq, inArray, like } from 'drizzle-orm'
+import { and, eq, inArray, like } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/mysql2/migrator'
 
 import { closeDb, getDb } from '@/db'
@@ -44,6 +44,7 @@ import {
   returnVersionToDraft,
   setContentItemActive,
   submitVersionForReview,
+  updateContentItem,
   updateDraftVersion,
 } from '@/services/spiritual-content'
 import {
@@ -1364,5 +1365,189 @@ describe('concurrency', () => {
     expect(await candidateIds({ language: 'en' })).not.toContain(versionId)
     expect(await candidateIds({ language: 'en' })).not.toContain(versionId)
     await setContentItemActive(adminId, ctx, itemId, false)
+  })
+})
+
+// --- Hardening: cross-domain item authority & domain-aware audits -----------
+
+describe('cross-domain item authority', () => {
+  it('a guidance-scoped mutation cannot touch a sacred item (and vice versa) and leaves it unchanged', async () => {
+    const sacredId = await makeSacredItem({
+      contentType: 'BLESSING',
+      sortOrder: 3,
+    })
+    const guidanceItem = await createContentItem(cmId, ctx, {
+      code: nextCode(),
+      contentType: 'PREPARATION',
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+      serviceId: null,
+      sortOrder: 4,
+    })
+    createdItemIds.push(guidanceItem.id)
+    const sacredBefore = (await getContentItemDetail(sacredId)).item
+    const guidanceBefore = (await getContentItemDetail(guidanceItem.id)).item
+
+    // Step 7 (GUIDANCE-scoped) update refused on a sacred item.
+    await expectError(() =>
+      updateContentItem(
+        cmId,
+        ctx,
+        sacredId,
+        {
+          code: nextCode(),
+          contentType: 'PREPARATION',
+          scopeType: 'PLATFORM',
+          sacredHouseId: null,
+          serviceId: null,
+          sortOrder: 99,
+        },
+        'GUIDANCE',
+      ),
+    )
+    // Step 7 (GUIDANCE-scoped) active toggle refused on a sacred item.
+    await expectError(() =>
+      setContentItemActive(cmId, ctx, sacredId, false, 'GUIDANCE'),
+    )
+    const sacredAfter = (await getContentItemDetail(sacredId)).item
+    expect(sacredAfter.code).toBe(sacredBefore.code)
+    expect(sacredAfter.contentType).toBe('BLESSING')
+    expect(sacredAfter.sortOrder).toBe(3)
+    expect(sacredAfter.active).toBe(true)
+
+    // Step 8 (SACRED_RUNTIME-scoped) update refused on a guidance item.
+    await expectError(() =>
+      updateContentItem(
+        cmId,
+        ctx,
+        guidanceItem.id,
+        {
+          code: nextCode(),
+          contentType: 'BLESSING',
+          scopeType: 'PLATFORM',
+          sacredHouseId: null,
+          serviceId: null,
+          sortOrder: 99,
+        },
+        'SACRED_RUNTIME',
+      ),
+    )
+    // Step 8 (SACRED_RUNTIME-scoped) active toggle refused on guidance.
+    await expectError(() =>
+      setContentItemActive(cmId, ctx, guidanceItem.id, false, 'SACRED_RUNTIME'),
+    )
+    const guidanceAfter = (await getContentItemDetail(guidanceItem.id)).item
+    expect(guidanceAfter.code).toBe(guidanceBefore.code)
+    expect(guidanceAfter.contentType).toBe('PREPARATION')
+    expect(guidanceAfter.sortOrder).toBe(4)
+    expect(guidanceAfter.active).toBe(true)
+
+    // Correctly-scoped mutations still work on their own domain.
+    await updateContentItem(
+      cmId,
+      ctx,
+      sacredId,
+      {
+        code: sacredBefore.code,
+        contentType: 'BLESSING',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        sortOrder: 5,
+      },
+      'SACRED_RUNTIME',
+    )
+    expect((await getContentItemDetail(sacredId)).item.sortOrder).toBe(5)
+    await setContentItemActive(cmId, ctx, guidanceItem.id, false, 'GUIDANCE')
+    expect((await getContentItemDetail(guidanceItem.id)).item.active).toBe(
+      false,
+    )
+  })
+
+  it('item mutation audits carry the domain prefix without duplication or leakage', async () => {
+    const sacredId = await makeSacredItem({ contentType: 'OPENING' })
+    const sacredCode = (await getContentItemDetail(sacredId)).item.code
+    await updateContentItem(
+      cmId,
+      ctx,
+      sacredId,
+      {
+        code: sacredCode,
+        contentType: 'OPENING',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        sortOrder: 7,
+      },
+      'SACRED_RUNTIME',
+    )
+    await setContentItemActive(cmId, ctx, sacredId, false, 'SACRED_RUNTIME')
+
+    const guidanceItem = await createContentItem(cmId, ctx, {
+      code: nextCode(),
+      contentType: 'WHAT_TO_EXPECT',
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+      serviceId: null,
+      sortOrder: 0,
+    })
+    createdItemIds.push(guidanceItem.id)
+    const guidanceCode = (await getContentItemDetail(guidanceItem.id)).item.code
+    await updateContentItem(
+      cmId,
+      ctx,
+      guidanceItem.id,
+      {
+        code: guidanceCode,
+        contentType: 'WHAT_TO_EXPECT',
+        scopeType: 'PLATFORM',
+        sacredHouseId: null,
+        serviceId: null,
+        sortOrder: 8,
+      },
+      'GUIDANCE',
+    )
+    await setContentItemActive(cmId, ctx, guidanceItem.id, false, 'GUIDANCE')
+
+    async function itemAudits(itemId: number) {
+      return getDb()
+        .select({
+          action: auditLogs.action,
+          metadataJson: auditLogs.metadataJson,
+        })
+        .from(auditLogs)
+        .where(
+          and(
+            eq(auditLogs.entityType, 'spiritual_content_item'),
+            eq(auditLogs.entityId, String(itemId)),
+          ),
+        )
+    }
+    const sacredAudits = await itemAudits(sacredId)
+    const sacredActions = sacredAudits.map((row) => row.action)
+    expect(sacredActions).toContain('sacred_content.item_updated')
+    expect(sacredActions).toContain('sacred_content.item_deactivated')
+    // Exactly one event per mutation — never a duplicated wrong-domain
+    // twin.
+    expect(sacredActions).not.toContain('spiritual_content.item_updated')
+    expect(sacredActions).not.toContain('spiritual_content.item_deactivated')
+    expect(
+      sacredActions.filter((a) => a === 'sacred_content.item_deactivated')
+        .length,
+    ).toBe(1)
+
+    const guidanceAudits = await itemAudits(guidanceItem.id)
+    const guidanceActions = guidanceAudits.map((row) => row.action)
+    expect(guidanceActions).toContain('spiritual_content.item_updated')
+    expect(guidanceActions).toContain('spiritual_content.item_deactivated')
+    expect(guidanceActions).not.toContain('sacred_content.item_updated')
+    expect(guidanceActions).not.toContain('sacred_content.item_deactivated')
+
+    // No bodies/notes in item audit metadata.
+    for (const row of [...sacredAudits, ...guidanceAudits]) {
+      const metadata = JSON.stringify(row.metadataJson ?? {})
+      expect(metadata).not.toContain('Integration-test prayer block')
+      expect(metadata).not.toContain('synthetic')
+    }
   })
 })

@@ -115,7 +115,15 @@ export const updateSpiritualContentItemFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: idSchema, item: contentItemSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    await updateContentItem(actor.id, requestContext(), data.id, data.item)
+    // Cross-domain server authority: this Step 7 route only mutates
+    // GUIDANCE items — sacred items use /admin/sacred-content.
+    await updateContentItem(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.item,
+      'GUIDANCE',
+    )
     return { ok: true }
   })
 
@@ -123,7 +131,13 @@ export const setSpiritualContentActiveFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: idSchema, active: z.boolean() }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    await setContentItemActive(actor.id, requestContext(), data.id, data.active)
+    await setContentItemActive(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.active,
+      'GUIDANCE',
+    )
     return { ok: true }
   })
 
