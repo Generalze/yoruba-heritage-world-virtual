@@ -128,6 +128,14 @@ function AdminLayout() {
                 Recipes
               </Link>
             ) : null}
+            {admin.permissions.includes('appointments.view') ? (
+              <Link
+                to="/admin/generation-jobs"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Generation
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}

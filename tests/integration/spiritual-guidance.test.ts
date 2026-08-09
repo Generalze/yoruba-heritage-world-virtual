@@ -339,6 +339,34 @@ beforeAll(async () => {
   }
 })
 
+async function purgeGenerationRowsForAppointments(
+  apptIds: Array<number>,
+): Promise<void> {
+  if (apptIds.length === 0) return
+  const db = getDb()
+  const { inArray: inArrayOp } = await import('drizzle-orm')
+  const {
+    prayerGenerationJobEvents,
+    prayerGenerationJobs,
+    prayerGenerationRecipeSnapshots,
+  } = await import('@/db/schema')
+  const jobs = await db
+    .select({ id: prayerGenerationJobs.id })
+    .from(prayerGenerationJobs)
+    .where(inArrayOp(prayerGenerationJobs.appointmentId, apptIds))
+  const jobIds = jobs.map((row) => row.id)
+  if (jobIds.length === 0) return
+  await db
+    .delete(prayerGenerationJobEvents)
+    .where(inArrayOp(prayerGenerationJobEvents.generationJobId, jobIds))
+  await db
+    .delete(prayerGenerationRecipeSnapshots)
+    .where(inArrayOp(prayerGenerationRecipeSnapshots.generationJobId, jobIds))
+  await db
+    .delete(prayerGenerationJobs)
+    .where(inArrayOp(prayerGenerationJobs.id, jobIds))
+}
+
 afterAll(async () => {
   const db = getDb()
   resetPaymentRegistryForTests()
@@ -389,6 +417,7 @@ afterAll(async () => {
       await db
         .delete(paymentAttempts)
         .where(inArray(paymentAttempts.appointmentId, apptIds))
+      await purgeGenerationRowsForAppointments(apptIds)
       await db.delete(appointments).where(inArray(appointments.id, apptIds))
     }
     if (createdItemIds.length > 0) {
@@ -1370,7 +1399,7 @@ describe('guidance assignment', () => {
     await setContentItemActive(adminId, ctx, itemId, false)
   })
 
-  it('records MISSING_LANGUAGE without blocking confirmation (§28)', async () => {
+  it('a missing language snapshot now FAILS confirmation closed (§28 superseded by Step 12 §3)', async () => {
     const brokenUser = await makeEligibleUser('en')
     const reservation = await createReservation(brokenUser, ctx, {
       serviceId,
@@ -1381,10 +1410,17 @@ describe('guidance assignment', () => {
       .update(userProfiles)
       .set({ preferredLanguage: null })
       .where(eq(userProfiles.userId, brokenUser))
-    await confirmReservation(reservation.appointmentId, ctx)
-    const set = await readSet(reservation.appointmentId)
-    expect(set?.selectionResult).toBe('MISSING_LANGUAGE')
-    expect(set?.assignmentCount).toBe(0)
+    // Step 12: the generation language snapshot cannot be established,
+    // so the WHOLE confirmation transaction rolls back — never a
+    // guessed language, never a half-confirmed state.
+    let thrown: unknown = null
+    try {
+      await confirmReservation(reservation.appointmentId, ctx)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).not.toBeNull()
+    expect(await readSet(reservation.appointmentId)).toBeUndefined()
     const appointment = (
       await getDb()
         .select({ status: appointments.status })
@@ -1392,7 +1428,15 @@ describe('guidance assignment', () => {
         .where(eq(appointments.id, reservation.appointmentId))
         .limit(1)
     ).at(0)
-    expect(appointment?.status).toBe('CONFIRMED')
+    expect(appointment?.status).toBe('PENDING_PAYMENT')
+    // Restoring the language allows confirmation to succeed.
+    await getDb()
+      .update(userProfiles)
+      .set({ preferredLanguage: 'en' })
+      .where(eq(userProfiles.userId, brokenUser))
+    await confirmReservation(reservation.appointmentId, ctx)
+    const set = await readSet(reservation.appointmentId)
+    expect(set?.preferredLanguageSnapshot).toBe('en')
   })
 })
 
