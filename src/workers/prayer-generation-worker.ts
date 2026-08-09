@@ -50,7 +50,11 @@ async function main(): Promise<void> {
     const now = new Date()
     if (now.getTime() - lastSweep >= LEASE_SWEEP_INTERVAL_MS) {
       lastSweep = now.getTime()
-      const recovered = await recoverExpiredGenerationLeases(now)
+      // The live clock (not a pinned instant): the sweep must derive
+      // its authoritative time AFTER each job row lock.
+      const recovered = await recoverExpiredGenerationLeases(
+        systemGenerationClock,
+      )
       if (recovered > 0) {
         console.log(`[${WORKER_ID}] recovered ${recovered} expired lease(s)`)
       }
