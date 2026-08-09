@@ -88,6 +88,14 @@ function AdminLayout() {
                 Spiritual Guidance
               </Link>
             ) : null}
+            {admin.permissions.includes('spiritual_content.view') ? (
+              <Link
+                to="/admin/sacred-content"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Sacred Content
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}

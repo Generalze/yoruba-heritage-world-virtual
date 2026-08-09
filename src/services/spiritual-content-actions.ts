@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getDb } from '@/db'
 import {
   CONTENT_SCOPE_TYPES,
-  SPIRITUAL_CONTENT_TYPES,
+  GUIDANCE_CONTENT_TYPES,
   sacredHouses,
   services,
 } from '@/db/schema'
@@ -28,6 +28,7 @@ import {
   updateDraftVersion,
 } from './spiritual-content'
 import { getAppointmentGuidanceAdmin } from './guidance'
+import { requireVersionDomain } from './sacred-content'
 import type { SafeUser } from '@/auth/session'
 
 /**
@@ -59,7 +60,7 @@ const idSchema = z.number().int().positive()
 export const listSpiritualContentFn = createServerFn({ method: 'GET' })
   .validator(
     z.object({
-      contentType: z.enum(SPIRITUAL_CONTENT_TYPES).optional(),
+      contentType: z.enum(GUIDANCE_CONTENT_TYPES).optional(),
       scopeType: z.enum(CONTENT_SCOPE_TYPES).optional(),
       sacredHouseId: idSchema.optional(),
       serviceId: idSchema.optional(),
@@ -90,7 +91,8 @@ export const getSpiritualContentItemFn = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const actor = await requireActor()
     await requirePermission(actor.id, 'spiritual_content.view')
-    const detail = await getContentItemDetail(data.id)
+    // Guidance surface only — sacred items live in /admin/sacred-content.
+    const detail = await getContentItemDetail(data.id, 'GUIDANCE')
     const houses = await getDb()
       .select({ id: sacredHouses.id, name: sacredHouses.name })
       .from(sacredHouses)
@@ -113,7 +115,15 @@ export const updateSpiritualContentItemFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: idSchema, item: contentItemSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    await updateContentItem(actor.id, requestContext(), data.id, data.item)
+    // Cross-domain server authority: this Step 7 route only mutates
+    // GUIDANCE items — sacred items use /admin/sacred-content.
+    await updateContentItem(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.item,
+      'GUIDANCE',
+    )
     return { ok: true }
   })
 
@@ -121,7 +131,13 @@ export const setSpiritualContentActiveFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: idSchema, active: z.boolean() }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    await setContentItemActive(actor.id, requestContext(), data.id, data.active)
+    await setContentItemActive(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.active,
+      'GUIDANCE',
+    )
     return { ok: true }
   })
 
@@ -156,6 +172,9 @@ export const submitSpiritualVersionFn = createServerFn({ method: 'POST' })
   .validator(z.object({ versionId: idSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
+    // Cross-domain server authority: this Step 7 route only drives
+    // GUIDANCE versions — sacred versions use /admin/sacred-content.
+    await requireVersionDomain(data.versionId, 'GUIDANCE')
     await submitVersionForReview(actor.id, requestContext(), data.versionId)
     return { ok: true }
   })
@@ -169,6 +188,7 @@ export const returnSpiritualVersionFn = createServerFn({ method: 'POST' })
   )
   .handler(async ({ data }) => {
     const actor = await requireActor()
+    await requireVersionDomain(data.versionId, 'GUIDANCE')
     await returnVersionToDraft(
       actor.id,
       requestContext(),
@@ -182,6 +202,7 @@ export const approveSpiritualVersionFn = createServerFn({ method: 'POST' })
   .validator(z.object({ versionId: idSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
+    await requireVersionDomain(data.versionId, 'GUIDANCE')
     await approveVersion(actor.id, requestContext(), data.versionId)
     return { ok: true }
   })
@@ -190,6 +211,7 @@ export const publishSpiritualVersionFn = createServerFn({ method: 'POST' })
   .validator(z.object({ versionId: idSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
+    await requireVersionDomain(data.versionId, 'GUIDANCE')
     return publishVersion(actor.id, requestContext(), data.versionId)
   })
 
@@ -197,6 +219,7 @@ export const archiveSpiritualVersionFn = createServerFn({ method: 'POST' })
   .validator(z.object({ versionId: idSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
+    await requireVersionDomain(data.versionId, 'GUIDANCE')
     await archiveVersion(actor.id, requestContext(), data.versionId)
     return { ok: true }
   })

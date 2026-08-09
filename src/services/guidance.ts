@@ -137,6 +137,9 @@ export async function assignGuidanceForAppointmentUnderTx(
   }
 
   // All potentially applicable ACTIVE items in one bounded query.
+  // HARD ISOLATION (Step 8): only the GUIDANCE domain participates in
+  // appointment guidance — sacred runtime content (prayers, chants,
+  // invocations…) must NEVER be assigned as preparation guidance.
   const candidateItems = await tx
     .select({
       id: spiritualContentItems.id,
@@ -147,6 +150,7 @@ export async function assignGuidanceForAppointmentUnderTx(
     .from(spiritualContentItems)
     .where(
       and(
+        eq(spiritualContentItems.contentDomain, 'GUIDANCE'),
         eq(spiritualContentItems.active, true),
         or(
           and(
