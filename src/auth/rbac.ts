@@ -46,6 +46,11 @@ export const PERMISSION_CODES = [
   'spiritual_content.approve',
   'spiritual_content.publish',
   'sacred_content.rights_manage',
+  'media.view',
+  'media.manage',
+  'media.approve',
+  'media.publish',
+  'media.rights_manage',
 ] as const
 export type PermissionCode = (typeof PERMISSION_CODES)[number]
 
@@ -171,6 +176,30 @@ export const PERMISSION_DEFINITIONS: Record<
     description:
       'Record rights/provenance review outcomes for sacred runtime content — an independent gate from cultural approval',
   },
+  'media.view': {
+    name: 'View media library',
+    description: 'Browse the approved media asset library and Visual Bibles',
+  },
+  'media.manage': {
+    name: 'Manage media drafts',
+    description:
+      'Create media assets, upload DRAFT versions, edit draft metadata and author Visual Bible drafts',
+  },
+  'media.approve': {
+    name: 'Approve media',
+    description:
+      'Review submitted media/Visual Bible versions: approve or return with a reason',
+  },
+  'media.publish': {
+    name: 'Publish media',
+    description:
+      'Publish approved media/Visual Bible versions, archive versions, toggle runtime enablement and active state',
+  },
+  'media.rights_manage': {
+    name: 'Manage media rights & consent',
+    description:
+      'Record media rights review outcomes and identifiable-person consent — independent gates from editorial publication',
+  },
 }
 
 /** Appointment operations are ADMIN/SUPER_ADMIN only — catalogue
@@ -196,6 +225,17 @@ const PAYMENT_PERMISSIONS: Array<PermissionCode> = [
 const SPIRITUAL_CONTENT_AUTHORING: Array<PermissionCode> = [
   'spiritual_content.view',
   'spiritual_content.manage',
+]
+
+/** Media authoring for CONTENT_MANAGER; approval/publication/rights/
+ * consent stay ADMIN/SUPER_ADMIN only. */
+const MEDIA_AUTHORING: Array<PermissionCode> = ['media.view', 'media.manage']
+
+const MEDIA_ALL: Array<PermissionCode> = [
+  ...MEDIA_AUTHORING,
+  'media.approve',
+  'media.publish',
+  'media.rights_manage',
 ]
 
 const SPIRITUAL_CONTENT_ALL: Array<PermissionCode> = [
@@ -244,6 +284,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     ...CATALOGUE_VIEW,
     ...CATALOGUE_MANAGE,
     ...SPIRITUAL_CONTENT_AUTHORING,
+    ...MEDIA_AUTHORING,
   ],
   ADMIN: [
     'account.self.read',
@@ -256,6 +297,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     ...APPOINTMENT_PERMISSIONS,
     ...PAYMENT_PERMISSIONS,
     ...SPIRITUAL_CONTENT_ALL,
+    ...MEDIA_ALL,
   ],
   SUPER_ADMIN: [
     'account.self.read',
@@ -268,6 +310,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     ...APPOINTMENT_PERMISSIONS,
     ...PAYMENT_PERMISSIONS,
     ...SPIRITUAL_CONTENT_ALL,
+    ...MEDIA_ALL,
   ],
 }
 

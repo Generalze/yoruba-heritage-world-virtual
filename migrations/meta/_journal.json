@@ -64,6 +64,13 @@
       "when": 1786240243439,
       "tag": "0008_soft_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1786243734164,
+      "tag": "0009_ambitious_energizer",
+      "breakpoints": true
     }
   ]
 }
