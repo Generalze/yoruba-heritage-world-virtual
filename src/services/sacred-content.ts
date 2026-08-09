@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, or } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, or } from 'drizzle-orm'
 import { z } from 'zod'
 
 import { getDb } from '@/db'
@@ -676,6 +676,71 @@ export async function listEligibleSacredRuntimeContent(
   filters: SacredRuntimeCandidateFilters,
   options: { includeBody?: boolean } = {},
 ) {
+  const rows = await queryEligibleRuntimePage(filters, 0, 500)
+  return rows.map((row) => {
+    const { body, ...safe } = row
+    return options.includeBody ? { ...safe, body } : safe
+  })
+}
+
+export type SacredRuntimeCandidate = Awaited<
+  ReturnType<typeof listEligibleSacredRuntimeContent>
+>[number]
+
+/**
+ * COMPLETE candidate enumeration for the Step 9 template resolver:
+ * keyset-paginates on the version id (each page keeps the bounded 500
+ * per-query safety limit) until the library is exhausted, so selection
+ * can never silently omit candidate 501+. A hard overall ceiling
+ * protects against a pathological library size — hitting it is an
+ * explicit error, never a silent truncation.
+ */
+export async function listAllEligibleSacredRuntimeContent(
+  filters: SacredRuntimeCandidateFilters,
+  options: { includeBody?: boolean } = {},
+) {
+  const PAGE_SIZE = 500
+  const HARD_CEILING = 100_000
+  const all: Array<
+    Awaited<ReturnType<typeof queryEligibleRuntimePage>>[number]
+  > = []
+  let afterVersionId = 0
+  for (;;) {
+    const { page, lastRawVersionId } = await queryEligibleRuntimePageRaw(
+      filters,
+      afterVersionId,
+      PAGE_SIZE,
+    )
+    all.push(...page)
+    if (all.length > HARD_CEILING) {
+      throw new SpiritualContentError(
+        'Sacred candidate enumeration exceeded the safety ceiling.',
+      )
+    }
+    if (lastRawVersionId == null) break
+    afterVersionId = lastRawVersionId
+  }
+  return all.map((row) => {
+    const { body, ...safe } = row
+    return options.includeBody ? { ...safe, body } : safe
+  })
+}
+
+/** One bounded, hash-verified candidate page (keyset on version id). */
+async function queryEligibleRuntimePage(
+  filters: SacredRuntimeCandidateFilters,
+  afterVersionId: number,
+  limit: number,
+) {
+  return (await queryEligibleRuntimePageRaw(filters, afterVersionId, limit))
+    .page
+}
+
+async function queryEligibleRuntimePageRaw(
+  filters: SacredRuntimeCandidateFilters,
+  afterVersionId: number,
+  limit: number,
+) {
   if (!GUIDANCE_LANGUAGES.includes(filters.language)) {
     throw new SpiritualContentError('Unsupported language.')
   }
@@ -718,6 +783,9 @@ export async function listEligibleSacredRuntimeContent(
       eq(sacredContentVersionProfiles.themeCode, filters.themeCode),
     )
   }
+  if (afterVersionId > 0) {
+    conditions.push(gt(spiritualContentVersions.id, afterVersionId))
+  }
   const rows = await getDb()
     .select({
       contentItemId: spiritualContentItems.id,
@@ -752,24 +820,22 @@ export async function listEligibleSacredRuntimeContent(
       ),
     )
     .where(and(...conditions))
-    .orderBy(
-      asc(spiritualContentItems.contentType),
-      asc(spiritualContentItems.sortOrder),
-      asc(spiritualContentItems.id),
-    )
-    .limit(500)
+    // Keyset order: stable version-id ascending so pagination is
+    // complete and gap-free regardless of display concerns.
+    .orderBy(asc(spiritualContentVersions.id))
+    .limit(limit)
   // Integrity gate: the stored hash must match the exact stored body.
   // A mismatch excludes the row (fails closed) and is NEVER rewritten.
-  return rows
-    .filter(
-      (row) =>
-        row.contentSha256 != null &&
-        row.contentSha256 === computeBodySha256(row.body),
-    )
-    .map((row) => {
-      const { body, ...safe } = row
-      return options.includeBody ? { ...safe, body } : safe
-    })
+  // The keyset cursor advances over RAW rows, so hash-excluded rows
+  // never stall or truncate pagination.
+  const page = rows.filter(
+    (row) =>
+      row.contentSha256 != null &&
+      row.contentSha256 === computeBodySha256(row.body),
+  )
+  const lastRawVersionId =
+    rows.length === limit ? rows[rows.length - 1].contentVersionId : null
+  return { page, lastRawVersionId }
 }
 
 // --- Staff library queries --------------------------------------------------
