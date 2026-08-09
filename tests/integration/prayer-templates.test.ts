@@ -1439,3 +1439,269 @@ describe('guards', () => {
     expect(resolver).not.toMatch(/Date\.now\s*\(/)
   }, 120_000)
 })
+
+// --- Step 9 hardening: authority, runtime hash gate, >500 templates ---------
+
+describe('resolver hardening', () => {
+  it('a Service context authoritatively determines the House and rejects a contradicting one', async () => {
+    const db = getDb()
+    const key = crypto.randomUUID().slice(0, 6).replace(/-/g, 'x')
+    const otherHouse = await db.insert(sacredHouses).values({
+      code: `T9X_${key}`.toUpperCase(),
+      name: `T9 Other House ${key}`,
+      slug: `t9x-${key}`,
+      status: 'PUBLISHED',
+    })
+    const otherHouseId = otherHouse[0].insertId
+
+    const theme = `T9_AUTH_${RUN_KEY}`
+    await makeEligibleSacred({ themeCode: theme })
+    const templateId = await makeTemplate({ scopeType: 'SERVICE', serviceId })
+    await publishTemplate(
+      templateId,
+      versionInput({ slots: [filterSlot({ themeCode: theme })] }),
+    )
+
+    // Matching House (the Service's own) is fine.
+    const matching = await resolveApprovedPrayerSession({
+      serviceId,
+      sacredHouseId: houseId,
+      language: 'en',
+      variationSeed: 'auth-seed',
+    })
+    expect(matching.status).toBe('RESOLVED')
+
+    // A contradicting House is rejected outright.
+    let thrown: unknown = null
+    try {
+      await resolveApprovedPrayerSession({
+        serviceId,
+        sacredHouseId: otherHouseId,
+        language: 'en',
+        variationSeed: 'auth-seed',
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(PrayerTemplateError)
+
+    await setPrayerTemplateActive(adminId, ctx, templateId, false)
+    await db.delete(sacredHouses).where(eq(sacredHouses.id, otherHouseId))
+  }, 120_000)
+
+  it('a corrupted published definition fails closed at runtime, falls back, and is never auto-healed', async () => {
+    const themeA = `T9_HCA_${RUN_KEY}`
+    const themeB = `T9_HCB_${RUN_KEY}`
+    await makeEligibleSacred({ themeCode: themeA })
+    await makeEligibleSacred({ themeCode: themeB })
+    const templateA = await makeTemplate({ scopeType: 'SERVICE', serviceId })
+    const versionA = await publishTemplate(
+      templateA,
+      versionInput({
+        priority: 10,
+        slots: [filterSlot({ themeCode: themeA })],
+      }),
+    )
+    const templateB = await makeTemplate({ scopeType: 'SERVICE', serviceId })
+    await publishTemplate(
+      templateB,
+      versionInput({
+        priority: 5,
+        slots: [filterSlot({ themeCode: themeB })],
+      }),
+    )
+
+    // Healthy: A (higher priority) resolves with a verified hash.
+    const healthy = await resolveApprovedPrayerSession({
+      serviceId,
+      language: 'en',
+      variationSeed: 'hash-seed',
+    })
+    expect(healthy.status).toBe('RESOLVED')
+    if (healthy.status === 'RESOLVED') {
+      expect(healthy.templateId).toBe(templateA)
+    }
+
+    // Corrupt A's published slot rules directly in the DB: the stored
+    // definition hash no longer matches the authoritative rows.
+    const storedShaBefore = (await loadTemplateVersion(versionA))
+      .definitionSha256
+    await getDb()
+      .update(prayerSessionTemplateSlots)
+      .set({ minSelect: 0 })
+      .where(eq(prayerSessionTemplateSlots.templateVersionId, versionA))
+
+    const fallback = await resolveApprovedPrayerSession({
+      serviceId,
+      language: 'en',
+      variationSeed: 'hash-seed',
+    })
+    expect(fallback.status).toBe('RESOLVED')
+    if (fallback.status === 'RESOLVED') {
+      expect(fallback.templateId).toBe(templateB)
+    }
+    // The stored hash was NOT rewritten to match the corruption.
+    expect((await loadTemplateVersion(versionA)).definitionSha256).toBe(
+      storedShaBefore,
+    )
+
+    // With the fallback deactivated, resolution fails CLOSED.
+    await setPrayerTemplateActive(adminId, ctx, templateB, false)
+    const failed = await resolveApprovedPrayerSession({
+      serviceId,
+      language: 'en',
+      variationSeed: 'hash-seed',
+    })
+    expect(failed.status).toBe('NO_VALID_TEMPLATE')
+
+    await setPrayerTemplateActive(adminId, ctx, templateA, false)
+  }, 120_000)
+
+  it('applicable-template discovery paginates past 500 — template 501+ is resolvable', async () => {
+    const db = getDb()
+    const key = crypto.randomUUID().slice(0, 6).replace(/-/g, 'x')
+    // Dedicated service so this fleet cannot collide with other tests.
+    const bulkSvc = await db.insert(services).values({
+      sacredHouseId: houseId,
+      code: `T9B_${key}`.toUpperCase(),
+      name: `T9 Bulk Service ${key}`,
+      slug: `t9b-${key}`,
+      serviceStatus: 'PUBLISHED',
+      durationMinutes: 60,
+      priceMinor: 500_000,
+      currency: 'NGN',
+    })
+    const bulkServiceId = bulkSvc[0].insertId
+    const winnerTheme = `T9_WIN_${RUN_KEY}`
+    const emptyTheme = `T9_NONE_${RUN_KEY}`
+    await makeEligibleSacred({ themeCode: winnerTheme })
+
+    const TOTAL = 520
+    // Bulk-insert published SERVICE templates directly. The first 519
+    // filter on a theme with NO candidates (and carry a deliberately
+    // wrong hash — both make them fail closed); the LAST inserted
+    // (highest version id, beyond any 500-row truncation) is the only
+    // resolvable one and gets its true canonical hash below.
+    for (let start = 0; start < TOTAL; start += 130) {
+      const chunk = Array.from(
+        { length: Math.min(130, TOTAL - start) },
+        (_, i) => ({
+          publicId: crypto.randomUUID(),
+          code: `${CODE_PREFIX}_BT_${start + i}`,
+          scopeType: 'SERVICE' as const,
+          serviceId: bulkServiceId,
+          createdBy: cmId,
+        }),
+      )
+      await db.insert(prayerSessionTemplates).values(chunk)
+    }
+    const templateRows = await db
+      .select({
+        id: prayerSessionTemplates.id,
+        code: prayerSessionTemplates.code,
+      })
+      .from(prayerSessionTemplates)
+      .where(like(prayerSessionTemplates.code, `${CODE_PREFIX}\\_BT\\_%`))
+    expect(templateRows.length).toBe(TOTAL)
+    createdTemplateIds.push(...templateRows.map((row) => row.id))
+    const orderedTemplates = [...templateRows].sort((a, b) => a.id - b.id)
+    for (let start = 0; start < orderedTemplates.length; start += 130) {
+      await db.insert(prayerSessionTemplateVersions).values(
+        orderedTemplates.slice(start, start + 130).map((row) => ({
+          templateId: row.id,
+          language: 'en' as const,
+          versionNumber: 1,
+          status: 'PUBLISHED' as const,
+          priority: 0,
+          selectionWeight: 1,
+          targetMinSeconds: 60,
+          targetMaxSeconds: 180,
+          definitionSha256: 'e'.repeat(64),
+          publishedAt: new Date(),
+          createdBy: cmId,
+        })),
+      )
+    }
+    const versionRows = await db
+      .select({
+        id: prayerSessionTemplateVersions.id,
+        templateId: prayerSessionTemplateVersions.templateId,
+      })
+      .from(prayerSessionTemplateVersions)
+      .where(
+        inArray(
+          prayerSessionTemplateVersions.templateId,
+          templateRows.map((row) => row.id),
+        ),
+      )
+    expect(versionRows.length).toBe(TOTAL)
+    const winnerVersion = versionRows.reduce((max, row) =>
+      row.id > max.id ? row : max,
+    )
+    for (let start = 0; start < versionRows.length; start += 130) {
+      await db.insert(prayerSessionTemplateSlots).values(
+        versionRows.slice(start, start + 130).map((row) => ({
+          templateVersionId: row.id,
+          slotKey: 'MAIN_PRAYER',
+          position: 1,
+          slotKind: 'CONTENT' as const,
+          minSelect: 1,
+          maxSelect: 1,
+          contentType: 'PRAYER',
+          selectorMode: 'ELIGIBLE_FILTER' as const,
+          themeCode: row.id === winnerVersion.id ? winnerTheme : emptyTheme,
+        })),
+      )
+    }
+    const slotRows = await db
+      .select({
+        id: prayerSessionTemplateSlots.id,
+        templateVersionId: prayerSessionTemplateSlots.templateVersionId,
+      })
+      .from(prayerSessionTemplateSlots)
+      .where(
+        inArray(
+          prayerSessionTemplateSlots.templateVersionId,
+          versionRows.map((row) => row.id),
+        ),
+      )
+    for (let start = 0; start < slotRows.length; start += 130) {
+      await db.insert(prayerTemplateSlotScopes).values(
+        slotRows.slice(start, start + 130).map((row) => ({
+          slotId: row.id,
+          scopeType: 'PLATFORM' as const,
+        })),
+      )
+    }
+    // Give ONLY the winner its true canonical hash.
+    const winnerDefinition = await loadTemplateDefinition(winnerVersion.id)
+    await db
+      .update(prayerSessionTemplateVersions)
+      .set({ definitionSha256: computeDefinitionSha256(winnerDefinition) })
+      .where(eq(prayerSessionTemplateVersions.id, winnerVersion.id))
+
+    // The winner sits beyond position 500 of the discovery scan —
+    // complete enumeration must still find and resolve it.
+    const resolved = await resolveApprovedPrayerSession({
+      serviceId: bulkServiceId,
+      language: 'en',
+      variationSeed: 'bulk-tpl-seed',
+    })
+    expect(resolved.status).toBe('RESOLVED')
+    if (resolved.status === 'RESOLVED') {
+      expect(resolved.templateId).toBe(winnerVersion.templateId)
+      expect(resolved.slots[0].selections.length).toBe(1)
+    }
+
+    // Deactivate the fleet so later resolutions stay lean.
+    await db
+      .update(prayerSessionTemplates)
+      .set({ active: false })
+      .where(
+        inArray(
+          prayerSessionTemplates.id,
+          templateRows.map((row) => row.id),
+        ),
+      )
+  }, 240_000)
+})
