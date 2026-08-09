@@ -312,37 +312,72 @@ export async function claimNextGenerationJob(
   })
 }
 
+/**
+ * Renews a live lease. LOCK-WAIT SAFETY: the authoritative clock
+ * reading is taken AFTER the job row lock is acquired, so time spent
+ * waiting on another transaction's lock can never let an expired lease
+ * be renewed with a pre-lock timestamp. The new expiry is derived from
+ * that same post-lock reading.
+ */
 export async function renewGenerationLease(
   jobId: number,
   leaseToken: string,
-  now: Date,
+  clock: GenerationClock,
   leaseMs: number = DEFAULT_LEASE_MS,
 ): Promise<boolean> {
-  const updated = await getDb()
-    .update(prayerGenerationJobs)
-    .set({ leaseExpiresAt: new Date(now.getTime() + leaseMs) })
-    .where(
-      and(
-        eq(prayerGenerationJobs.id, jobId),
-        eq(prayerGenerationJobs.leaseToken, leaseToken),
-        sql`${prayerGenerationJobs.leaseExpiresAt} > ${toSqlDate(now)}`,
-      ),
-    )
-  return updated[0].affectedRows === 1
+  return getDb().transaction(async (tx) => {
+    const job = (
+      await tx
+        .select({
+          id: prayerGenerationJobs.id,
+          leaseToken: prayerGenerationJobs.leaseToken,
+          leaseExpiresAt: prayerGenerationJobs.leaseExpiresAt,
+        })
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    // Authoritative time: read ONLY after the row lock is held.
+    const freshNow = clock.now()
+    if (
+      !job ||
+      job.leaseToken !== leaseToken ||
+      job.leaseExpiresAt == null ||
+      job.leaseExpiresAt <= freshNow
+    ) {
+      return false
+    }
+    const updated = await tx
+      .update(prayerGenerationJobs)
+      .set({ leaseExpiresAt: new Date(freshNow.getTime() + leaseMs) })
+      .where(
+        and(
+          eq(prayerGenerationJobs.id, jobId),
+          eq(prayerGenerationJobs.leaseToken, leaseToken),
+        ),
+      )
+    return updated[0].affectedRows === 1
+  })
 }
 
 /**
- * Lease-guarded status transition: the CAS re-requires the current
- * status AND the caller's live lease token, so a stale worker (lease
- * lost/expired) can never overwrite state. Every transition is checked
- * against the central legal map and recorded as an event.
+ * Lease-guarded status transition: the transition re-requires the
+ * current status AND the caller's live lease token, so a stale worker
+ * (lease lost/expired) can never overwrite state. Every transition is
+ * checked against the central legal map and recorded as an event.
+ *
+ * LOCK-WAIT SAFETY: the job row is locked FIRST and the authoritative
+ * clock reading taken afterwards — waiting on another transaction's
+ * lock can never let an expired lease transition using a pre-lock
+ * timestamp.
  */
 export async function transitionGenerationJobUnderLease(
   jobId: number,
   leaseToken: string,
   from: GenerationJobStatus,
   to: GenerationJobStatus,
-  now: Date,
+  clock: GenerationClock,
   options: {
     eventCode?: string
     detailCode?: string
@@ -355,6 +390,30 @@ export async function transitionGenerationJobUnderLease(
     throw new GenerationJobError(`Illegal transition ${from} → ${to}.`)
   }
   return getDb().transaction(async (tx) => {
+    const job = (
+      await tx
+        .select({
+          id: prayerGenerationJobs.id,
+          status: prayerGenerationJobs.status,
+          leaseToken: prayerGenerationJobs.leaseToken,
+          leaseExpiresAt: prayerGenerationJobs.leaseExpiresAt,
+        })
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    // Authoritative time: read ONLY after the row lock is held.
+    const freshNow = clock.now()
+    if (
+      !job ||
+      job.status !== from ||
+      job.leaseToken !== leaseToken ||
+      job.leaseExpiresAt == null ||
+      job.leaseExpiresAt <= freshNow
+    ) {
+      return false
+    }
     const updated = await tx
       .update(prayerGenerationJobs)
       .set({
@@ -374,7 +433,6 @@ export async function transitionGenerationJobUnderLease(
           eq(prayerGenerationJobs.id, jobId),
           eq(prayerGenerationJobs.status, from),
           eq(prayerGenerationJobs.leaseToken, leaseToken),
-          sql`${prayerGenerationJobs.leaseExpiresAt} > ${toSqlDate(now)}`,
         ),
       )
     if (updated[0].affectedRows !== 1) return false
@@ -497,8 +555,9 @@ export async function recoverExpiredGenerationLeases(
 
 /**
  * ONE transaction finalizes a prepared recipe: lock + re-read the job,
- * require PREPARING + the exact live lease (checked against a FRESH
- * clock reading), allocate the next snapshot number, insert the
+ * take the authoritative clock reading AFTER the lock, require
+ * PREPARING + the exact live lease against it, verify the central
+ * transition map, allocate the next snapshot number, insert the
  * immutable snapshot, transition PREPARING → STORYBOARDING, store the
  * attempt count, set prepared_at, clear the lease and record the
  * event. If ANY lease/status check fails, NOTHING is inserted — a
@@ -515,8 +574,14 @@ export async function persistPreparedRecipeUnderLease(
   const payloadSha256 = createHash('sha256')
     .update(recipeJsonText, 'utf8')
     .digest('hex')
+  // Central state-machine authority: the finalizer may never bypass
+  // GENERATION_TRANSITIONS.
+  if (!isLegalTransition('PREPARING', 'STORYBOARDING')) {
+    throw new GenerationJobError(
+      'Illegal transition PREPARING → STORYBOARDING.',
+    )
+  }
   return getDb().transaction(async (tx) => {
-    const freshNow = clock.now()
     const job = (
       await tx
         .select()
@@ -525,6 +590,9 @@ export async function persistPreparedRecipeUnderLease(
         .limit(1)
         .for('update')
     ).at(0)
+    // Authoritative time: read ONLY after the row lock is held, so a
+    // lock wait cannot let an expired lease finalize.
+    const freshNow = clock.now()
     if (
       !job ||
       job.status !== 'PREPARING' ||
@@ -606,7 +674,7 @@ function sanitizeErrorMessage(error: unknown): string {
 async function scheduleRetryOrFail(
   job: typeof prayerGenerationJobs.$inferSelect,
   leaseToken: string,
-  now: Date,
+  clock: GenerationClock,
   errorCode: string,
   errorMessage: string | null,
 ): Promise<'RETRYING' | 'FAILED' | 'LOST'> {
@@ -617,7 +685,7 @@ async function scheduleRetryOrFail(
       leaseToken,
       'PREPARING',
       'FAILED',
-      now,
+      clock,
       {
         eventCode: 'max_attempts_exhausted',
         detailCode: errorCode,
@@ -643,7 +711,7 @@ async function scheduleRetryOrFail(
     leaseToken,
     'PREPARING',
     'RETRYING',
-    now,
+    clock,
     {
       eventCode: 'retry_scheduled',
       detailCode: errorCode,
@@ -652,7 +720,7 @@ async function scheduleRetryOrFail(
       patch: {
         attemptCount: nextAttempt,
         resumeStatus: 'PREPARING',
-        nextAttemptAt: new Date(now.getTime() + delayMinutes * 60_000),
+        nextAttemptAt: new Date(clock.now().getTime() + delayMinutes * 60_000),
         lastErrorCode: errorCode,
         lastErrorMessage: errorMessage,
       },
@@ -700,10 +768,10 @@ export async function runGenerationPreparationOnce(
   // clock.now(); a failed renewal marks this worker STALE — it must
   // not persist or finalize anything afterwards.
   const heartbeat = async (): Promise<boolean> =>
-    renewGenerationLease(job.id, leaseToken, clock.now())
+    renewGenerationLease(job.id, leaseToken, clock)
   const heartbeatTimer = setInterval(
     () => {
-      void renewGenerationLease(job.id, leaseToken, clock.now()).catch(
+      void renewGenerationLease(job.id, leaseToken, clock).catch(
         () => undefined,
       )
     },
@@ -715,7 +783,7 @@ export async function runGenerationPreparationOnce(
     leaseToken,
     job.status,
     'PREPARING',
-    clock.now(),
+    clock,
     {
       eventCode: 'preparation_started',
       attemptNumber: attempt,
@@ -740,7 +808,7 @@ export async function runGenerationPreparationOnce(
         leaseToken,
         'PREPARING',
         'FAILED',
-        clock.now(),
+        clock,
         {
           eventCode: 'context_invalid',
           detailCode: 'FROZEN_CONTEXT_INVALID',
@@ -779,7 +847,7 @@ export async function runGenerationPreparationOnce(
         leaseToken,
         'PREPARING',
         'FAILED',
-        clock.now(),
+        clock,
         {
           eventCode: 'recipe_unavailable',
           detailCode: recipe.reasons[0]?.slice(0, 100) ?? null,
@@ -806,7 +874,7 @@ export async function runGenerationPreparationOnce(
       const outcome = await scheduleRetryOrFail(
         job,
         leaseToken,
-        clock.now(),
+        clock,
         'RECIPE_INVALID',
         validation.reasons.join(', ').slice(0, 500),
       )
@@ -840,7 +908,7 @@ export async function runGenerationPreparationOnce(
     const outcome = await scheduleRetryOrFail(
       job,
       leaseToken,
-      clock.now(),
+      clock,
       'PREPARATION_ERROR',
       sanitizeErrorMessage(error),
     )

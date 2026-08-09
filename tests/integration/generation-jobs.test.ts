@@ -85,6 +85,7 @@ import {
 } from '@/providers/payments/registry'
 import {
   DEFAULT_LEASE_MS,
+  GENERATION_TRANSITIONS,
   GenerationJobError,
   adminCancelGenerationJob,
   adminRetryGenerationJob,
@@ -762,10 +763,14 @@ describe('queue, lease and state machine', () => {
     expect(claims.length).toBe(1)
     const winner = claims[0]!
     // Renew works with the live token, not with garbage.
-    expect(await renewGenerationLease(job.id, winner.leaseToken, t0)).toBe(true)
-    expect(await renewGenerationLease(job.id, crypto.randomUUID(), t0)).toBe(
-      false,
-    )
+    expect(
+      await renewGenerationLease(job.id, winner.leaseToken, { now: () => t0 }),
+    ).toBe(true)
+    expect(
+      await renewGenerationLease(job.id, crypto.randomUUID(), {
+        now: () => t0,
+      }),
+    ).toBe(false)
     // Wrong token cannot transition.
     expect(
       await transitionGenerationJobUnderLease(
@@ -773,7 +778,7 @@ describe('queue, lease and state machine', () => {
         crypto.randomUUID(),
         'QUEUED',
         'PREPARING',
-        t0,
+        { now: () => t0 },
       ),
     ).toBe(false)
     // Live token transitions QUEUED → PREPARING.
@@ -783,7 +788,7 @@ describe('queue, lease and state machine', () => {
         winner.leaseToken,
         'QUEUED',
         'PREPARING',
-        t0,
+        { now: () => t0 },
         { eventCode: 'test_preparing' },
       ),
     ).toBe(true)
@@ -795,7 +800,7 @@ describe('queue, lease and state machine', () => {
         winner.leaseToken,
         'PREPARING',
         'READY',
-        t0,
+        { now: () => t0 },
       )
     } catch (error) {
       illegal = error
@@ -818,7 +823,7 @@ describe('queue, lease and state machine', () => {
         winner.leaseToken,
         'RETRYING',
         'PREPARING',
-        t1,
+        { now: () => t1 },
       ),
     ).toBe(false)
   }, 120_000)
@@ -1248,7 +1253,7 @@ describe('lease hardening', () => {
         leaseToken,
         'QUEUED',
         'PREPARING',
-        clock.now(),
+        { now: () => clock.now() },
       ),
     ).toBe(true)
     // …builds a perfectly VALID recipe…
@@ -1300,7 +1305,7 @@ describe('lease hardening', () => {
         claim1!.leaseToken,
         'QUEUED',
         'PREPARING',
-        clock.now(),
+        { now: () => clock.now() },
       ),
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
@@ -1321,7 +1326,7 @@ describe('lease hardening', () => {
         claim2!.leaseToken,
         'RETRYING',
         'PREPARING',
-        clock.now(),
+        { now: () => clock.now() },
       ),
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
@@ -1351,5 +1356,194 @@ describe('lease hardening', () => {
       'synthetic close-out of exhausted job',
     )
     expect((await jobForAppointment(appointmentId))!.status).toBe('CANCELLED')
+  }, 240_000)
+})
+
+// --- Step 12: lock-wait lease authority ------------------------------------
+
+/**
+ * Holds an exclusive row lock on the job, starts a lease-sensitive
+ * operation (which blocks on that lock), advances the fake clock past
+ * the lease WHILE it waits, then releases the lock. The operation's
+ * authoritative time must be read AFTER it acquires the lock, so it
+ * has to observe the expired lease and fail.
+ */
+async function runDuringLockWait<T>(
+  jobId: number,
+  start: () => Promise<T>,
+  whileWaiting: () => void,
+): Promise<T> {
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let signalLocked: (() => void) | undefined
+  const lockAcquired = new Promise<void>((resolve) => {
+    signalLocked = resolve
+  })
+  const blocker = getDb().transaction(async (tx) => {
+    await tx
+      .select({ id: prayerGenerationJobs.id })
+      .from(prayerGenerationJobs)
+      .where(eq(prayerGenerationJobs.id, jobId))
+      .limit(1)
+      .for('update')
+    signalLocked?.()
+    await held
+  })
+  await lockAcquired
+  const pending = start()
+  // Give the operation time to reach the row lock, then expire the
+  // lease while it is still waiting.
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  whileWaiting()
+  release?.()
+  await blocker
+  return pending
+}
+
+/** Re-arms a live PREPARING lease for the given token. */
+async function armLease(
+  jobId: number,
+  leaseToken: string,
+  clockNow: Date,
+): Promise<void> {
+  await getDb()
+    .update(prayerGenerationJobs)
+    .set({
+      status: 'PREPARING',
+      leaseToken,
+      leaseOwner: 'lockwait-worker',
+      leaseAcquiredAt: clockNow,
+      leaseExpiresAt: new Date(clockNow.getTime() + DEFAULT_LEASE_MS),
+    })
+    .where(eq(prayerGenerationJobs.id, jobId))
+}
+
+describe('lock-wait lease authority', () => {
+  it('a lease that expires during a lock wait cannot renew, transition or finalize', async () => {
+    const userId = await makeEligibleUser()
+    const { appointmentId } = await reserveAndConfirm(userId)
+    const job = (await jobForAppointment(appointmentId))!
+    await quiesceOtherJobs(job.id)
+    const clock = makeFakeClock(Date.now())
+    const leaseToken = crypto.randomUUID()
+
+    // A genuinely valid recipe, built while the worker was healthy.
+    const recipe = await buildValidatedVideoRecipe({
+      serviceId: job.serviceIdSnapshot,
+      language: job.languageSnapshot,
+      variationSeed: job.variationSeed,
+    })
+    expect(recipe.status).toBe('RECIPE_READY')
+    if (recipe.status !== 'RECIPE_READY') return
+
+    // --- renew: lease live at start, expired by the time the lock frees
+    await armLease(job.id, leaseToken, clock.now())
+    const renewed = await runDuringLockWait(
+      job.id,
+      () => renewGenerationLease(job.id, leaseToken, clock),
+      () => clock.advance(DEFAULT_LEASE_MS + 60_000),
+    )
+    expect(renewed).toBe(false)
+
+    // --- transition: same race, must refuse
+    await armLease(job.id, leaseToken, clock.now())
+    const transitioned = await runDuringLockWait(
+      job.id,
+      () =>
+        transitionGenerationJobUnderLease(
+          job.id,
+          leaseToken,
+          'PREPARING',
+          'STORYBOARDING',
+          clock,
+          { eventCode: 'lockwait_attempt' },
+        ),
+      () => clock.advance(DEFAULT_LEASE_MS + 60_000),
+    )
+    expect(transitioned).toBe(false)
+    expect((await jobForAppointment(appointmentId))!.status).toBe('PREPARING')
+
+    // --- finalize: same race, must refuse and insert ZERO snapshots
+    await armLease(job.id, leaseToken, clock.now())
+    const persisted = await runDuringLockWait(
+      job.id,
+      () =>
+        persistPreparedRecipeUnderLease(job.id, leaseToken, 1, recipe, clock),
+      () => clock.advance(DEFAULT_LEASE_MS + 60_000),
+    )
+    expect(persisted).toBeNull()
+    expect(await snapshotCount(job.id)).toBe(0)
+    expect((await jobForAppointment(appointmentId))!.status).toBe('PREPARING')
+
+    // Sanity: with a live lease and no lock contention the same
+    // finalize succeeds — the refusals above were the lease check, not
+    // a broken finalizer.
+    await armLease(job.id, leaseToken, clock.now())
+    const ok = await persistPreparedRecipeUnderLease(
+      job.id,
+      leaseToken,
+      1,
+      recipe,
+      clock,
+    )
+    expect(ok).not.toBeNull()
+    expect(await snapshotCount(job.id)).toBe(1)
+    expect((await jobForAppointment(appointmentId))!.status).toBe(
+      'STORYBOARDING',
+    )
+  }, 240_000)
+
+  it('the finalizer consults the central transition map at runtime', async () => {
+    const userId = await makeEligibleUser()
+    const { appointmentId } = await reserveAndConfirm(userId)
+    const job = (await jobForAppointment(appointmentId))!
+    await quiesceOtherJobs(job.id)
+    const clock = makeFakeClock(Date.now())
+    const leaseToken = crypto.randomUUID()
+    const recipe = await buildValidatedVideoRecipe({
+      serviceId: job.serviceIdSnapshot,
+      language: job.languageSnapshot,
+      variationSeed: job.variationSeed,
+    })
+    if (recipe.status !== 'RECIPE_READY') throw new Error('expected recipe')
+    await armLease(job.id, leaseToken, clock.now())
+
+    // Remove PREPARING → STORYBOARDING from the CENTRAL map: the
+    // finalizer must refuse and insert nothing, proving it does not
+    // bypass GENERATION_TRANSITIONS.
+    const original = [...GENERATION_TRANSITIONS.PREPARING]
+    GENERATION_TRANSITIONS.PREPARING = original.filter(
+      (status) => status !== 'STORYBOARDING',
+    )
+    let thrown: unknown = null
+    try {
+      await persistPreparedRecipeUnderLease(
+        job.id,
+        leaseToken,
+        1,
+        recipe,
+        clock,
+      )
+    } catch (error) {
+      thrown = error
+    } finally {
+      GENERATION_TRANSITIONS.PREPARING = original
+    }
+    expect(thrown).toBeInstanceOf(GenerationJobError)
+    expect(await snapshotCount(job.id)).toBe(0)
+    expect((await jobForAppointment(appointmentId))!.status).toBe('PREPARING')
+
+    // Restored map → the same finalization succeeds.
+    const ok = await persistPreparedRecipeUnderLease(
+      job.id,
+      leaseToken,
+      1,
+      recipe,
+      clock,
+    )
+    expect(ok).not.toBeNull()
+    expect(await snapshotCount(job.id)).toBe(1)
   }, 240_000)
 })
