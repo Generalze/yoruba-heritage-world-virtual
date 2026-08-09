@@ -214,10 +214,37 @@ function GenerationJobsPage() {
             </div>
             {detail.snapshots.map((snapshot) => (
               <div key={snapshot.id} className="break-all sm:col-span-2">
-                Snapshot #{snapshot.snapshotNumber} · recipe{' '}
+                Recipe snapshot #{snapshot.snapshotNumber} · recipe{' '}
                 {snapshot.recipeSha256} · payload {snapshot.payloadSha256}
               </div>
             ))}
+            {detail.storyboards.map((storyboard) => (
+              <div key={storyboard.id} className="break-all sm:col-span-2">
+                Storyboard #{storyboard.snapshotNumber} ·{' '}
+                {storyboard.sceneCount} scenes · {storyboard.totalDurationMs} ms
+                · hash {storyboard.storyboardSha256}
+              </div>
+            ))}
+            {detail.manifests.map((manifest) => (
+              <div key={manifest.id} className="break-all sm:col-span-2">
+                Manifest #{manifest.snapshotNumber} · {manifest.visualTaskCount}{' '}
+                visual task(s) · {manifest.audioRequirementCount} audio
+                requirement(s) · hash {manifest.manifestSha256}
+              </div>
+            ))}
+            {Object.keys(detail.sceneModes).length > 0 ? (
+              <div className="sm:col-span-2">
+                Scene modes:{' '}
+                {Object.entries(detail.sceneModes)
+                  .map(([mode, count]) => `${mode} ×${count}`)
+                  .join(', ')}
+                {' · '}Audio:{' '}
+                {Object.entries(detail.audioModes)
+                  .map(([mode, count]) => `${mode} ×${count}`)
+                  .join(', ')}
+                {' · '}Storyboard integrity: {detail.storyboardIntegrity}
+              </div>
+            ) : null}
           </dl>
           <h3 className="mt-4 text-xs tracking-widest text-stone-500 uppercase">
             Events

@@ -9,7 +9,9 @@ import {
   appointments,
   prayerGenerationJobEvents,
   prayerGenerationJobs,
+  prayerGenerationManifestSnapshots,
   prayerGenerationRecipeSnapshots,
+  prayerGenerationStoryboardSnapshots,
   sacredHouses,
   services,
 } from '@/db/schema'
@@ -64,6 +66,7 @@ export const GENERATION_TRANSITIONS: Record<
   QUEUED: ['PREPARING', 'CANCELLED'],
   RETRYING: [
     'PREPARING',
+    'STORYBOARDING',
     'GENERATING_VISUALS',
     'GENERATING_AUDIO',
     'RENDERING',
@@ -257,10 +260,11 @@ function toSqlDate(date: Date): Date {
  * locking + in-lock recheck guarantee two workers can never own the
  * same live lease. Time is injectable for tests.
  */
-export async function claimNextGenerationJob(
+async function claimDueJob(
   workerId: string,
   now: Date,
-  leaseMs: number = DEFAULT_LEASE_MS,
+  leaseMs: number,
+  claimable: (jobs: typeof prayerGenerationJobs) => ReturnType<typeof and>,
 ): Promise<ClaimedJob | null> {
   return getDb().transaction(async (tx) => {
     const candidate = (
@@ -269,7 +273,7 @@ export async function claimNextGenerationJob(
         .from(prayerGenerationJobs)
         .where(
           and(
-            inArray(prayerGenerationJobs.status, ['QUEUED', 'RETRYING']),
+            claimable(prayerGenerationJobs),
             or(
               isNull(prayerGenerationJobs.nextAttemptAt),
               lte(prayerGenerationJobs.nextAttemptAt, toSqlDate(now)),
@@ -297,7 +301,7 @@ export async function claimNextGenerationJob(
       .where(
         and(
           eq(prayerGenerationJobs.id, candidate.id),
-          inArray(prayerGenerationJobs.status, ['QUEUED', 'RETRYING']),
+          eq(prayerGenerationJobs.status, candidate.status),
           or(
             isNull(prayerGenerationJobs.leaseExpiresAt),
             lte(prayerGenerationJobs.leaseExpiresAt, toSqlDate(now)),
@@ -310,6 +314,40 @@ export async function claimNextGenerationJob(
       leaseToken,
     }
   })
+}
+
+/** PREPARATION stage claim: fresh QUEUED work, or a RETRYING job that
+ * resumes preparation (never one resuming a later stage). */
+export async function claimNextGenerationJob(
+  workerId: string,
+  now: Date,
+  leaseMs: number = DEFAULT_LEASE_MS,
+): Promise<ClaimedJob | null> {
+  return claimDueJob(workerId, now, leaseMs, (jobs) =>
+    or(
+      eq(jobs.status, 'QUEUED'),
+      and(
+        eq(jobs.status, 'RETRYING'),
+        or(isNull(jobs.resumeStatus), eq(jobs.resumeStatus, 'PREPARING')),
+      ),
+    ),
+  )
+}
+
+/** STORYBOARD stage claim (Step 13): a job parked in STORYBOARDING, or
+ * a RETRYING job whose resume stage is STORYBOARDING. Claimed from its
+ * own queue so continuous preparation work cannot starve it. */
+export async function claimNextStoryboardJob(
+  workerId: string,
+  now: Date,
+  leaseMs: number = DEFAULT_LEASE_MS,
+): Promise<ClaimedJob | null> {
+  return claimDueJob(workerId, now, leaseMs, (jobs) =>
+    or(
+      eq(jobs.status, 'STORYBOARDING'),
+      and(eq(jobs.status, 'RETRYING'), eq(jobs.resumeStatus, 'STORYBOARDING')),
+    ),
+  )
 }
 
 /**
@@ -451,6 +489,8 @@ export async function transitionGenerationJobUnderLease(
 /** Statuses a worker may hold a lease in (processing states). */
 const LEASED_PROCESSING_STATUSES: Array<GenerationJobStatus> = [
   'PREPARING',
+  // Step 13: storyboard planning is actively processed under a lease.
+  'STORYBOARDING',
   'GENERATING_VISUALS',
   'GENERATING_AUDIO',
   'RENDERING',
@@ -665,25 +705,26 @@ export async function persistPreparedRecipeUnderLease(
 
 // --- Retry / failure helpers ------------------------------------------------
 
-function sanitizeErrorMessage(error: unknown): string {
+export function sanitizeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   // Bounded, single-line, no stack traces or payloads.
   return message.replaceAll('\n', ' ').slice(0, 500)
 }
 
-async function scheduleRetryOrFail(
+export async function scheduleRetryOrFail(
   job: typeof prayerGenerationJobs.$inferSelect,
   leaseToken: string,
   clock: GenerationClock,
   errorCode: string,
   errorMessage: string | null,
+  stage: GenerationJobStatus = 'PREPARING',
 ): Promise<'RETRYING' | 'FAILED' | 'LOST'> {
   const nextAttempt = job.attemptCount + 1
   if (nextAttempt >= job.maxAttempts) {
     const ok = await transitionGenerationJobUnderLease(
       job.id,
       leaseToken,
-      'PREPARING',
+      stage,
       'FAILED',
       clock,
       {
@@ -709,7 +750,7 @@ async function scheduleRetryOrFail(
   const ok = await transitionGenerationJobUnderLease(
     job.id,
     leaseToken,
-    'PREPARING',
+    stage,
     'RETRYING',
     clock,
     {
@@ -719,7 +760,7 @@ async function scheduleRetryOrFail(
       clearLease: true,
       patch: {
         attemptCount: nextAttempt,
-        resumeStatus: 'PREPARING',
+        resumeStatus: stage,
         nextAttemptAt: new Date(clock.now().getTime() + delayMinutes * 60_000),
         lastErrorCode: errorCode,
         lastErrorMessage: errorMessage,
@@ -990,6 +1031,7 @@ export async function loadGenerationRecipeSnapshot(
 export type ValidatedSnapshot =
   | {
       status: 'VALID'
+      snapshotId: number
       snapshotNumber: number
       recipe: Extract<VideoRecipe, { status: 'RECIPE_READY' }>
     }
@@ -1010,6 +1052,7 @@ export async function loadAndValidateGenerationRecipe(
   }
   return {
     status: 'VALID',
+    snapshotId: loaded.snapshotId,
     snapshotNumber: loaded.snapshotNumber,
     recipe: loaded.recipe,
   }
@@ -1229,5 +1272,58 @@ export async function getGenerationJobDetail(jobId: number) {
     .from(prayerGenerationRecipeSnapshots)
     .where(eq(prayerGenerationRecipeSnapshots.generationJobId, jobId))
     .orderBy(asc(prayerGenerationRecipeSnapshots.snapshotNumber))
-  return { ...row, events, snapshots }
+  // Step 13 planning metadata — safe hashes/counts only (never sacred
+  // text, storage keys, consent references or future provider prompts).
+  const storyboards = await getDb()
+    .select({
+      id: prayerGenerationStoryboardSnapshots.id,
+      snapshotNumber: prayerGenerationStoryboardSnapshots.snapshotNumber,
+      storyboardSha256: prayerGenerationStoryboardSnapshots.storyboardSha256,
+      payloadSha256: prayerGenerationStoryboardSnapshots.payloadSha256,
+      sceneCount: prayerGenerationStoryboardSnapshots.sceneCount,
+      totalDurationMs: prayerGenerationStoryboardSnapshots.totalDurationMs,
+      createdAt: prayerGenerationStoryboardSnapshots.createdAt,
+    })
+    .from(prayerGenerationStoryboardSnapshots)
+    .where(eq(prayerGenerationStoryboardSnapshots.generationJobId, jobId))
+    .orderBy(asc(prayerGenerationStoryboardSnapshots.snapshotNumber))
+  const manifests = await getDb()
+    .select({
+      id: prayerGenerationManifestSnapshots.id,
+      snapshotNumber: prayerGenerationManifestSnapshots.snapshotNumber,
+      manifestSha256: prayerGenerationManifestSnapshots.manifestSha256,
+      payloadSha256: prayerGenerationManifestSnapshots.payloadSha256,
+      visualTaskCount: prayerGenerationManifestSnapshots.visualTaskCount,
+      audioRequirementCount:
+        prayerGenerationManifestSnapshots.audioRequirementCount,
+      createdAt: prayerGenerationManifestSnapshots.createdAt,
+    })
+    .from(prayerGenerationManifestSnapshots)
+    .where(eq(prayerGenerationManifestSnapshots.generationJobId, jobId))
+    .orderBy(asc(prayerGenerationManifestSnapshots.snapshotNumber))
+  // Scene/audio mode tallies come from the verified storyboard payload
+  // (fail-closed loader), never from re-planning.
+  // Lazily imported: Step 13 depends on this module, so a static
+  // import here would create a cycle.
+  const { loadGenerationStoryboardSnapshot } =
+    await import('./generation-storyboards')
+  const loadedStoryboard = await loadGenerationStoryboardSnapshot(jobId)
+  const sceneModes: Record<string, number> = {}
+  const audioModes: Record<string, number> = {}
+  if (loadedStoryboard.status === 'OK') {
+    for (const scene of loadedStoryboard.storyboard.scenes) {
+      sceneModes[scene.sourceMode] = (sceneModes[scene.sourceMode] ?? 0) + 1
+      audioModes[scene.audio.mode] = (audioModes[scene.audio.mode] ?? 0) + 1
+    }
+  }
+  return {
+    ...row,
+    events,
+    snapshots,
+    storyboards,
+    manifests,
+    storyboardIntegrity: loadedStoryboard.status,
+    sceneModes,
+    audioModes,
+  }
 }

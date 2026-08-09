@@ -6,14 +6,19 @@ import {
   runGenerationPreparationOnce,
   systemGenerationClock,
 } from '@/services/generation-jobs'
+import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 
 /**
  * DB-backed prayer generation worker (Phase One, Step 12).
  *
- * Polls the prayer_generation_jobs queue, runs preparation cycles
- * (REAL Step 11 recipe build + validate → immutable snapshot →
- * STORYBOARDING), recovers expired leases, sleeps when idle and shuts
- * down gracefully on SIGTERM/SIGINT. It performs NO external
+ * Polls the prayer_generation_jobs queue and FAIRLY alternates two
+ * stages so neither starves the other:
+ *   - preparation  (Step 12: recipe build + validate → snapshot →
+ *     STORYBOARDING)
+ *   - storyboard planning (Step 13: storyboard + provider-neutral
+ *     manifest → GENERATING_VISUALS)
+ * It also recovers expired leases, sleeps when both queues are idle
+ * and shuts down gracefully on SIGTERM/SIGINT. It performs NO external
  * generation/provider calls of any kind and is NOT required for the
  * web server to boot — run it separately:
  *
@@ -51,16 +56,29 @@ async function main(): Promise<void> {
       }
     }
     try {
-      const outcome = await runGenerationPreparationOnce(
+      // Fair alternation: run one cycle of EACH stage per pass, so a
+      // continuous stream of QUEUED jobs can never permanently starve
+      // STORYBOARDING work (or vice versa).
+      const preparation = await runGenerationPreparationOnce(
         WORKER_ID,
         systemGenerationClock,
       )
-      if (outcome.status === 'IDLE') {
-        await sleep(IDLE_SLEEP_MS)
-      } else {
+      if (preparation.status !== 'IDLE') {
         console.log(
-          `[${WORKER_ID}] job ${'jobId' in outcome ? outcome.jobId : '?'} → ${outcome.status}`,
+          `[${WORKER_ID}] prepare job ${'jobId' in preparation ? preparation.jobId : '?'} → ${preparation.status}`,
         )
+      }
+      const storyboard = await runStoryboardPlanningOnce(
+        WORKER_ID,
+        systemGenerationClock,
+      )
+      if (storyboard.status !== 'IDLE') {
+        console.log(
+          `[${WORKER_ID}] storyboard job ${'jobId' in storyboard ? storyboard.jobId : '?'} → ${storyboard.status}`,
+        )
+      }
+      if (preparation.status === 'IDLE' && storyboard.status === 'IDLE') {
+        await sleep(IDLE_SLEEP_MS)
       }
     } catch (error) {
       console.error(
