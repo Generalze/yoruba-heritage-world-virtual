@@ -457,6 +457,41 @@ approval system.
   version carries an explicit `voice_policy`
   (`HUMAN_RECORDED_REQUIRED`, `APPROVED_TTS_ALLOWED`, `TEXT_ONLY`).
 
+## 10.2 Amendment — Approved Prayer Session Templates & Selection Rules (Phase One, Step 9)
+
+Selection is now governed by APPROVED TEMPLATES:
+
+```text
+Approved Template (published, immutable, SHA-256-hashed definition)
+        ↓ deterministic rules-based selection (seeded, no wall-clock randomness)
+Step 8 runtime-eligible sacred content (re-verified at selection time)
+        ↓
+Validated resolved session plan (ordered slots + exact content versions + hashes)
+```
+
+- Humans approve the rules UPSTREAM — session structure (ordered
+  CONTENT/SILENCE slots), allowed content (explicitly pinned versions or
+  approved eligibility filters with explicit allowed scopes), forbidden
+  content-item pairs, repeatability use, and language/duration
+  boundaries — through the same DRAFT → UNDER_REVIEW → APPROVED →
+  PUBLISHED workflow. Published template versions are immutable; the
+  normalized definition (never a JSON blob) is hashed
+  (`definition_sha256`) transactionally at publication.
+- Runtime operation is AUTONOMOUS: the resolver picks the most specific
+  applicable published template (SERVICE → SACRED_HOUSE → PLATFORM,
+  then priority, then deterministic `selection_weight` variation),
+  selects only currently runtime-eligible sacred content in the exact
+  requested language, automatically falls back to another applicable
+  published template when content has been withdrawn/disabled, and
+  otherwise fails closed (`NO_VALID_TEMPLATE`). There is NO
+  per-appointment human approval.
+- The same input seed against the same committed database state always
+  produces the same resolved plan; different seeds may produce
+  different APPROVED combinations.
+- AI does not create, translate or alter sacred content or templates;
+  future orchestration may only operate inside these approved
+  boundaries.
+
 ---
 
 # 11. Visual Canon Database

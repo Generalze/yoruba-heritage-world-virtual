@@ -57,6 +57,13 @@
       "when": 1786209363367,
       "tag": "0007_curved_power_man",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1786240243439,
+      "tag": "0008_soft_amphibian",
+      "breakpoints": true
     }
   ]
 }

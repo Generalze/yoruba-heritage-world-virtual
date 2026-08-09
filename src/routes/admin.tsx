@@ -96,6 +96,14 @@ function AdminLayout() {
                 Sacred Content
               </Link>
             ) : null}
+            {admin.permissions.includes('spiritual_content.view') ? (
+              <Link
+                to="/admin/prayer-templates"
+                className="text-stone-300 hover:text-amber-500"
+              >
+                Prayer Templates
+              </Link>
+            ) : null}
           </nav>
           <span className="text-xs text-stone-500">
             {admin.user.preferredName}
