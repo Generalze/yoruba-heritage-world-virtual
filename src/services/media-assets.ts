@@ -1515,42 +1515,57 @@ export async function resolveSacredAudioCandidates(
   }
   const voicePolicy = sacred.voicePolicy
   // TEXT_ONLY sacred content requires no audio — empty candidate list.
-  const rows =
-    voicePolicy === 'TEXT_ONLY'
-      ? []
-      : await getDb()
-          .select({
-            link: sacredContentMediaLinks,
-            version: mediaAssetVersions,
-            asset: mediaAssets,
-          })
-          .from(sacredContentMediaLinks)
-          .innerJoin(
-            mediaAssetVersions,
-            eq(
-              sacredContentMediaLinks.mediaAssetVersionId,
-              mediaAssetVersions.id,
-            ),
-          )
-          .innerJoin(
-            mediaAssets,
-            eq(mediaAssetVersions.assetId, mediaAssets.id),
-          )
-          .where(
-            and(
-              eq(sacredContentMediaLinks.contentVersionId, contentVersionId),
-              inArray(sacredContentMediaLinks.role, [
-                'PRIMARY_AUDIO',
-                'ALTERNATE_AUDIO',
-              ]),
-            ),
-          )
-          .orderBy(
-            asc(sacredContentMediaLinks.role),
-            asc(sacredContentMediaLinks.sortOrder),
-            asc(sacredContentMediaLinks.id),
-          )
-          .limit(200)
+  // Otherwise: COMPLETE keyset enumeration of the audio links (bounded
+  // pages, loud safety ceiling) — no silent candidate 201+ omission.
+  const rows: Array<{
+    link: typeof sacredContentMediaLinks.$inferSelect
+    version: typeof mediaAssetVersions.$inferSelect
+    asset: typeof mediaAssets.$inferSelect
+  }> = []
+  if (voicePolicy !== 'TEXT_ONLY') {
+    const PAGE_SIZE = 200
+    const LINK_CEILING = 10_000
+    let afterLinkId = 0
+    for (;;) {
+      const page = await getDb()
+        .select({
+          link: sacredContentMediaLinks,
+          version: mediaAssetVersions,
+          asset: mediaAssets,
+        })
+        .from(sacredContentMediaLinks)
+        .innerJoin(
+          mediaAssetVersions,
+          eq(
+            sacredContentMediaLinks.mediaAssetVersionId,
+            mediaAssetVersions.id,
+          ),
+        )
+        .innerJoin(mediaAssets, eq(mediaAssetVersions.assetId, mediaAssets.id))
+        .where(
+          and(
+            eq(sacredContentMediaLinks.contentVersionId, contentVersionId),
+            inArray(sacredContentMediaLinks.role, [
+              'PRIMARY_AUDIO',
+              'ALTERNATE_AUDIO',
+            ]),
+            afterLinkId > 0
+              ? gt(sacredContentMediaLinks.id, afterLinkId)
+              : undefined,
+          ),
+        )
+        .orderBy(asc(sacredContentMediaLinks.id))
+        .limit(PAGE_SIZE)
+      rows.push(...page)
+      if (rows.length > LINK_CEILING) {
+        throw new MediaError(
+          'Sacred audio link enumeration exceeded the safety ceiling.',
+        )
+      }
+      if (page.length < PAGE_SIZE) break
+      afterLinkId = page[page.length - 1].link.id
+    }
+  }
   const candidates = []
   for (const row of rows) {
     if (
@@ -1582,6 +1597,11 @@ export async function resolveSacredAudioCandidates(
       durationSeconds: row.version.durationSeconds,
       storageKey: row.version.storageKey,
       fileSha256: row.version.fileSha256,
+      // Asset scope facts so callers can enforce CONTEXT applicability
+      // (exact Service / derived House / PLATFORM).
+      scopeType: row.asset.scopeType,
+      scopeServiceId: row.asset.serviceId,
+      scopeSacredHouseId: row.asset.sacredHouseId,
     })
   }
   return { voicePolicy, candidates }
