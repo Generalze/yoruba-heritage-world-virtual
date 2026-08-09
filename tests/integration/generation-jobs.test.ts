@@ -84,6 +84,7 @@ import {
   setPaymentRegistryForTests,
 } from '@/providers/payments/registry'
 import {
+  DEFAULT_LEASE_MS,
   GenerationJobError,
   adminCancelGenerationJob,
   adminRetryGenerationJob,
@@ -92,11 +93,13 @@ import {
   isLegalTransition,
   loadAndValidateGenerationRecipe,
   loadGenerationRecipeSnapshot,
+  persistPreparedRecipeUnderLease,
   recoverExpiredGenerationLeases,
   renewGenerationLease,
   runGenerationPreparationOnce,
   transitionGenerationJobUnderLease,
 } from '@/services/generation-jobs'
+import { buildValidatedVideoRecipe } from '@/services/video-recipes'
 import {
   addDays,
   currentLocalDate,
@@ -827,9 +830,10 @@ describe('preparation worker', () => {
     const { appointmentId } = await reserveAndConfirm(userId)
     const job = (await jobForAppointment(appointmentId))!
     await quiesceOtherJobs(job.id)
-    const now = new Date()
 
-    const outcome = await runGenerationPreparationOnce('worker-prep', now)
+    const outcome = await runGenerationPreparationOnce('worker-prep', {
+      now: () => new Date(),
+    })
     expect(outcome.status).toBe('PREPARED')
     if (outcome.status !== 'PREPARED') return
     expect(outcome.jobId).toBe(job.id)
@@ -857,7 +861,9 @@ describe('preparation worker', () => {
 
     // STORYBOARDING is not claimable — no duplicate snapshot, READY
     // unreachable in Step 12.
-    const again = await runGenerationPreparationOnce('worker-prep', now)
+    const again = await runGenerationPreparationOnce('worker-prep', {
+      now: () => new Date(),
+    })
     expect(again.status).toBe('IDLE')
     const snapshots = await getDb()
       .select()
@@ -886,10 +892,9 @@ describe('preparation worker', () => {
     )
     const job = (await jobForAppointment(appointmentId))!
     await quiesceOtherJobs(job.id)
-    const outcome = await runGenerationPreparationOnce(
-      'worker-unavail',
-      new Date(),
-    )
+    const outcome = await runGenerationPreparationOnce('worker-unavail', {
+      now: () => new Date(),
+    })
     expect(outcome.status).toBe('FAILED')
     if (outcome.status === 'FAILED') {
       expect(outcome.errorCode).toBe('RECIPE_UNAVAILABLE')
@@ -900,7 +905,11 @@ describe('preparation worker', () => {
     expect(failed.nextAttemptAt).toBeNull()
     // No retry storm: nothing claimable.
     expect(
-      (await runGenerationPreparationOnce('worker-unavail', new Date())).status,
+      (
+        await runGenerationPreparationOnce('worker-unavail', {
+          now: () => new Date(),
+        })
+      ).status,
     ).toBe('IDLE')
     void job
   }, 120_000)
@@ -924,7 +933,7 @@ describe('preparation worker', () => {
     const t0 = new Date()
     const first = await runGenerationPreparationOnce(
       'worker-inv',
-      t0,
+      { now: () => t0 },
       alwaysInvalid,
     )
     expect(first.status).toBe('RETRY_SCHEDULED')
@@ -941,14 +950,19 @@ describe('preparation worker', () => {
     ).toBeLessThanOrEqual(1_000)
     // Not due yet → idle.
     expect(
-      (await runGenerationPreparationOnce('worker-inv', t0, alwaysInvalid))
-        .status,
+      (
+        await runGenerationPreparationOnce(
+          'worker-inv',
+          { now: () => t0 },
+          alwaysInvalid,
+        )
+      ).status,
     ).toBe('IDLE')
     // Due → second (final) attempt exhausts max attempts → FAILED.
     const t1 = new Date(t0.getTime() + 2 * 60_000)
     const second = await runGenerationPreparationOnce(
       'worker-inv',
-      t1,
+      { now: () => t1 },
       alwaysInvalid,
     )
     expect(second.status).toBe('FAILED')
@@ -965,7 +979,11 @@ describe('snapshot loaders fail closed', () => {
     const job = (await jobForAppointment(appointmentId))!
     await quiesceOtherJobs(job.id)
     expect(
-      (await runGenerationPreparationOnce('worker-snap', new Date())).status,
+      (
+        await runGenerationPreparationOnce('worker-snap', {
+          now: () => new Date(),
+        })
+      ).status,
     ).toBe('PREPARED')
 
     const snapshot = (
@@ -1030,7 +1048,9 @@ describe('admin operations', () => {
     const job = (await jobForAppointment(appointmentId))!
     await quiesceOtherJobs(job.id)
     // Fail it via RECIPE_UNAVAILABLE.
-    await runGenerationPreparationOnce('worker-admin', new Date())
+    await runGenerationPreparationOnce('worker-admin', {
+      now: () => new Date(),
+    })
     expect((await jobForAppointment(appointmentId))!.status).toBe('FAILED')
 
     // CM lacks operational authority.
@@ -1128,4 +1148,208 @@ describe('guards', () => {
     expect(routeTree).not.toMatch(/fullPath: '\/generation/)
     expect(routeTree).not.toMatch(/fullPath: '\/video/)
   })
+})
+
+// --- Step 12 hardening: fresh lease time, heartbeat, atomic finalize --------
+
+function makeFakeClock(startMs: number) {
+  let t = startMs
+  return {
+    now: () => new Date(t),
+    advance: (ms: number) => {
+      t += ms
+    },
+  }
+}
+
+async function snapshotCount(jobId: number): Promise<number> {
+  return (
+    await getDb()
+      .select({ id: prayerGenerationRecipeSnapshots.id })
+      .from(prayerGenerationRecipeSnapshots)
+      .where(eq(prayerGenerationRecipeSnapshots.generationJobId, jobId))
+  ).length
+}
+
+describe('lease hardening', () => {
+  it('a worker whose lease expires mid-build cannot persist; recovery consumes an attempt', async () => {
+    const userId = await makeEligibleUser()
+    const { appointmentId } = await reserveAndConfirm(userId)
+    const job = (await jobForAppointment(appointmentId))!
+    await quiesceOtherJobs(job.id)
+    const clock = makeFakeClock(Date.now())
+
+    // The build takes "longer than the lease": the fake clock jumps
+    // past expiry, so the post-build heartbeat fails with a FRESH
+    // now() — the worker is stale and persists NOTHING.
+    const outcome = await runGenerationPreparationOnce('worker-slow', clock, {
+      buildRecipe: async (input) => {
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        return buildValidatedVideoRecipe(input)
+      },
+    })
+    expect(outcome.status).toBe('LEASE_LOST')
+    expect(await snapshotCount(job.id)).toBe(0)
+    const stuck = (await jobForAppointment(appointmentId))!
+    expect(stuck.status).toBe('PREPARING')
+
+    // Recovery counts the crashed attempt against the budget.
+    expect(
+      await recoverExpiredGenerationLeases(clock.now()),
+    ).toBeGreaterThanOrEqual(1)
+    const recovered = (await jobForAppointment(appointmentId))!
+    expect(recovered.status).toBe('RETRYING')
+    expect(recovered.attemptCount).toBe(1)
+    expect(recovered.resumeStatus).toBe('PREPARING')
+    expect(recovered.lastErrorCode).toBe('LEASE_EXPIRED')
+    expect(recovered.leaseToken).toBeNull()
+  }, 240_000)
+
+  it('heartbeats keep a legitimately long preparation alive across lease windows', async () => {
+    const userId = await makeEligibleUser()
+    const { appointmentId } = await reserveAndConfirm(userId)
+    const job = (await jobForAppointment(appointmentId))!
+    await quiesceOtherJobs(job.id)
+    const clock = makeFakeClock(Date.now())
+
+    // Build + validate together take 1.5 lease windows; the bounded
+    // heartbeats before/after each expensive stage renew with fresh
+    // now() readings and keep the lease live to the atomic finalize.
+    const outcome = await runGenerationPreparationOnce('worker-long', clock, {
+      buildRecipe: async (input) => {
+        clock.advance(Math.floor(DEFAULT_LEASE_MS * 0.75))
+        return buildValidatedVideoRecipe(input)
+      },
+      validateRecipe: async () => {
+        clock.advance(Math.floor(DEFAULT_LEASE_MS * 0.75))
+        return { status: 'VALID' }
+      },
+    })
+    expect(outcome.status).toBe('PREPARED')
+    const prepared = (await jobForAppointment(appointmentId))!
+    expect(prepared.status).toBe('STORYBOARDING')
+    expect(await snapshotCount(job.id)).toBe(1)
+  }, 240_000)
+
+  it('a recovered lease makes the old worker stale — atomic finalize inserts nothing', async () => {
+    const userId = await makeEligibleUser()
+    const { appointmentId } = await reserveAndConfirm(userId)
+    const job = (await jobForAppointment(appointmentId))!
+    await quiesceOtherJobs(job.id)
+    const clock = makeFakeClock(Date.now())
+
+    // Worker A claims and moves to PREPARING…
+    const claimed = await claimNextGenerationJob('worker-A', clock.now())
+    expect(claimed?.job.id).toBe(job.id)
+    const leaseToken = claimed!.leaseToken
+    expect(
+      await transitionGenerationJobUnderLease(
+        job.id,
+        leaseToken,
+        'QUEUED',
+        'PREPARING',
+        clock.now(),
+      ),
+    ).toBe(true)
+    // …builds a perfectly VALID recipe…
+    const recipe = await buildValidatedVideoRecipe({
+      serviceId: job.serviceIdSnapshot,
+      language: job.languageSnapshot,
+      variationSeed: job.variationSeed,
+    })
+    expect(recipe.status).toBe('RECIPE_READY')
+    if (recipe.status !== 'RECIPE_READY') return
+    // …but its lease expires and is recovered before finalization.
+    clock.advance(DEFAULT_LEASE_MS + 60_000)
+    expect(
+      await recoverExpiredGenerationLeases(clock.now()),
+    ).toBeGreaterThanOrEqual(1)
+
+    // The stale worker's atomic finalize must insert NOTHING.
+    const persisted = await persistPreparedRecipeUnderLease(
+      job.id,
+      leaseToken,
+      1,
+      recipe,
+      clock,
+    )
+    expect(persisted).toBeNull()
+    expect(await snapshotCount(job.id)).toBe(0)
+    const after = (await jobForAppointment(appointmentId))!
+    expect(after.status).toBe('RETRYING')
+    expect(after.attemptCount).toBe(1)
+  }, 240_000)
+
+  it('repeatedly expiring processing leases exhaust the retry budget (maxAttempts=2) without a crash loop', async () => {
+    const userId = await makeEligibleUser()
+    const { appointmentId } = await reserveAndConfirm(userId)
+    const job = (await jobForAppointment(appointmentId))!
+    await quiesceOtherJobs(job.id)
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ maxAttempts: 2 })
+      .where(eq(prayerGenerationJobs.id, job.id))
+    const clock = makeFakeClock(Date.now())
+
+    // Crash 1: claim → PREPARING → lease lapses → RETRYING, attempt 1.
+    const claim1 = await claimNextGenerationJob('crash-1', clock.now())
+    expect(claim1?.job.id).toBe(job.id)
+    expect(
+      await transitionGenerationJobUnderLease(
+        job.id,
+        claim1!.leaseToken,
+        'QUEUED',
+        'PREPARING',
+        clock.now(),
+      ),
+    ).toBe(true)
+    clock.advance(DEFAULT_LEASE_MS + 60_000)
+    expect(
+      await recoverExpiredGenerationLeases(clock.now()),
+    ).toBeGreaterThanOrEqual(1)
+    let row = (await jobForAppointment(appointmentId))!
+    expect(row.status).toBe('RETRYING')
+    expect(row.attemptCount).toBe(1)
+
+    // Crash 2: due again → PREPARING → lease lapses → FAILED, attempt 2.
+    clock.advance(2 * 60_000)
+    const claim2 = await claimNextGenerationJob('crash-2', clock.now())
+    expect(claim2?.job.id).toBe(job.id)
+    expect(
+      await transitionGenerationJobUnderLease(
+        job.id,
+        claim2!.leaseToken,
+        'RETRYING',
+        'PREPARING',
+        clock.now(),
+      ),
+    ).toBe(true)
+    clock.advance(DEFAULT_LEASE_MS + 60_000)
+    expect(
+      await recoverExpiredGenerationLeases(clock.now()),
+    ).toBeGreaterThanOrEqual(1)
+    row = (await jobForAppointment(appointmentId))!
+    expect(row.status).toBe('FAILED')
+    expect(row.attemptCount).toBe(2)
+    expect(row.lastErrorCode).toBe('LEASE_EXPIRED')
+    const events = await getDb()
+      .select()
+      .from(prayerGenerationJobEvents)
+      .where(eq(prayerGenerationJobEvents.generationJobId, job.id))
+    expect(
+      events.some((event) => event.eventCode === 'lease_expired_max_attempts'),
+    ).toBe(true)
+    // No infinite loop: nothing left to recover for this job.
+    expect(await recoverExpiredGenerationLeases(clock.now())).toBe(0)
+
+    // FAILED → CANCELLED is an EXPLICIT legal edge (central map).
+    expect(isLegalTransition('FAILED', 'CANCELLED')).toBe(true)
+    await adminCancelGenerationJob(
+      adminId,
+      ctx,
+      job.id,
+      'synthetic close-out of exhausted job',
+    )
+    expect((await jobForAppointment(appointmentId))!.status).toBe('CANCELLED')
+  }, 240_000)
 })

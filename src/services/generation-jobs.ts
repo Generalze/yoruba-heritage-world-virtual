@@ -78,7 +78,7 @@ export const GENERATION_TRANSITIONS: Record<
   RENDERING: ['UPLOADING', 'RETRYING', 'FAILED', 'CANCELLED'],
   UPLOADING: ['READY', 'RETRYING', 'FAILED', 'CANCELLED'],
   READY: [],
-  FAILED: ['RETRYING'],
+  FAILED: ['RETRYING', 'CANCELLED'],
   CANCELLED: [],
 }
 
@@ -94,6 +94,16 @@ export function isLegalTransition(
 export const RETRY_SCHEDULE_MINUTES = [1, 5, 15, 60, 60] as const
 
 export const DEFAULT_LEASE_MS = 2 * 60 * 1000
+
+/** Injectable clock: every lease-sensitive check MUST call now() at
+ * the moment of the check — a worker's start time is never authority. */
+export interface GenerationClock {
+  now: () => Date
+}
+
+export const systemGenerationClock: GenerationClock = {
+  now: () => new Date(),
+}
 
 // --- Enqueue (called INSIDE the confirmation transaction) -------------------
 
@@ -390,17 +400,22 @@ const LEASED_PROCESSING_STATUSES: Array<GenerationJobStatus> = [
 ]
 
 /**
- * Safe recovery of expired leases: a job stuck in a processing state
- * whose lease has lapsed returns to RETRYING (resume at that stage,
- * due immediately). The dead worker's stale token can no longer
- * transition anything.
+ * Safe recovery of expired leases. A crashed processing attempt COUNTS
+ * against the bounded retry budget — otherwise a job whose preparation
+ * always crashes the worker would loop forever. Atomically (per job,
+ * one transaction, guarded by the central transition map):
+ *   attempt = attemptCount + 1
+ *   attempt >= maxAttempts → FAILED (LEASE_EXPIRED)
+ *   otherwise             → RETRYING (resume at the prior stage, due
+ *                           on the deterministic bounded schedule)
+ * The dead worker's stale token can no longer transition anything.
  */
 export async function recoverExpiredGenerationLeases(
   now: Date,
 ): Promise<number> {
   const db = getDb()
   const stuck = await db
-    .select()
+    .select({ id: prayerGenerationJobs.id })
     .from(prayerGenerationJobs)
     .where(
       and(
@@ -410,39 +425,174 @@ export async function recoverExpiredGenerationLeases(
     )
     .limit(100)
   let recovered = 0
-  for (const job of stuck) {
-    const updated = await db
+  for (const candidate of stuck) {
+    const changed = await db.transaction(async (tx) => {
+      const job = (
+        await tx
+          .select()
+          .from(prayerGenerationJobs)
+          .where(eq(prayerGenerationJobs.id, candidate.id))
+          .limit(1)
+          .for('update')
+      ).at(0)
+      if (
+        !job ||
+        !LEASED_PROCESSING_STATUSES.includes(job.status) ||
+        job.leaseExpiresAt == null ||
+        job.leaseExpiresAt > now
+      ) {
+        return false
+      }
+      const attempt = job.attemptCount + 1
+      const exhausted = attempt >= job.maxAttempts
+      const to: GenerationJobStatus = exhausted ? 'FAILED' : 'RETRYING'
+      if (!isLegalTransition(job.status, to)) {
+        throw new GenerationJobError(
+          `Illegal lease recovery ${job.status} → ${to}.`,
+        )
+      }
+      const delayMinutes =
+        RETRY_SCHEDULE_MINUTES[
+          Math.min(job.attemptCount, RETRY_SCHEDULE_MINUTES.length - 1)
+        ]
+      const updated = await tx
+        .update(prayerGenerationJobs)
+        .set({
+          status: to,
+          attemptCount: attempt,
+          resumeStatus: exhausted ? null : job.status,
+          nextAttemptAt: exhausted
+            ? null
+            : new Date(now.getTime() + delayMinutes * 60_000),
+          leaseToken: null,
+          leaseOwner: null,
+          leaseAcquiredAt: null,
+          leaseExpiresAt: null,
+          lastErrorCode: 'LEASE_EXPIRED',
+          lastErrorMessage: null,
+        })
+        .where(
+          and(
+            eq(prayerGenerationJobs.id, job.id),
+            eq(prayerGenerationJobs.status, job.status),
+            eq(prayerGenerationJobs.leaseToken, job.leaseToken ?? ''),
+          ),
+        )
+      if (updated[0].affectedRows !== 1) return false
+      await tx.insert(prayerGenerationJobEvents).values({
+        generationJobId: job.id,
+        fromStatus: job.status,
+        toStatus: to,
+        eventCode: exhausted ? 'lease_expired_max_attempts' : 'lease_expired',
+        attemptNumber: attempt,
+      })
+      return true
+    })
+    if (changed) recovered += 1
+  }
+  return recovered
+}
+
+// --- Atomic snapshot + STORYBOARDING finalization ---------------------------
+
+/**
+ * ONE transaction finalizes a prepared recipe: lock + re-read the job,
+ * require PREPARING + the exact live lease (checked against a FRESH
+ * clock reading), allocate the next snapshot number, insert the
+ * immutable snapshot, transition PREPARING → STORYBOARDING, store the
+ * attempt count, set prepared_at, clear the lease and record the
+ * event. If ANY lease/status check fails, NOTHING is inserted — a
+ * stale worker can never append a snapshot or finalize.
+ */
+export async function persistPreparedRecipeUnderLease(
+  jobId: number,
+  leaseToken: string,
+  attempt: number,
+  recipe: Extract<VideoRecipe, { status: 'RECIPE_READY' }>,
+  clock: GenerationClock,
+): Promise<{ snapshotNumber: number } | null> {
+  const recipeJsonText = JSON.stringify(recipe)
+  const payloadSha256 = createHash('sha256')
+    .update(recipeJsonText, 'utf8')
+    .digest('hex')
+  return getDb().transaction(async (tx) => {
+    const freshNow = clock.now()
+    const job = (
+      await tx
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+        .for('update')
+    ).at(0)
+    if (
+      !job ||
+      job.status !== 'PREPARING' ||
+      job.leaseToken !== leaseToken ||
+      job.leaseExpiresAt == null ||
+      job.leaseExpiresAt <= freshNow
+    ) {
+      return null
+    }
+    const latest = (
+      await tx
+        .select({
+          snapshotNumber: prayerGenerationRecipeSnapshots.snapshotNumber,
+        })
+        .from(prayerGenerationRecipeSnapshots)
+        .where(eq(prayerGenerationRecipeSnapshots.generationJobId, jobId))
+        .orderBy(sql`${prayerGenerationRecipeSnapshots.snapshotNumber} DESC`)
+        .limit(1)
+        .for('update')
+    ).at(0)
+    const snapshotNumber = (latest?.snapshotNumber ?? 0) + 1
+    await tx.insert(prayerGenerationRecipeSnapshots).values({
+      generationJobId: jobId,
+      snapshotNumber,
+      recipeJsonText,
+      payloadSha256,
+      recipeSha256: recipe.recipeSha256,
+      templateVersionId: recipe.templateVersionId,
+      templateDefinitionSha256: recipe.templateDefinitionSha256,
+      visualBibleVersionId: recipe.visualBible?.versionId ?? null,
+      visualBibleDefinitionSha256: recipe.visualBible?.definitionSha256 ?? null,
+    })
+    const updated = await tx
       .update(prayerGenerationJobs)
       .set({
-        status: 'RETRYING',
-        resumeStatus: job.status,
-        nextAttemptAt: toSqlDate(now),
+        status: 'STORYBOARDING',
+        attemptCount: attempt,
+        preparedAt: toSqlDate(freshNow),
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        nextAttemptAt: null,
+        resumeStatus: null,
         leaseToken: null,
         leaseOwner: null,
         leaseAcquiredAt: null,
         leaseExpiresAt: null,
-        lastErrorCode: 'LEASE_EXPIRED',
-        lastErrorMessage: null,
       })
       .where(
         and(
-          eq(prayerGenerationJobs.id, job.id),
-          eq(prayerGenerationJobs.status, job.status),
-          eq(prayerGenerationJobs.leaseToken, job.leaseToken ?? ''),
+          eq(prayerGenerationJobs.id, jobId),
+          eq(prayerGenerationJobs.status, 'PREPARING'),
+          eq(prayerGenerationJobs.leaseToken, leaseToken),
         ),
       )
-    if (updated[0].affectedRows === 1) {
-      recovered += 1
-      await db.insert(prayerGenerationJobEvents).values({
-        generationJobId: job.id,
-        fromStatus: job.status,
-        toStatus: 'RETRYING',
-        eventCode: 'lease_expired',
-        attemptNumber: job.attemptCount,
-      })
+    if (updated[0].affectedRows !== 1) {
+      // Roll the WHOLE finalization back — no snapshot without the
+      // matching transition.
+      throw new GenerationJobError('Finalization conflict.')
     }
-  }
-  return recovered
+    await tx.insert(prayerGenerationJobEvents).values({
+      generationJobId: jobId,
+      fromStatus: 'PREPARING',
+      toStatus: 'STORYBOARDING',
+      eventCode: 'recipe_prepared',
+      attemptNumber: attempt,
+    })
+    return { snapshotNumber }
+  })
 }
 
 // --- Retry / failure helpers ------------------------------------------------
@@ -536,29 +686,46 @@ export type PreparationOutcome =
  */
 export async function runGenerationPreparationOnce(
   workerId: string,
-  now: Date,
+  clock: GenerationClock,
   dependencies: PreparationDependencies = {},
 ): Promise<PreparationOutcome> {
   const build = dependencies.buildRecipe ?? buildValidatedVideoRecipe
   const validate = dependencies.validateRecipe ?? validateVideoRecipe
-  const claimed = await claimNextGenerationJob(workerId, now)
+  const claimed = await claimNextGenerationJob(workerId, clock.now())
   if (!claimed) return { status: 'IDLE' }
   const { job, leaseToken } = claimed
   const attempt = job.attemptCount + 1
+
+  // Lease heartbeat: every lease-sensitive step reads a FRESH
+  // clock.now(); a failed renewal marks this worker STALE — it must
+  // not persist or finalize anything afterwards.
+  const heartbeat = async (): Promise<boolean> =>
+    renewGenerationLease(job.id, leaseToken, clock.now())
+  const heartbeatTimer = setInterval(
+    () => {
+      void renewGenerationLease(job.id, leaseToken, clock.now()).catch(
+        () => undefined,
+      )
+    },
+    Math.max(1_000, Math.floor(DEFAULT_LEASE_MS / 3)),
+  )
 
   const started = await transitionGenerationJobUnderLease(
     job.id,
     leaseToken,
     job.status,
     'PREPARING',
-    now,
+    clock.now(),
     {
       eventCode: 'preparation_started',
       attemptNumber: attempt,
       patch: { resumeStatus: null },
     },
   )
-  if (!started) return { status: 'LEASE_LOST', jobId: job.id }
+  if (!started) {
+    clearInterval(heartbeatTimer)
+    return { status: 'LEASE_LOST', jobId: job.id }
+  }
 
   try {
     // Frozen context structural validity.
@@ -573,7 +740,7 @@ export async function runGenerationPreparationOnce(
         leaseToken,
         'PREPARING',
         'FAILED',
-        now,
+        clock.now(),
         {
           eventCode: 'context_invalid',
           detailCode: 'FROZEN_CONTEXT_INVALID',
@@ -595,11 +762,15 @@ export async function runGenerationPreparationOnce(
         : { status: 'LEASE_LOST', jobId: job.id }
     }
 
+    // Keep the lease alive across the potentially expensive Step 11
+    // build; a failed renewal makes this worker stale immediately.
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
     const recipe = await build({
       serviceId: job.serviceIdSnapshot,
       language: job.languageSnapshot,
       variationSeed: job.variationSeed,
     })
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
 
     if (recipe.status === 'RECIPE_UNAVAILABLE') {
       // Governance says no valid session exists — retrying would storm.
@@ -608,7 +779,7 @@ export async function runGenerationPreparationOnce(
         leaseToken,
         'PREPARING',
         'FAILED',
-        now,
+        clock.now(),
         {
           eventCode: 'recipe_unavailable',
           detailCode: recipe.reasons[0]?.slice(0, 100) ?? null,
@@ -628,13 +799,14 @@ export async function runGenerationPreparationOnce(
     }
 
     const validation = await validate(recipe)
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
     if (validation.status !== 'VALID') {
       // Authority may have shifted between build and validation —
       // bounded retry, never auto-heal.
       const outcome = await scheduleRetryOrFail(
         job,
         leaseToken,
-        now,
+        clock.now(),
         'RECIPE_INVALID',
         validation.reasons.join(', ').slice(0, 500),
       )
@@ -648,66 +820,27 @@ export async function runGenerationPreparationOnce(
           }
     }
 
-    // Deterministic serialization + integrity hash over the EXACT
-    // stored UTF-8 text, then the append-only snapshot.
-    const recipeJsonText = JSON.stringify(recipe)
-    const payloadSha256 = createHash('sha256')
-      .update(recipeJsonText, 'utf8')
-      .digest('hex')
-    const snapshotNumber = await getDb().transaction(async (tx) => {
-      const latest = (
-        await tx
-          .select({
-            snapshotNumber: prayerGenerationRecipeSnapshots.snapshotNumber,
-          })
-          .from(prayerGenerationRecipeSnapshots)
-          .where(eq(prayerGenerationRecipeSnapshots.generationJobId, job.id))
-          .orderBy(sql`${prayerGenerationRecipeSnapshots.snapshotNumber} DESC`)
-          .limit(1)
-          .for('update')
-      ).at(0)
-      const nextNumber = (latest?.snapshotNumber ?? 0) + 1
-      await tx.insert(prayerGenerationRecipeSnapshots).values({
-        generationJobId: job.id,
-        snapshotNumber: nextNumber,
-        recipeJsonText,
-        payloadSha256,
-        recipeSha256: recipe.recipeSha256,
-        templateVersionId: recipe.templateVersionId,
-        templateDefinitionSha256: recipe.templateDefinitionSha256,
-        visualBibleVersionId: recipe.visualBible?.versionId ?? null,
-        visualBibleDefinitionSha256:
-          recipe.visualBible?.definitionSha256 ?? null,
-      })
-      return nextNumber
-    })
-    const ok = await transitionGenerationJobUnderLease(
+    // ATOMIC finalization: snapshot + PREPARING → STORYBOARDING under
+    // a fresh-time lease check in ONE transaction — a stale worker
+    // inserts nothing.
+    const persisted = await persistPreparedRecipeUnderLease(
       job.id,
       leaseToken,
-      'PREPARING',
-      'STORYBOARDING',
-      now,
-      {
-        eventCode: 'recipe_prepared',
-        attemptNumber: attempt,
-        clearLease: true,
-        patch: {
-          attemptCount: attempt,
-          preparedAt: toSqlDate(now),
-          lastErrorCode: null,
-          lastErrorMessage: null,
-          nextAttemptAt: null,
-          resumeStatus: null,
-        },
-      },
+      attempt,
+      recipe,
+      clock,
     )
-    if (!ok) return { status: 'LEASE_LOST', jobId: job.id }
-    return { status: 'PREPARED', jobId: job.id, snapshotNumber }
+    if (!persisted) return { status: 'LEASE_LOST', jobId: job.id }
+    return {
+      status: 'PREPARED',
+      jobId: job.id,
+      snapshotNumber: persisted.snapshotNumber,
+    }
   } catch (error) {
     const outcome = await scheduleRetryOrFail(
       job,
       leaseToken,
-      now,
+      clock.now(),
       'PREPARATION_ERROR',
       sanitizeErrorMessage(error),
     )
@@ -719,6 +852,8 @@ export async function runGenerationPreparationOnce(
           jobId: job.id,
           errorCode: 'PREPARATION_ERROR',
         }
+  } finally {
+    clearInterval(heartbeatTimer)
   }
 }
 
@@ -843,6 +978,12 @@ export async function adminCancelGenerationJob(
     if (TERMINAL_STATUSES.includes(job.status)) {
       throw new GenerationJobError('This job is already terminal.')
     }
+    // Central state-machine authority — never bypass the map.
+    if (!isLegalTransition(job.status, 'CANCELLED')) {
+      throw new GenerationJobError(
+        `Illegal transition ${job.status} → CANCELLED.`,
+      )
+    }
     const updated = await tx
       .update(prayerGenerationJobs)
       .set({
@@ -904,6 +1045,12 @@ export async function adminRetryGenerationJob(
     if (!job) throw new GenerationJobError('Generation job not found.')
     if (job.status !== 'FAILED') {
       throw new GenerationJobError('Only FAILED jobs can be retried.')
+    }
+    // Central state-machine authority — never bypass the map.
+    if (!isLegalTransition(job.status, 'RETRYING')) {
+      throw new GenerationJobError(
+        `Illegal transition ${job.status} → RETRYING.`,
+      )
     }
     const updated = await tx
       .update(prayerGenerationJobs)

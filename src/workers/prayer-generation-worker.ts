@@ -4,6 +4,7 @@ import { closeDb } from '@/db'
 import {
   recoverExpiredGenerationLeases,
   runGenerationPreparationOnce,
+  systemGenerationClock,
 } from '@/services/generation-jobs'
 
 /**
@@ -50,7 +51,10 @@ async function main(): Promise<void> {
       }
     }
     try {
-      const outcome = await runGenerationPreparationOnce(WORKER_ID, new Date())
+      const outcome = await runGenerationPreparationOnce(
+        WORKER_ID,
+        systemGenerationClock,
+      )
       if (outcome.status === 'IDLE') {
         await sleep(IDLE_SLEEP_MS)
       } else {
