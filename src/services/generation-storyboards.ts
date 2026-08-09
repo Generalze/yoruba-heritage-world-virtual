@@ -43,8 +43,8 @@ import type { VideoRecipe } from './video-recipes'
  * manifest under ANY external-AI policy.
  */
 
-export const STORYBOARD_SCHEMA_VERSION = 'storyboard-v1'
-export const MANIFEST_SCHEMA_VERSION = 'manifest-v1'
+export const STORYBOARD_SCHEMA_VERSION = 'storyboard-v2'
+export const MANIFEST_SCHEMA_VERSION = 'manifest-v2'
 
 /** Presentational split target for long CONTENT visual windows. */
 export const MAX_SCENE_MS = 15_000
@@ -97,6 +97,11 @@ export interface SceneAudioRequirement {
   language: string | null
   voicePolicy: string | null
   requirementId: string | null
+  /** The WHOLE recipe-segment window this audio covers. A presentational
+   * split attaches the requirement to the first sub-scene but never
+   * shortens the window. NONE covers nothing. */
+  segmentStartMs: number | null
+  segmentEndMs: number | null
 }
 
 export interface StoryboardScene {
@@ -373,6 +378,8 @@ function planScenes(
           language: null,
           voicePolicy: null,
           requirementId: null,
+          segmentStartMs: null,
+          segmentEndMs: null,
         },
         bibleRuleRefs: [],
       })
@@ -394,7 +401,8 @@ function planScenes(
           : 'HOLD_PREVIOUS'
 
     // Audio belongs to the whole recipe segment: the FIRST sub-scene
-    // carries the requirement; splitting never duplicates or alters it.
+    // carries the requirement; splitting never duplicates or alters it,
+    // and the requirement keeps the FULL segment window it covers.
     const audioForSegment: SceneAudioRequirement =
       segment.audioMode === 'HUMAN_RECORDED' ||
       segment.audioMode === 'LINKED_HUMAN_AUDIO'
@@ -407,6 +415,8 @@ function planScenes(
             language: recipe.language,
             voicePolicy: segment.voicePolicy,
             requirementId: `audio-${segment.segmentIndex}`,
+            segmentStartMs: segmentStart,
+            segmentEndMs: segmentStart + segmentMs,
           }
         : segment.audioMode === 'TTS_ALLOWED_PENDING'
           ? {
@@ -419,6 +429,8 @@ function planScenes(
               language: recipe.language,
               voicePolicy: segment.voicePolicy,
               requirementId: `audio-${segment.segmentIndex}`,
+              segmentStartMs: segmentStart,
+              segmentEndMs: segmentStart + segmentMs,
             }
           : {
               mode: 'NONE',
@@ -429,6 +441,8 @@ function planScenes(
               language: null,
               voicePolicy: null,
               requirementId: null,
+              segmentStartMs: null,
+              segmentEndMs: null,
             }
 
     for (let split = 0; split < splitCount; split += 1) {
@@ -455,8 +469,14 @@ function planScenes(
         mediaAssetId: segment.visual?.mediaAssetId ?? null,
         mediaFileSha256: segment.visual?.fileSha256 ?? null,
         mediaAssetKind: segment.visual?.assetKind ?? null,
+        // Content identity is never invented here: a segment without it
+        // is refused by the builder before planning is reached.
         generationIntent:
-          sourceMode === 'GENERATION_REQUIRED' && segment.generation && bible
+          sourceMode === 'GENERATION_REQUIRED' &&
+          segment.generation &&
+          bible &&
+          segment.contentVersionId != null &&
+          segment.contentSha256 != null
             ? {
                 sacredHouseId: recipe.sacredHouseId,
                 serviceId: recipe.serviceId,
@@ -469,8 +489,8 @@ function planScenes(
                 ruleRefs: bibleRefs,
                 externalAiPolicy: segment.externalAiPolicy ?? '',
                 textContextAllowed: segment.generation.textContextAllowed,
-                contentVersionId: segment.contentVersionId!,
-                contentSha256: segment.contentSha256!,
+                contentVersionId: segment.contentVersionId,
+                contentSha256: segment.contentSha256,
               }
             : null,
         audio:
@@ -485,6 +505,8 @@ function planScenes(
                 language: null,
                 voicePolicy: null,
                 requirementId: null,
+                segmentStartMs: null,
+                segmentEndMs: null,
               },
         // Rules are referenced by stable identity/category/order — the
         // sensitive rule TEXT is never copied into a storyboard.
@@ -539,11 +561,13 @@ function buildManifest(
       })
     }
     if (scene.audio.mode !== 'NONE') {
+      // The window is the WHOLE recipe segment the audio covers — never
+      // the presentational sub-scene that carries the requirement.
       audioRequirements.push({
         ...scene.audio,
         sceneId: scene.sceneId,
-        startMs: scene.startMs,
-        endMs: scene.endMs,
+        startMs: scene.audio.segmentStartMs ?? scene.startMs,
+        endMs: scene.audio.segmentEndMs ?? scene.endMs,
       })
     }
   }
@@ -628,6 +652,32 @@ export async function buildValidatedGenerationStoryboard(
     }
   }
 
+  // A generated scene must carry its own content identity, and a
+  // segment can never be BOTH approved and generated. Both fail closed:
+  // an identity is never fabricated and a source is never chosen for
+  // an incoherent segment.
+  const semanticRefusals: Array<string> = []
+  if (
+    recipe.segments.some(
+      (segment) =>
+        segment.visual == null &&
+        segment.generation != null &&
+        (segment.contentVersionId == null || segment.contentSha256 == null),
+    )
+  ) {
+    semanticRefusals.push('generation_missing_content_identity')
+  }
+  if (
+    recipe.segments.some(
+      (segment) => segment.visual != null && segment.generation != null,
+    )
+  ) {
+    semanticRefusals.push('incoherent_scene_source')
+  }
+  if (semanticRefusals.length > 0) {
+    return { status: 'GOVERNANCE_IMPOSSIBLE', reasons: semanticRefusals }
+  }
+
   // Generated scenes require the CURRENT published Visual Bible to
   // still verify (Step 10 authority, never reinterpreted here).
   let bible: {
@@ -663,6 +713,17 @@ export async function buildValidatedGenerationStoryboard(
   }
 
   const { scenes, totalDurationMs } = planScenes(recipe, bible)
+  const leadingScene = scenes.at(0)
+  if (
+    leadingScene?.kind === 'CONTENT' &&
+    leadingScene.sourceMode === 'HOLD_PREVIOUS'
+  ) {
+    // Nothing exists yet to hold — and nothing may be invented for it.
+    return {
+      status: 'GOVERNANCE_IMPOSSIBLE',
+      reasons: ['leading_hold_previous'],
+    }
+  }
   if (scenes.length > MAX_SCENES) {
     // Loud ceiling — never a silent truncation.
     return { status: 'SCENE_CEILING_EXCEEDED', sceneCount: scenes.length }
@@ -1085,6 +1146,54 @@ export async function loadAndValidateGenerationManifest(
         push(`generation_under_no_external_ai:${scene.sceneId}`)
       }
     }
+    // Voice and text identities must match the CURRENT recipe segment,
+    // not merely a self-consistent payload: recomputed hashes can never
+    // smuggle a different recording or a different approved text.
+    const segmentByIndex = new Map(
+      recipeNow.recipe.segments.map((segment) => [
+        segment.segmentIndex,
+        segment,
+      ]),
+    )
+    for (const scene of storyboard.scenes) {
+      const segment = segmentByIndex.get(scene.recipeSegmentIndex)
+      if (scene.audio.mode === 'EXISTING_HUMAN_AUDIO') {
+        if (
+          segment?.audio == null ||
+          scene.audio.mediaAssetVersionId !==
+            segment.audio.mediaAssetVersionId ||
+          scene.audio.fileSha256 !== segment.audio.fileSha256
+        ) {
+          push(`audio_binding:${scene.sceneId}`)
+        }
+      } else if (scene.audio.mode === 'TTS_PENDING') {
+        if (
+          segment == null ||
+          scene.audio.contentVersionId !== segment.contentVersionId ||
+          scene.audio.contentSha256 !== segment.contentSha256
+        ) {
+          push(`audio_binding:${scene.sceneId}`)
+        }
+      }
+      const intent = scene.generationIntent
+      if (
+        intent != null &&
+        (segment == null ||
+          intent.contentVersionId !== segment.contentVersionId ||
+          intent.contentSha256 !== segment.contentSha256)
+      ) {
+        push(`intent_content_binding:${scene.sceneId}`)
+      }
+    }
+  }
+
+  // Nothing exists yet to hold before the first scene.
+  const leadingScene = storyboard.scenes.at(0)
+  if (
+    leadingScene?.kind === 'CONTENT' &&
+    leadingScene.sourceMode === 'HOLD_PREVIOUS'
+  ) {
+    push('leading_hold_previous')
   }
 
   // Scene order / timeline / duration integrity.
@@ -1168,6 +1277,20 @@ export async function loadAndValidateGenerationManifest(
     if (scene.sourceMode !== 'APPROVED_MEDIA') continue
     if (manifest.visualTasks.some((task) => task.sceneId === scene.sceneId)) {
       push(`unexpected_task:${scene.sceneId}`)
+    }
+  }
+  // An audio window covers the WHOLE recipe segment; a split may never
+  // narrow it to the sub-scene carrying the requirement.
+  for (const requirement of manifest.audioRequirements) {
+    const scene = storyboard.scenes.find(
+      (candidate) => candidate.sceneId === requirement.sceneId,
+    )
+    if (
+      !scene ||
+      requirement.startMs !== scene.audio.segmentStartMs ||
+      requirement.endMs !== scene.audio.segmentEndMs
+    ) {
+      push(`audio_window:${requirement.sceneId}`)
     }
   }
 
