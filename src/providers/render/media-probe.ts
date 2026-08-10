@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
-import { constants } from 'node:fs'
-import { access, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { delimiter, join } from 'node:path'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { env } from '@/lib/env'
+import { checkRenderRuntimePaths } from '@/lib/executable-probe'
+import type { RenderRuntimeReadiness } from '@/lib/executable-probe'
 
 /**
  * Real media inspection (Phase One, Step 20).
@@ -305,54 +306,13 @@ export function isWithinFrameTolerance(
  * who installs the missing tooling into a running container must see
  * readiness recover on the next probe rather than after a restart.
  */
-export interface RenderRuntimeReadiness {
-  ok: boolean
-  /** Bounded capability names — NEVER a filesystem path. A readiness
-   * response is public; the path a binary lives at is not something to
-   * publish. */
-  missing: ReadonlyArray<string>
-}
-
 export type RenderRuntimeCheck = () => Promise<RenderRuntimeReadiness>
 
-async function isExecutable(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Resolves a bare command name against PATH, the way a shell would. */
-async function resolveOnPath(command: string): Promise<boolean> {
-  if (command.includes('/') || command.includes('\\')) {
-    return isExecutable(command)
-  }
-  const pathValue = process.env.PATH ?? ''
-  const extensions =
-    process.platform === 'win32'
-      ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';')
-      : ['']
-  for (const dir of pathValue.split(delimiter)) {
-    if (dir.trim() === '') continue
-    for (const extension of extensions) {
-      if (await isExecutable(join(dir, `${command}${extension}`))) return true
-    }
-  }
-  return false
-}
-
-export const checkRenderRuntimeDependencies: RenderRuntimeCheck = async () => {
-  const missing: Array<string> = []
-  if (!(await resolveOnPath(ffprobeBinary()))) missing.push('ffprobe')
-  const browser = env.REMOTION_BROWSER_EXECUTABLE.trim()
-  // An unset browser path means Remotion would provision one itself —
-  // a download, at the moment of somebody's paid render. Production
-  // bakes it into the image and points at it explicitly, so "unset" is
-  // reported as missing rather than quietly accepted.
-  if (browser === '' || !(await isExecutable(browser))) {
-    missing.push('render_browser')
-  }
-  return { ok: missing.length === 0, missing }
-}
+/** The application-configured form of the shared check: the same
+ * filesystem logic the worker gate and the offline smoke check use,
+ * with the paths this deployment was configured with. */
+export const checkRenderRuntimeDependencies: RenderRuntimeCheck = () =>
+  checkRenderRuntimePaths({
+    ffprobePath: ffprobeBinary(),
+    browserPath: env.REMOTION_BROWSER_EXECUTABLE,
+  })

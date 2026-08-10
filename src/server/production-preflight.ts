@@ -1,4 +1,7 @@
 import { env } from '@/lib/env'
+import { validateStorageEndpoint } from '@/lib/security-headers'
+import { checkRenderRuntimeDependencies } from '@/providers/render/media-probe'
+import type { RenderRuntimeCheck } from '@/providers/render/media-probe'
 import type { Env } from '@/lib/env'
 
 /**
@@ -109,14 +112,37 @@ export function checkProductionPreflight(
       }
     }
     // A browser is REDIRECTED to this endpoint to play somebody's
-    // recorded prayer. Over plain HTTP the signed link and the media it
-    // unlocks are readable in transit, and the production CSP would
-    // have no HTTPS origin to allow.
-    if (
-      cfg.OBJECT_STORAGE_ENDPOINT.trim().length > 0 &&
-      !cfg.OBJECT_STORAGE_ENDPOINT.startsWith('https://')
-    ) {
-      add('object_storage_endpoint_not_https', 'OBJECT_STORAGE_ENDPOINT')
+    // recorded prayer, and the CSP names its origin as the one external
+    // source allowed to play media. Both depend on it being a real,
+    // credential-free HTTPS base URL — so it is parsed, not
+    // string-matched.
+    if (cfg.OBJECT_STORAGE_ENDPOINT.trim().length > 0) {
+      const endpoint = validateStorageEndpoint(cfg.OBJECT_STORAGE_ENDPOINT)
+      if (!endpoint.ok) {
+        add(
+          endpoint.reasonCode === 'endpoint_not_https'
+            ? 'object_storage_endpoint_not_https'
+            : `object_storage_${endpoint.reasonCode}`,
+          'OBJECT_STORAGE_ENDPOINT',
+        )
+      }
+    }
+    // PATH-STYLE IS REQUIRED WHILE PHASE ONE DELIVERS BY REDIRECT.
+    //
+    // The Prayer Room pins the signed URL to the configured endpoint's
+    // exact origin, and the CSP allows only that origin. Virtual-hosted
+    // addressing moves the bucket into the HOST — `https://bucket.s3…`
+    // instead of `https://s3…/bucket` — so the signed URL would land on
+    // an origin neither the pin nor the policy knows about, and every
+    // playback would be refused. Allowing it would mean widening the
+    // CSP to a wildcard over the provider's whole domain, which is not
+    // a policy. A separate browser-delivery origin contract is a later,
+    // explicit stage.
+    if (!cfg.OBJECT_STORAGE_FORCE_PATH_STYLE) {
+      add(
+        'object_storage_path_style_required',
+        'OBJECT_STORAGE_FORCE_PATH_STYLE',
+      )
     }
   }
 
@@ -175,6 +201,52 @@ export function formatPreflightIssues(
   return result.issues.map((issue) =>
     issue.envName ? `${issue.code} (set ${issue.envName})` : issue.code,
   )
+}
+
+/**
+ * The LOCAL RENDER TOOLING gate, for a process that renders.
+ *
+ * Readiness already reports this over HTTP, which is what a proxy needs
+ * — but the worker takes its work from a queue, not from a load
+ * balancer, and it is the process that actually renders. Nothing about
+ * the web tier answering 503 stops a worker from sweeping leases and
+ * claiming jobs it cannot finish, so it proves the same capabilities,
+ * through the SAME check, before it touches a single row.
+ *
+ * ZERO DATABASE CONTACT. It runs before lease recovery and before any
+ * pipeline pass, so a refusal mutates no job, consumes no retry budget
+ * and leaves no lease held.
+ */
+export class RenderRuntimeUnavailableError extends Error {
+  readonly missing: ReadonlyArray<string>
+
+  constructor(processLabel: string, missing: ReadonlyArray<string>) {
+    super(
+      `${processLabel} refused to start: local render tooling is unavailable.`,
+    )
+    this.name = 'RenderRuntimeUnavailableError'
+    this.missing = missing
+  }
+}
+
+export async function assertRenderRuntimeReady(
+  processLabel: string,
+  check: RenderRuntimeCheck = checkRenderRuntimeDependencies,
+  cfg: Env = env,
+): Promise<void> {
+  // The mock renderer needs neither binary. Development and test are
+  // unaffected, exactly as they are for every other production gate.
+  if (cfg.RENDER_DRIVER === 'MOCK') return
+  const runtime = await check()
+  if (runtime.ok) return
+  for (const capability of runtime.missing) {
+    // A CAPABILITY NAME. Never the path it was looked for at, and never
+    // anything read from configuration.
+    console.error(
+      `[preflight] ${processLabel}: render_runtime_missing_${capability}`,
+    )
+  }
+  throw new RenderRuntimeUnavailableError(processLabel, runtime.missing)
 }
 
 export class ProductionPreflightError extends Error {

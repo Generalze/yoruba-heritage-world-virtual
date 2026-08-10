@@ -1882,7 +1882,10 @@ describe('red-team: a MOCK render is never permitted in production', () => {
       .where(eq(prayerGenerationJobs.id, jobId))
     const outcome = await runRenderOnce('rtr-engine-mismatch', clock)
     expect(outcome.status).not.toBe('COMPLETE')
-    expect((await jobRow(jobId)).lastErrorMessage).toBe('renderer_code_mismatch')
+    // An unrecognised code is not a member of the trusted registry.
+    expect((await jobRow(jobId)).lastErrorMessage).toBe(
+      'renderer_identity_untrusted',
+    )
   }, 240_000)
 
   it('a result whose recorded renderer VERSION was altered cannot advance', async () => {
@@ -1905,8 +1908,11 @@ describe('red-team: a MOCK render is never permitted in production', () => {
       .where(eq(prayerGenerationJobs.id, jobId))
     const outcome = await runRenderOnce('rtr-version-mismatch', clock)
     expect(outcome.status).not.toBe('COMPLETE')
+    // A trusted CODE with an unknown VERSION is not trusted — the
+    // tuple is checked as a whole, which is exactly the tampered or
+    // unrecognised-build case.
     expect((await jobRow(jobId)).lastErrorMessage).toBe(
-      'renderer_version_mismatch',
+      'renderer_identity_untrusted',
     )
   }, 240_000)
 
@@ -1928,8 +1934,11 @@ describe('red-team: a MOCK render is never permitted in production', () => {
       .where(eq(prayerGenerationJobs.id, jobId))
     const outcome = await runRenderOnce('rtr-flag-mismatch', clock)
     expect(outcome.status).not.toBe('COMPLETE')
+    // Flipping the flag is how synthetic output would try to pass
+    // itself off as a real render; the tuple no longer matches any
+    // trusted identity.
     expect((await jobRow(jobId)).lastErrorMessage).toBe(
-      'renderer_mock_flag_mismatch',
+      'renderer_identity_untrusted',
     )
   }, 240_000)
 
@@ -1955,7 +1964,7 @@ describe('red-team: a MOCK render is never permitted in production', () => {
     expect(after.ok).toBe(false)
     if (after.ok) return
     expect(after.errorCode).toBe('RENDERER_NOT_PERMITTED')
-    expect(after.detail).toBe('renderer_version_mismatch')
+    expect(after.detail).toBe('renderer_identity_untrusted')
   }, 240_000)
 })
 

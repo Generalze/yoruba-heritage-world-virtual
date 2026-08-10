@@ -32,15 +32,24 @@ const STORAGE_ORIGIN = 'https://objects.example'
 const PRODUCTION = {
   isProduction: true,
   isHttps: true,
-  mediaOrigin: `${STORAGE_ORIGIN}/some/path?ignored=1`,
+  mediaOrigin: STORAGE_ORIGIN,
 }
 
 describe('media origin extraction', () => {
-  it('keeps the ORIGIN and discards path, query and credentials', () => {
+  it('keeps the ORIGIN of a plain HTTPS base URL, path and port included', () => {
     expect(mediaOriginFromEndpoint(PRODUCTION.mediaOrigin)).toBe(STORAGE_ORIGIN)
     expect(mediaOriginFromEndpoint('https://objects.example:9000/bucket')).toBe(
       'https://objects.example:9000',
     )
+  })
+
+  it('REFUSES an endpoint carrying a query, fragment or credentials', () => {
+    // Deliberately a refusal rather than a silent trim: whatever an
+    // operator put there would be discarded, so their intent and the
+    // effective configuration would differ without anyone being told.
+    expect(mediaOriginFromEndpoint(`${STORAGE_ORIGIN}?ignored=1`)).toBeNull()
+    expect(mediaOriginFromEndpoint(`${STORAGE_ORIGIN}#frag`)).toBeNull()
+    expect(mediaOriginFromEndpoint('https://user:pass@objects.example')).toBeNull()
   })
 
   it('refuses anything that is not HTTPS, and anything unparseable', () => {

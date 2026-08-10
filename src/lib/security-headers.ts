@@ -45,15 +45,59 @@ export interface SecurityHeaderOptions {
 export function mediaOriginFromEndpoint(
   endpoint: string | null | undefined,
 ): string | null {
-  if (endpoint == null || endpoint.trim() === '') return null
+  const validated = validateStorageEndpoint(endpoint)
+  return validated.ok ? validated.origin : null
+}
+
+export type StorageEndpointValidation =
+  | { ok: true; origin: string }
+  | { ok: false; reasonCode: string; origin: null }
+
+/**
+ * THE definition of a usable browser-delivery endpoint.
+ *
+ * Phase One delivers a recorded prayer by redirecting the browser to a
+ * signed URL at this endpoint, and the production CSP names its origin
+ * as the single external source allowed to play media. Both of those
+ * are only as good as the endpoint being what it claims to be, so it is
+ * parsed and interrogated rather than string-matched:
+ *
+ * - HTTPS, because the signed link and the media it unlocks would
+ *   otherwise be readable in transit;
+ * - PARSEABLE, because `https://` followed by rubbish is not an origin;
+ * - NO USERNAME OR PASSWORD, because credentials in a URL end up in
+ *   proxy logs, browser history and `Referer` headers — and would be
+ *   silently dropped from the origin, so the CSP would authorise a host
+ *   nobody meant to authorise;
+ * - NO QUERY AND NO FRAGMENT, because an endpoint carrying either is
+ *   not a base URL, and whatever it carries would be discarded — which
+ *   means the operator's intent and the effective configuration differ.
+ */
+export function validateStorageEndpoint(
+  endpoint: string | null | undefined,
+): StorageEndpointValidation {
+  if (endpoint == null || endpoint.trim() === '') {
+    return { ok: false, reasonCode: 'endpoint_absent', origin: null }
+  }
   let parsed: URL
   try {
-    parsed = new URL(endpoint)
+    parsed = new URL(endpoint.trim())
   } catch {
-    return null
+    return { ok: false, reasonCode: 'endpoint_unparseable', origin: null }
   }
-  if (parsed.protocol !== 'https:') return null
-  return parsed.origin
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, reasonCode: 'endpoint_not_https', origin: null }
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return { ok: false, reasonCode: 'endpoint_has_credentials', origin: null }
+  }
+  if (parsed.search !== '') {
+    return { ok: false, reasonCode: 'endpoint_has_query', origin: null }
+  }
+  if (parsed.hash !== '') {
+    return { ok: false, reasonCode: 'endpoint_has_fragment', origin: null }
+  }
+  return { ok: true, origin: parsed.origin }
 }
 
 /**

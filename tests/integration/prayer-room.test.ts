@@ -1543,6 +1543,55 @@ describe('prayer room: a remote provider gets a short-lived signed GET, after au
     expect(persisted.toLowerCase()).not.toContain('signature')
   }, 240_000)
 
+  it('a signed URL on a DIFFERENT origin is never redirected to', async () => {
+    // Step 20 hardening: Phase One delivers by redirecting to the
+    // CONFIGURED private-storage endpoint, and the production CSP
+    // allows only that origin. A signed URL pointing anywhere else is
+    // either a misconfigured adapter or a redirect to somebody else’s
+    // host, and neither is followed.
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    const calls: Array<{ objectKey: string; ttl: number }> = []
+    const remote = remoteProvider(calls)
+    setObjectStorageForTests(remote)
+    await getDb()
+      .update(prayerGenerationUploads)
+      .set({ providerCode: remote.code, providerIsLocal: 0 })
+      .where(eq(prayerGenerationUploads.generationJobId, jobId))
+    try {
+      // The adapter mints https://private.example.invalid/... while the
+      // deployment is configured for a different host.
+      const mismatched = await servePrayerRoomMedia({
+        userId: ownerId,
+        publicId,
+        request: mediaRequest(),
+        now,
+        expectedMediaOrigin: 'https://objects.example',
+      })
+      expect(mismatched.status).toBe(404)
+      expect(mismatched.headers.get('location')).toBeNull()
+
+      // The EXACT configured origin is followed.
+      const matched = await servePrayerRoomMedia({
+        userId: ownerId,
+        publicId,
+        request: mediaRequest(),
+        now,
+        expectedMediaOrigin: 'https://private.example.invalid',
+      })
+      expect(matched.status).toBe(302)
+      expect(matched.headers.get('location')).toContain(
+        'https://private.example.invalid/',
+      )
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    // Neither attempt persisted or logged a signed URL.
+    const rows = await uploadRows(jobId)
+    expect(JSON.stringify(rows)).not.toContain('sig=deadbeef')
+  }, 240_000)
   it('production still refuses local object storage', async () => {
     // The environment guard is what stops a local object ever being
     // served from production, and it is re-checked on every request

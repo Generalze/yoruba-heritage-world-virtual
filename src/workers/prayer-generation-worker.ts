@@ -6,7 +6,10 @@ import {
   systemGenerationClock,
 } from '@/services/generation-jobs'
 import { runGenerationPipelinePass } from '@/services/generation-pipeline'
-import { assertProductionPreflight } from '@/server/production-preflight'
+import {
+  assertProductionPreflight,
+  assertRenderRuntimeReady,
+} from '@/server/production-preflight'
 
 /**
  * DB-backed prayer generation worker (Phase One, Step 12; autonomous
@@ -102,6 +105,12 @@ async function main(): Promise<void> {
   // configuration — consuming its bounded retry budget for a fault
   // that has nothing to do with the booking.
   assertProductionPreflight('worker')
+  // AND THE TOOLING A REAL RENDER NEEDS, proved by the SAME check
+  // readiness uses. The web tier answering 503 protects nobody here:
+  // the WORKER is the process that renders, and it takes its work from
+  // a queue rather than from a load balancer. Without this it would
+  // sweep leases and claim jobs it cannot possibly finish.
+  await assertRenderRuntimeReady('worker')
   console.log(`[${WORKER_ID}] prayer generation worker started (DB queue)`)
   let lastSweep = 0
   while (!shuttingDown) {

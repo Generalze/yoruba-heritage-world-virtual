@@ -1,5 +1,7 @@
 import { z } from 'zod'
 
+import { validateStorageEndpoint } from '@/lib/security-headers'
+
 /**
  * Server-side environment configuration, validated with Zod.
  *
@@ -305,16 +307,31 @@ const envObjectSchema = z
         message:
           'OBJECT_STORAGE_DRIVER=LOCAL is invalid in production — a directory on one machine is not durable private object storage',
       })
-    } else if (!cfg.OBJECT_STORAGE_ENDPOINT.startsWith('https://')) {
+    } else {
       // A recorded prayer is delivered to a browser by redirecting it
-      // to a signed URL at this endpoint. Over plain HTTP that link —
-      // and the media it unlocks — is readable by anything on the path.
-      ctx.addIssue({
-        code: 'custom',
-        path: ['OBJECT_STORAGE_ENDPOINT'],
-        message:
-          'Production requires an HTTPS OBJECT_STORAGE_ENDPOINT — signed media is delivered from it to a browser',
-      })
+      // to a signed URL at this endpoint, and the CSP names its origin
+      // as the one external source allowed to play media. It must
+      // therefore be a real, credential-free HTTPS base URL.
+      const endpoint = validateStorageEndpoint(cfg.OBJECT_STORAGE_ENDPOINT)
+      if (!endpoint.ok) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OBJECT_STORAGE_ENDPOINT'],
+          message: `Production requires a plain HTTPS OBJECT_STORAGE_ENDPOINT (${endpoint.reasonCode})`,
+        })
+      }
+      if (!cfg.OBJECT_STORAGE_FORCE_PATH_STYLE) {
+        // Virtual-hosted addressing puts the bucket in the HOST, so the
+        // signed URL would land on an origin the Prayer Room's pin and
+        // the CSP do not know about — and every playback would be
+        // refused. See the preflight for the full reasoning.
+        ctx.addIssue({
+          code: 'custom',
+          path: ['OBJECT_STORAGE_FORCE_PATH_STYLE'],
+          message:
+            'Production requires OBJECT_STORAGE_FORCE_PATH_STYLE=true — signed media is delivered from the configured endpoint origin',
+        })
+      }
     }
     if (cfg.RENDER_DRIVER === 'MOCK') {
       ctx.addIssue({

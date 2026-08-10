@@ -64,6 +64,14 @@ Production requires, at minimum:
   limiting. Set it to `true` only when the reverse proxy in front of
   this app overwrites the header.
 - `OBJECT_STORAGE_DRIVER=S3` plus its five settings — `LOCAL` is refused
+- `OBJECT_STORAGE_ENDPOINT` — a plain HTTPS base URL. No username or
+  password, no query, no fragment: each would be silently discarded,
+  leaving your intent and the effective configuration different.
+- `OBJECT_STORAGE_FORCE_PATH_STYLE=true` — required while Phase One
+  delivers media by redirect. Virtual-hosted addressing puts the bucket
+  in the HOST, so the signed URL would land on an origin neither the
+  Prayer Room’s pin nor the CSP knows about, and every playback would be
+  refused.
 - `RENDER_DRIVER=REMOTION` — `MOCK` is refused
 - `VISUAL_GENERATION_DRIVER` and `TTS_DRIVER` — `MOCK` is refused
 
@@ -245,11 +253,18 @@ backup regime fails silently for months and then fails loudly once.
   at first render. Verify inside a container, as the unprivileged user:
 
   ```sh
+  # Needs NO payment, storage or database credentials — it checks
+  # tooling, not configuration.
   docker compose run --rm --no-deps worker bun run smoke:runtime
   ```
 
   It proves the shared media path is writable, ffprobe is executable and
   the browser is executable — without downloading or rendering anything.
+- **The WORKER gates on it too, before it touches the queue.** In
+  production with a real renderer it proves the same capabilities before
+  lease recovery and before any pipeline pass, exits non-zero if either
+  is missing, and mutates no job or lease on the way out. Readiness
+  protects the web tier; this protects the queue.
 - **Readiness gates on that tooling.** When `RENDER_DRIVER` selects the
   real engine, `/api/ready` answers 503 if either binary is missing, so a
   deployment that cannot render is taken out of rotation rather than

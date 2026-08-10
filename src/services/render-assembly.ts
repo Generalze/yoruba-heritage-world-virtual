@@ -20,7 +20,7 @@ import {
 import {
   checkRenderEngineAllowed,
   getRenderEngine,
-  resolveRenderEngine,
+  checkTrustedRendererIdentity,
 } from '@/providers/render/registry'
 import { RenderEngineError } from '@/providers/render/types'
 import { measureAudioDurationFromBytes } from '@/providers/render/media-probe'
@@ -1476,40 +1476,27 @@ export async function verifyCompletedRender(
   // whose renderer is wrong should be refused for THAT reason, and
   // refused cheaply — not discovered part-way through work it was
   // never entitled to.
-  const producingEngine = resolveRenderEngine(result.rendererCode)
-  if (!producingEngine) {
+  // A COMPLETED recording is judged against the TRUSTED REGISTRY, not
+  // against whatever engine happens to be installed today.
+  //
+  // The row records the engine that actually produced this artifact.
+  // Demanding it equal the CURRENT engine would mean every recording
+  // ever made became unavailable the moment Remotion was upgraded —
+  // an outage dressed up as a security property. So the question here
+  // is "does this platform vouch for that producer?", answered as a
+  // whole tuple (code + version + mock flag), with the production
+  // mock prohibition applied to the ARTIFACT's own flag. New spend
+  // stays strict against the current engine; see runRenderOnce.
+  const trusted = checkTrustedRendererIdentity({
+    code: result.rendererCode,
+    version: result.rendererVersion,
+    isMock: result.rendererIsMock === 1,
+  })
+  if (!trusted.ok) {
     return {
       ok: false,
       errorCode: 'RENDERER_NOT_PERMITTED',
-      detail: 'renderer_code_mismatch',
-    }
-  }
-  // EXACT IDENTITY, not merely a matching code. A compositor upgrade is
-  // a DIFFERENT renderer: it composes differently, rounds differently
-  // and may honour a fit differently. Accepting an artifact recorded
-  // against `remotion-4.0.507` while `remotion-4.1.0` is installed
-  // would be vouching for output this build never produced. The mock
-  // flag is checked here too, so a row claiming a real render can never
-  // be satisfied by a mock engine that happens to share its code.
-  const identityMismatch =
-    result.rendererVersion !== producingEngine.version
-      ? 'renderer_version_mismatch'
-      : result.rendererIsMock !== (producingEngine.isMock ? 1 : 0)
-        ? 'renderer_mock_flag_mismatch'
-        : null
-  if (identityMismatch != null) {
-    return {
-      ok: false,
-      errorCode: 'RENDERER_NOT_PERMITTED',
-      detail: identityMismatch,
-    }
-  }
-  const stillAllowed = checkRenderEngineAllowed(producingEngine)
-  if (!stillAllowed.ok) {
-    return {
-      ok: false,
-      errorCode: 'RENDERER_NOT_PERMITTED',
-      detail: stillAllowed.reasonCode,
+      detail: trusted.reasonCode,
     }
   }
 

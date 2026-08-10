@@ -1277,15 +1277,56 @@ two spans covering the window exactly; and `HOLD_PREVIOUS` freezes THE
 LAST FRAME THAT WAS DISPLAYED — never frame zero, which would show the
 viewer approved footage a second time in a place nobody approved it for.
 
-**RENDERER IDENTITY IS EXACT.** The Remotion package set is pinned to ONE
-EXACT version with no caret range, and the engine persists that exact
-version (`remotion-4.0.507`). Before any render spend, and again inside
-`verifyCompletedRender`, the row's `rendererCode`, `rendererVersion` and
-`rendererIsMock` must match the resolved producing engine EXACTLY — a
-compositor upgrade is a different renderer. The pre-spend check sits
-AFTER the idempotency short-circuit, so an already-finished result is
-never condemned for having been made by the engine that legitimately
-existed at the time.
+**RENDERER IDENTITY IS EXACT FOR NEW SPEND, AND DURABLE FOR FINISHED
+WORK.** The Remotion package set is pinned to ONE EXACT version with no
+caret range, and the engine persists that exact version
+(`remotion-4.0.507`).
+
+- BEFORE ANY RENDER SPEND the row's `rendererCode`, `rendererVersion`
+  and `rendererIsMock` must equal the CURRENTLY selected engine exactly.
+  The check sits AFTER the idempotency short-circuit, so an
+  already-finished result is never condemned for having been made by the
+  engine that legitimately existed at the time.
+- A COMPLETED recording is judged against a TRUSTED PERSISTED-RENDERER
+  REGISTRY instead. Demanding that a finished artifact match the engine
+  installed today would mean every recording ever made became
+  unavailable the moment Remotion was upgraded — an outage dressed up as
+  a security property. The registry is checked as a WHOLE TUPLE (code +
+  version + mock flag), so a trusted code with an unknown version is not
+  trusted; the production mock prohibition is applied to the ARTIFACT's
+  own flag rather than to the active engine; the rebuild uses the
+  persisted mock/real timing policy; and every plan, hash, artifact and
+  current-authority proof is unchanged. Unknown or tampered identities
+  remain fail-closed.
+- GOVERNANCE: upgrading a renderer ADDS an identity to that registry. An
+  old identity is REMOVED only by an explicit governance or security
+  decision — removing one declares every recording it produced
+  untrustworthy and takes those recordings away from the people they
+  belong to. That must never happen as a side effect of editing
+  package.json.
+
+**THE WORKER PROVES IT CAN RENDER BEFORE IT TOUCHES THE QUEUE.** In
+production with a real renderer selected, the generation worker runs the
+SAME local-tooling check readiness uses — ffprobe and the baked browser
+— before lease recovery and before any pipeline pass. The web tier
+answering 503 protects nobody here: the worker takes its work from a
+queue, not from a load balancer. A refusal exits non-zero, logs bounded
+capability names only, and mutates no job, no lease and no retry budget.
+
+**THE BROWSER-DELIVERY ENDPOINT IS PINNED.** `OBJECT_STORAGE_ENDPOINT`
+is parsed, not string-matched: HTTPS, well-formed, and carrying no
+username, password, query or fragment — each of which would otherwise be
+silently discarded, leaving the operator's intent and the effective
+configuration different. Production additionally requires
+`OBJECT_STORAGE_FORCE_PATH_STYLE=true`, because virtual-hosted
+addressing moves the bucket into the HOST and the signed URL would land
+on an origin neither the redirect pin nor the CSP knows about; permitting
+it would mean widening `media-src` to a wildcard over the provider's
+whole domain. Before the Prayer Room returns its 302 the signed URL's
+origin must EQUAL the configured endpoint's origin; a mismatch is the
+same neutral 404 as every other refusal, with no redirect and nothing
+persisted or logged. A separate browser-delivery origin contract is a
+later, explicit stage.
 
 **RENDERING MEASURES INSTEAD OF TRUSTING.** The real engine is opt-in
 behind `RENDER_DRIVER=REMOTION`; the mock remains the default and stays
