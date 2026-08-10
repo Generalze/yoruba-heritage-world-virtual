@@ -1011,6 +1011,75 @@ UPLOADING
 
 ---
 
+## 10.11 Amendment — Recorded Prayer Room Runtime (Phase One, Step 18)
+
+```text
+authenticated appointment OWNER
+→ appointment-time gate (CURRENT startsAtUtc)
+→ generation job READY
+→ verifyCompletedUpload()   (the SAME Step 17 proof, re-run)
+→ private playback of the recorded prayer
+```
+
+- ACCESS IS OWNERSHIP, AND OWNERSHIP ONLY. The browser supplies the
+  appointment publicId and nothing else; the server proves an
+  authenticated session, that the appointment belongs to that exact
+  user, that its status is CONFIRMED or COMPLETED, that the
+  appointment has started, that the generation job for it is READY,
+  and that the Step 17 upload still verifies. Ownership is expressed
+  in the query itself, not applied afterwards.
+- STAFF ROLES GRANT NO BYPASS. The access path never asks about roles,
+  so an administrator holding every permission in the system still
+  cannot open somebody's Prayer Room.
+- FAILURE IS NEUTRAL. An unknown appointment, another user’s
+  appointment, an unauthenticated caller, a locked room and an
+  unverifiable recording all answer with the same shape. A caller can
+  never probe for other people's appointments, and an owner is never
+  shown a hash, provider code, object key, job or upload id, pipeline
+  error or private request note.
+- THE TIME GATE IS THE CURRENT APPOINTMENT START. A recorded Prayer
+  Room opens exactly at `appointments.startsAtUtc` as it stands now,
+  so rescheduling moves the gate automatically and no stored copy can
+  drift out of step. There is deliberately NO automatic closing or
+  expiry period: nothing takes away a recording the owner is entitled
+  to. PENDING_PAYMENT, CANCELLED, NO_SHOW and EXPIRED never reach a
+  recording at all.
+- EVERY REQUEST RE-PROVES EVERYTHING. Playback runs the shared
+  `verifyCompletedUpload()` — the same function Step 17’s own final
+  gate uses — on every media request, not once at page load: current
+  Step 16 authority, upload identity, canonical object identity,
+  provider identity and environment permission, remote existence, byte
+  size, MIME and SHA-256. A withdrawal, a tamper or a missing object
+  closes the room on the very next byte range requested. Step 18
+  regenerates nothing.
+- THE MEDIA ENDPOINT IS AUTHENTICATED AND OPAQUE. Media is identified
+  by appointment publicId only — there is no parameter for an object
+  key, provider, upload or job, so a caller has nothing to aim at. For
+  local/test storage the verified bytes are proxied server-side with
+  full byte-range support (200, 206 with Content-Range, 416 for an
+  unsatisfiable range, Accept-Ranges, correct Content-Type and
+  Content-Length, `Cache-Control: private, no-store`,
+  `X-Content-Type-Options: nosniff`). No filesystem path, object key or
+  provider identity ever appears in a response.
+- A REMOTE PROVIDER GETS A SIGNED PRIVATE GET, AFTER THE SAME PROOF.
+  Only once authorization has fully passed is a short-lived PRIVATE
+  signed GET created and redirected to, bounded by Step 17’s
+  fifteen-minute ceiling and shorter in practice. The URL lives in
+  that response alone: never in a database row, never in an event,
+  never in a log.
+- NO PUBLIC SURFACE. There is no share link, no download control, no
+  public route and no direct object URL in page data. Playback is a
+  plain HTML video element pointed at the authenticated endpoint.
+- NO NEW STATE AND NO NEW CONTENT. Step 18 adds no table: appointment,
+  generation job and upload rows already say everything a Prayer Room
+  needs, and duplicating them would create a second thing to drift. It
+  introduces no spiritual content of its own and displays only safe
+  existing snapshots — service name, Sacred House name and the
+  scheduled time — under the existing spiritual-service framing.
+- Live Prayer Rooms, sharing, subscriptions and any public media route
+  remain out of scope at this stage.
+
+---
 # 11. Visual Canon Database
 
 Each visual asset should be classified and approved.

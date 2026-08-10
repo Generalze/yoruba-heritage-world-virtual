@@ -1174,7 +1174,11 @@ describe('runtime candidate query', () => {
     ]) {
       await setContentItemActive(adminId, ctx, fixture, false)
     }
-  })
+    // Governance assertions, not a performance budget: this fixture is
+    // large and the shared test database accumulates rows across every
+    // suite, so it gets the same generous timeout as the other heavy
+    // integration tests rather than the 5s default.
+  }, 240_000)
 
   it('candidate query needs no user data and filters by content type', async () => {
     const theme = `T8_TT_${crypto.randomUUID().slice(0, 4).toUpperCase().replace(/-/g, 'X')}`
@@ -1304,7 +1308,17 @@ describe('controlled policy validation', () => {
       join(process.cwd(), 'src', 'routeTree.gen.ts'),
       'utf8',
     )
-    expect(routeTree).not.toMatch(/prayer.?room/i)
+    // Step 18 builds the recorded Prayer Room, so "none exists" is no
+    // longer the fence. The fence is now the SHAPE of that surface:
+    // exactly one owner-only page and one AUTHENTICATED media endpoint,
+    // and nothing else — no public route, no second media path.
+    const prayerRoomPaths = [...routeTree.matchAll(/fullPath: '([^']*prayer-room[^']*)'/g)]
+      .map((match) => match[1])
+      .sort()
+    expect(prayerRoomPaths).toEqual([
+      '/api/prayer-room/$publicId/media',
+      '/prayer-room/$publicId',
+    ])
   })
 })
 
