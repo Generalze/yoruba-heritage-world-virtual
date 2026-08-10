@@ -108,6 +108,16 @@ export function checkProductionPreflight(
         add('object_storage_config_missing', name)
       }
     }
+    // A browser is REDIRECTED to this endpoint to play somebody's
+    // recorded prayer. Over plain HTTP the signed link and the media it
+    // unlocks are readable in transit, and the production CSP would
+    // have no HTTPS origin to allow.
+    if (
+      cfg.OBJECT_STORAGE_ENDPOINT.trim().length > 0 &&
+      !cfg.OBJECT_STORAGE_ENDPOINT.startsWith('https://')
+    ) {
+      add('object_storage_endpoint_not_https', 'OBJECT_STORAGE_ENDPOINT')
+    }
   }
 
   // --- Render ------------------------------------------------------------

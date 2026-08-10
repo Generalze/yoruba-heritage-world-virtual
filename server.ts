@@ -17,7 +17,10 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { resolveContainedPath } from './src/lib/static-files'
-import { withSecurityHeaders } from './src/lib/security-headers'
+import {
+  securityHeaders,
+  withSecurityHeaders,
+} from './src/lib/security-headers'
 import { assertProductionPreflight } from './src/server/production-preflight'
 
 // @ts-expect-error — compiled server bundle exists only after `bun run build`
@@ -37,7 +40,20 @@ const clientDir = join(import.meta.dir, 'dist', 'client')
 const port = Number(process.env.APP_PORT ?? process.env.PORT ?? 3000)
 const isProduction = process.env.NODE_ENV === 'production'
 const isHttps = (process.env.APP_BASE_URL ?? '').startsWith('https://')
-const headerOptions = { isProduction, isHttps }
+/**
+ * Built ONCE. These headers are constant for the life of the process
+ * and go on every response, including every static asset — rebuilding
+ * the map per request would be pure waste on the hottest path there is.
+ *
+ * `mediaOrigin` is the configured private object-storage endpoint: the
+ * single external origin a recorded prayer may be played from, and only
+ * when it is HTTPS.
+ */
+const headerOptions = securityHeaders({
+  isProduction,
+  isHttps,
+  mediaOrigin: process.env.OBJECT_STORAGE_ENDPOINT ?? null,
+})
 
 function findStaticFile(pathname: string): string | undefined {
   const candidate = resolveContainedPath(clientDir, pathname)

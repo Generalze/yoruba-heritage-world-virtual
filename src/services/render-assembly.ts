@@ -23,6 +23,8 @@ import {
   resolveRenderEngine,
 } from '@/providers/render/registry'
 import { RenderEngineError } from '@/providers/render/types'
+import { measureAudioDurationFromBytes } from '@/providers/render/media-probe'
+import type { AudioDurationProbe } from '@/providers/render/media-probe'
 import {
   DEFAULT_LEASE_MS,
   GenerationJobError,
@@ -819,13 +821,86 @@ export function buildRenderPlan(input: {
  * A missing, tampered or withdrawn source means NO RENDER — never a
  * partial one, never a substitute.
  */
+/**
+ * WHOSE NUMBER IS THE AUDIO'S LENGTH.
+ *
+ * For the MOCK engine: the database's. Its artifacts are synthetic and
+ * its whole value is exactness and determinism, so nothing is measured
+ * and Step 16's proofs stay byte-for-byte proofs.
+ *
+ * For a REAL engine: the FILE's. `media_asset_versions.duration_seconds`
+ * is whole SECONDS typed by a person, and a TTS task's duration is the
+ * provider's own claim about its own output — neither is evidence about
+ * what is actually in the bytes. A 12.4-second recording stored as 12
+ * would be given a 12 000 ms window, and 400 ms of somebody's prayer
+ * would have nowhere to play.
+ *
+ * The measured value becomes VerifiedAudioSource.durationMs BEFORE the
+ * plan is built, so the LOCKED Step 16 reconciliation
+ * (`max(plannedSegmentDuration, actualAudioDuration)`) does the rest by
+ * itself: the segment grows, later scenes shift, the recording plays
+ * once in full. Nothing is trimmed to fit, and no render is refused for
+ * being longer than a stale database row said it would be.
+ *
+ * THE POLICY MUST MATCH AT REBUILD TIME. verifyCompletedRender rebuilds
+ * this plan and compares renderPlanSha256 exactly, so it passes the
+ * policy of the engine that ACTUALLY produced the row (`rendererIsMock`),
+ * never whichever engine happens to be active now.
+ */
+export interface RenderPlanBuildOptions {
+  /** null (the default) = database metadata is authoritative — the mock
+   * path. A probe = measure the real bytes. */
+  measureAudioDuration?: AudioDurationProbe | null
+}
+
+/** Picks the policy from an engine's own mock flag, so there is exactly
+ * one rule and both call sites read it the same way. */
+export function audioDurationPolicyFor(
+  rendererIsMock: boolean,
+): AudioDurationProbe | null {
+  return rendererIsMock ? null : measureAudioDurationFromBytes
+}
+
+/**
+ * Replaces a verified source's DB-metadata duration with the measured
+ * one. The bytes are re-hashed against the source's own frozen SHA-256
+ * first: reading the right key is not the same as reading the right
+ * bytes, and a measurement of the wrong file would be worse than no
+ * measurement at all.
+ */
+async function measureVerifiedAudioSource(
+  source: VerifiedAudioSource,
+  probe: AudioDurationProbe,
+): Promise<{ ok: true; source: VerifiedAudioSource } | { ok: false; reasonCode: string }> {
+  const bytes = await getMediaStorage().get(source.storageKey)
+  if (!bytes || bytes.length === 0) {
+    return { ok: false, reasonCode: 'audio_bytes_missing_for_measurement' }
+  }
+  if (computeFileSha256(bytes) !== source.sha256) {
+    return { ok: false, reasonCode: 'audio_bytes_hash_mismatch' }
+  }
+  const measured = await probe({
+    bytes,
+    sha256: source.sha256,
+    mimeType: source.mimeType,
+  })
+  if (!measured.ok) {
+    // FAIL CLOSED. An unmeasurable recording is never placed on a
+    // timeline from a guess.
+    return { ok: false, reasonCode: `audio_${measured.reasonCode}` }
+  }
+  return { ok: true, source: { ...source, durationMs: measured.durationMs } }
+}
+
 export async function buildValidatedRenderPlan(
   generationJobId: number,
   manifestSnapshotId: number,
   storyboard: GenerationStoryboard,
   manifest: GenerationManifest,
   context: RenderContext,
+  options: RenderPlanBuildOptions = {},
 ): Promise<BuiltRenderPlan> {
+  const measureAudioDuration = options.measureAudioDuration ?? null
   const visualBySceneId = new Map<string, VerifiedVisualSource>()
   const approvedBySceneId = new Map(
     manifest.approvedMedia.map((entry) => [entry.sceneId, entry]),
@@ -882,7 +957,19 @@ export async function buildValidatedRenderPlan(
       context,
     )
     if (!verified.ok) return { ok: false, reasonCode: verified.reasonCode }
-    audioBySegment.set(segmentIndex, verified.source)
+    // MEASUREMENT BEFORE THE PLAN, never after it. This is the whole
+    // point: the reconciliation below can only grow a segment to fit a
+    // recording if it is told the recording's REAL length first.
+    let source = verified.source
+    if (measureAudioDuration) {
+      const measured = await measureVerifiedAudioSource(
+        source,
+        measureAudioDuration,
+      )
+      if (!measured.ok) return { ok: false, reasonCode: measured.reasonCode }
+      source = measured.source
+    }
+    audioBySegment.set(segmentIndex, source)
     audioRequirementBySegment.set(segmentIndex, requirement)
   }
 
@@ -1355,33 +1442,11 @@ export async function verifyCompletedRender(
       detail: loadedPlan.status,
     }
   }
-  const rebuilt = await buildValidatedRenderPlan(
-    generationJobId,
-    manifestSnapshotId,
-    revalidated.storyboard,
-    revalidated.manifest,
-    context,
-  )
-  if (!rebuilt.ok) {
-    return {
-      ok: false,
-      errorCode: 'RENDER_SOURCE_INVALID',
-      detail: rebuilt.reasonCode,
-    }
-  }
-  if (
-    rebuilt.plan.renderPlanSha256 !== loadedPlan.plan.renderPlanSha256 ||
-    loadedPlan.manifestSnapshotId !== manifestSnapshotId ||
-    (expected.planSnapshotId != null &&
-      expected.planSnapshotId !== loadedPlan.snapshotId)
-  ) {
-    return {
-      ok: false,
-      errorCode: 'RENDER_PLAN_STALE',
-      detail: 'plan_no_longer_current',
-    }
-  }
-
+  // THE ROW IS READ BEFORE THE REBUILD, because the row is what says
+  // WHICH ENGINE produced this plan — and therefore whether the audio
+  // durations in it were measured from the files or taken from the
+  // database. Rebuilding under the other policy would produce a
+  // different hash and condemn a perfectly good recording.
   const result = (
     await getDb()
       .select()
@@ -1404,6 +1469,81 @@ export async function verifyCompletedRender(
   if (!result) {
     return { ok: false, errorCode: 'RENDER_RESULT_MISSING', detail: null }
   }
+
+  // IDENTITY BEFORE THE REBUILD. Proving which engine produced this
+  // row costs two comparisons; rebuilding the plan re-verifies every
+  // source and, for a real renderer, measures every audio file. A row
+  // whose renderer is wrong should be refused for THAT reason, and
+  // refused cheaply — not discovered part-way through work it was
+  // never entitled to.
+  const producingEngine = resolveRenderEngine(result.rendererCode)
+  if (!producingEngine) {
+    return {
+      ok: false,
+      errorCode: 'RENDERER_NOT_PERMITTED',
+      detail: 'renderer_code_mismatch',
+    }
+  }
+  // EXACT IDENTITY, not merely a matching code. A compositor upgrade is
+  // a DIFFERENT renderer: it composes differently, rounds differently
+  // and may honour a fit differently. Accepting an artifact recorded
+  // against `remotion-4.0.507` while `remotion-4.1.0` is installed
+  // would be vouching for output this build never produced. The mock
+  // flag is checked here too, so a row claiming a real render can never
+  // be satisfied by a mock engine that happens to share its code.
+  const identityMismatch =
+    result.rendererVersion !== producingEngine.version
+      ? 'renderer_version_mismatch'
+      : result.rendererIsMock !== (producingEngine.isMock ? 1 : 0)
+        ? 'renderer_mock_flag_mismatch'
+        : null
+  if (identityMismatch != null) {
+    return {
+      ok: false,
+      errorCode: 'RENDERER_NOT_PERMITTED',
+      detail: identityMismatch,
+    }
+  }
+  const stillAllowed = checkRenderEngineAllowed(producingEngine)
+  if (!stillAllowed.ok) {
+    return {
+      ok: false,
+      errorCode: 'RENDERER_NOT_PERMITTED',
+      detail: stillAllowed.reasonCode,
+    }
+  }
+
+
+  const rebuilt = await buildValidatedRenderPlan(
+    generationJobId,
+    manifestSnapshotId,
+    revalidated.storyboard,
+    revalidated.manifest,
+    context,
+    {
+      measureAudioDuration: audioDurationPolicyFor(result.rendererIsMock === 1),
+    },
+  )
+  if (!rebuilt.ok) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_SOURCE_INVALID',
+      detail: rebuilt.reasonCode,
+    }
+  }
+  if (
+    rebuilt.plan.renderPlanSha256 !== loadedPlan.plan.renderPlanSha256 ||
+    loadedPlan.manifestSnapshotId !== manifestSnapshotId ||
+    (expected.planSnapshotId != null &&
+      expected.planSnapshotId !== loadedPlan.snapshotId)
+  ) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_PLAN_STALE',
+      detail: 'plan_no_longer_current',
+    }
+  }
+
   if (
     (expected.renderResultId != null && expected.renderResultId !== result.id) ||
     result.generationJobId !== generationJobId ||
@@ -1459,22 +1599,6 @@ export async function verifyCompletedRender(
       ok: false,
       errorCode: 'RENDER_ARTIFACT_INVALID',
       detail: 'artifact_mime_mismatch',
-    }
-  }
-  const producingEngine = resolveRenderEngine(result.rendererCode)
-  if (!producingEngine) {
-    return {
-      ok: false,
-      errorCode: 'RENDERER_NOT_PERMITTED',
-      detail: 'renderer_code_mismatch',
-    }
-  }
-  const stillAllowed = checkRenderEngineAllowed(producingEngine)
-  if (!stillAllowed.ok) {
-    return {
-      ok: false,
-      errorCode: 'RENDERER_NOT_PERMITTED',
-      detail: stillAllowed.reasonCode,
     }
   }
   return {
@@ -1600,12 +1724,23 @@ export async function runRenderOnce(
     }
     const manifestSnapshotId = manifestRow.snapshotId
 
+    // THE ENGINE IS RESOLVED BEFORE THE PLAN IS BUILT, because it
+    // decides whose number the audio's length is: a real engine
+    // measures the file, the mock trusts the database and stays
+    // exact. Both calls are pure lookups with no side effect, so
+    // moving them ahead of the build costs nothing and buys the plan
+    // its correct timing authority.
+    const engine = getRenderEngine()
+    const allowed = checkRenderEngineAllowed(engine)
+    if (!allowed.ok) return fail('RENDERER_NOT_PERMITTED', allowed.reasonCode)
+
     const built = await buildValidatedRenderPlan(
       job.id,
       manifestSnapshotId,
       validated.storyboard,
       validated.manifest,
       context,
+      { measureAudioDuration: audioDurationPolicyFor(engine.isMock) },
     )
     if (!built.ok) return fail('RENDER_SOURCE_INVALID', built.reasonCode)
 
@@ -1617,10 +1752,6 @@ export async function runRenderOnce(
       clock,
     )
     if (!planSnapshot) return { status: 'LEASE_LOST', jobId: job.id }
-
-    const engine = getRenderEngine()
-    const allowed = checkRenderEngineAllowed(engine)
-    if (!allowed.ok) return fail('RENDERER_NOT_PERMITTED', allowed.reasonCode)
 
     const idempotencyKey = computeRenderIdempotencyKey({
       generationJobId: job.id,
@@ -1662,6 +1793,26 @@ export async function runRenderOnce(
     // is never re-rendered. A deterministic retry converges on the SAME
     // row and the SAME artifact instead of producing a second one.
     if (row.status !== 'SUCCEEDED') {
+      // EXACT RENDERER IDENTITY BEFORE ANY SPEND. The row records which
+      // engine this result belongs to; if the active engine is not that
+      // engine — a different compositor, a different version, or the
+      // mock standing where a real renderer stood — then rendering into
+      // this row would attach output to an identity that did not
+      // produce it. Placed AFTER the idempotency short-circuit on
+      // purpose: an already-SUCCEEDED result is never re-rendered, and
+      // must not be condemned here for having been made by the engine
+      // that legitimately existed at the time.
+      const engineMismatch =
+        row.rendererCode !== engine.code
+          ? 'result_renderer_code_mismatch'
+          : row.rendererVersion !== engine.version
+            ? 'result_renderer_version_mismatch'
+            : row.rendererIsMock !== (engine.isMock ? 1 : 0)
+              ? 'result_renderer_mock_flag_mismatch'
+              : null
+      if (engineMismatch != null) {
+        return fail('RENDER_RESULT_IDENTITY_MISMATCH', engineMismatch)
+      }
       const statusAtRead = row.status
       const doRender = dependencies.render ?? engine.render.bind(engine)
       const request = compileRenderRequest(built.plan, built.sources)

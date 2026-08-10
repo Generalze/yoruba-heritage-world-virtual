@@ -1,9 +1,13 @@
 import { pingDatabase } from '@/db'
+import { env } from '@/lib/env'
+import { checkRenderRuntimeDependencies } from '@/providers/render/media-probe'
 import {
   checkProductionPreflight,
   describeUnavailableCapabilities,
 } from '@/server/production-preflight'
 import { healthResponseSchema, readinessResponseSchema } from '@/types/health'
+import type { RenderRuntimeCheck } from '@/providers/render/media-probe'
+import type { Env } from '@/lib/env'
 import type { HealthResponse, ReadinessResponse } from '@/types/health'
 
 /**
@@ -55,10 +59,41 @@ export async function getHealthStatus(): Promise<HealthResponse> {
  * gets the actionable form, and a stranger requesting this endpoint
  * gets a map of nothing.
  */
-export async function getReadinessStatus(): Promise<ReadinessResponse> {
+export interface ReadinessDependencies {
+  /** Injectable so a test can model a machine without ffprobe or a
+   * browser without installing or removing either. */
+  checkRenderRuntime?: RenderRuntimeCheck
+  /** Which engine this deployment would render with. */
+  renderDriver?: Env['RENDER_DRIVER']
+}
+
+export async function getReadinessStatus(
+  dependencies: ReadinessDependencies = {},
+): Promise<ReadinessResponse> {
   const preflight = checkProductionPreflight()
   const databaseUp = await pingDatabase()
-  const ready = preflight.ok && databaseUp
+
+  // THE RENDERER'S LOCAL TOOLING IS PART OF BEING READY. A deployment
+  // selecting the real compositor without ffprobe or the baked browser
+  // is not merely degraded: it will accept bookings, take money, queue
+  // the work and then burn each job's bounded retry budget on a missing
+  // binary. The mock needs neither, so this is `not_required` there
+  // rather than a fault nobody should see in development.
+  const renderDriver = dependencies.renderDriver ?? env.RENDER_DRIVER
+  const checkRenderRuntime =
+    dependencies.checkRenderRuntime ?? checkRenderRuntimeDependencies
+  const issues = preflight.issues.map((issue) => issue.code)
+  let renderRuntime: 'ok' | 'unavailable' | 'not_required' = 'not_required'
+  if (renderDriver !== 'MOCK') {
+    const runtime = await checkRenderRuntime()
+    renderRuntime = runtime.ok ? 'ok' : 'unavailable'
+    for (const capability of runtime.missing) {
+      // A CAPABILITY NAME, never the path it was looked for at.
+      issues.push(`render_runtime_missing_${capability}`)
+    }
+  }
+
+  const ready = preflight.ok && databaseUp && renderRuntime !== 'unavailable'
 
   return readinessResponseSchema.parse({
     status: ready ? 'ready' : 'not_ready',
@@ -68,8 +103,9 @@ export async function getReadinessStatus(): Promise<ReadinessResponse> {
     checks: {
       configuration: preflight.ok ? 'ok' : 'invalid',
       database: databaseUp ? 'connected' : 'unavailable',
+      renderRuntime,
     },
-    issues: preflight.issues.map((issue) => issue.code),
+    issues,
     unavailable: [...describeUnavailableCapabilities()],
   })
 }

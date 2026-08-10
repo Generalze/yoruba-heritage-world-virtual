@@ -18,6 +18,42 @@ export interface SecurityHeaderOptions {
    * (and, on a plain-HTTP development box, actively harmful — browsers
    * remember it) unless it is. */
   isHttps: boolean
+  /**
+   * The ONE external origin a recorded prayer may be fetched from: the
+   * configured private object-storage endpoint, scheme and host only.
+   *
+   * Optional, and absent by default — a deployment serving media from
+   * local storage proxies it through this origin and needs nothing
+   * else. When present it is an EXACT origin. There is deliberately no
+   * wildcard: `https://*.s3.amazonaws.com` would authorise every bucket
+   * on the internet's largest object store to play audio and video
+   * inside this application, which is not a policy, it is the absence
+   * of one.
+   */
+  mediaOrigin?: string | null
+}
+
+/**
+ * Extracts the exact origin from a configured storage endpoint.
+ *
+ * Returns null for anything that is not a well-formed HTTPS URL —
+ * including plain HTTP, which must never appear in a browser-delivery
+ * policy. Path, query and credentials are discarded: a CSP source is an
+ * origin, and carrying anything more would leak configuration into
+ * every response header.
+ */
+export function mediaOriginFromEndpoint(
+  endpoint: string | null | undefined,
+): string | null {
+  if (endpoint == null || endpoint.trim() === '') return null
+  let parsed: URL
+  try {
+    parsed = new URL(endpoint)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:') return null
+  return parsed.origin
 }
 
 /**
@@ -49,12 +85,20 @@ export interface SecurityHeaderOptions {
  * outstanding rather than quietly claimed.
  */
 export function contentSecurityPolicy(options: SecurityHeaderOptions): string {
+  // Phase One media delivery: the authenticated Prayer Room proof,
+  // then a signed private GET of at most five minutes. Local storage is
+  // proxied through this origin; a remote provider is redirected to,
+  // and that provider's EXACT origin is the only external source
+  // allowed to play. Nothing else — no wildcard, no CDN.
+  const mediaSources = ["'self'", 'blob:']
+  const mediaOrigin = mediaOriginFromEndpoint(options.mediaOrigin)
+  if (mediaOrigin) mediaSources.push(mediaOrigin)
   const directives = [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    "media-src 'self' blob:",
+    `media-src ${mediaSources.join(' ')}`,
     "font-src 'self' data:",
     "connect-src 'self'",
     "object-src 'none'",
@@ -132,12 +176,25 @@ export function securityHeaders(
  * authorization decision, and a blanket pass that clobbered them would
  * silently undo it.
  */
+function isHeaderOptions(
+  value: SecurityHeaderOptions | Record<string, string>,
+): value is SecurityHeaderOptions {
+  return typeof (value as SecurityHeaderOptions).isProduction === 'boolean'
+}
+
 export function withSecurityHeaders(
   response: Response,
-  options: SecurityHeaderOptions,
+  options: SecurityHeaderOptions | Record<string, string>,
 ): Response {
+  // Accepts an ALREADY-BUILT header map as well as options, because
+  // this runs on every response — including every static asset — and
+  // rebuilding the same constant map per request is pure waste. The
+  // server entry builds it once at startup.
+  const built = isHeaderOptions(options)
+    ? securityHeaders(options)
+    : options
   const headers = new Headers(response.headers)
-  for (const [name, value] of Object.entries(securityHeaders(options))) {
+  for (const [name, value] of Object.entries(built)) {
     if (!headers.has(name)) headers.set(name, value)
   }
   return new Response(response.body, {

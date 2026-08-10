@@ -50,6 +50,17 @@ export const readinessResponseSchema = z
       .object({
         configuration: z.enum(['ok', 'invalid']),
         database: z.enum(['connected', 'unavailable']),
+        /**
+         * Can this deployment actually perform a real render?
+         *
+         * `not_required` when the mock engine is selected (development
+         * and test). Otherwise the local tooling the compositor needs —
+         * ffprobe and the baked headless browser — must be present, or
+         * the worker will confirm appointments, queue jobs and fail
+         * every one of them at the render stage on a missing binary.
+         * Reported as a capability name only; never a filesystem path.
+         */
+        renderRuntime: z.enum(['ok', 'unavailable', 'not_required']),
       })
       .strict(),
     /** Stable codes, safe to log and to paste into a support thread. */

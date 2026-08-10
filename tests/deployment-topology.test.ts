@@ -96,6 +96,13 @@ describe('production compose', () => {
     expect(active).toContain('MEDIA_STORAGE_DIR: /app/var/media')
   })
 
+  it('points both processes at the tooling baked into the image', () => {
+    expect(active).toContain('FFPROBE_PATH: ${FFPROBE_PATH:-/usr/bin/ffprobe}')
+    expect(active).toContain(
+      'REMOTION_BROWSER_EXECUTABLE: ${REMOTION_BROWSER_EXECUTABLE:-/usr/bin/chromium}',
+    )
+  })
+
   it('never selects local final object storage or a mock adapter by default', () => {
     expect(active).toContain('OBJECT_STORAGE_DRIVER: ${OBJECT_STORAGE_DRIVER:-S3}')
     expect(active).toContain('RENDER_DRIVER: ${RENDER_DRIVER:-REMOTION}')
@@ -160,6 +167,37 @@ describe('runtime image', () => {
     expect(active).toContain('USER bun')
     expect(active).toContain('--frozen-lockfile')
     expect(active).toContain('STOPSIGNAL SIGTERM')
+  })
+
+  it('bakes in the tooling a REAL render needs, rather than downloading it later', () => {
+    // TEETH: a browser fetched on first use is a download at the moment
+    // of somebody's paid render, into a cache the container user may
+    // not be able to write.
+    expect(active).toContain('ffmpeg')
+    expect(active).toContain('chromium')
+    expect(active).toContain('ENV FFPROBE_PATH=/usr/bin/ffprobe')
+    expect(active).toContain('ENV REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium')
+    // Nothing is fetched from a vendor CDN during the build.
+    expect(active).not.toContain('ensureBrowser')
+  })
+
+  it('creates and OWNS the shared media path before the user drops', () => {
+    // Both processes write there — the app stores approved media, the
+    // worker writes render artifacts. A root-only path is a worker that
+    // cannot render.
+    expect(active).toContain('mkdir -p /app/var/media')
+    expect(active).toContain('chown -R bun:bun /app/var')
+    const mkdirAt = active.indexOf('chown -R bun:bun /app/var')
+    const userAt = active.indexOf('USER bun')
+    expect(mkdirAt).toBeGreaterThan(-1)
+    expect(mkdirAt).toBeLessThan(userAt)
+  })
+
+  it('ships the runtime smoke check', () => {
+    expect(active).toContain('COPY --from=build /app/scripts ./scripts')
+    expect(packageJson.scripts['smoke:runtime']).toBe(
+      'bun run scripts/runtime-smoke.ts',
+    )
   })
 
   it('bakes in no secret', () => {

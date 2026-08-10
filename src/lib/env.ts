@@ -161,6 +161,16 @@ const envObjectSchema = z
      * Probing is how a real duration is learned; it is never optional
      * for the real renderer. */
     FFPROBE_PATH: z.string().default(''),
+    /**
+     * Absolute path to the headless browser the real compositor drives.
+     *
+     * Set explicitly so the browser is the one BAKED INTO THE IMAGE.
+     * Left unset, Remotion provisions its own on first use — a download
+     * at the moment of somebody's paid render, on a container whose
+     * cache directory may not even be writable. Readiness reports an
+     * unset or non-executable value as a missing capability.
+     */
+    REMOTION_BROWSER_EXECUTABLE: z.string().default(''),
     /** Bounded concurrency for the real compositor on a small VPS. */
     REMOTION_CONCURRENCY: z.coerce.number().int().positive().max(16).default(1),
     REMOTION_TIMEOUT_MS: z.coerce
@@ -294,6 +304,16 @@ const envObjectSchema = z
         path: ['OBJECT_STORAGE_DRIVER'],
         message:
           'OBJECT_STORAGE_DRIVER=LOCAL is invalid in production — a directory on one machine is not durable private object storage',
+      })
+    } else if (!cfg.OBJECT_STORAGE_ENDPOINT.startsWith('https://')) {
+      // A recorded prayer is delivered to a browser by redirecting it
+      // to a signed URL at this endpoint. Over plain HTTP that link —
+      // and the media it unlocks — is readable by anything on the path.
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OBJECT_STORAGE_ENDPOINT'],
+        message:
+          'Production requires an HTTPS OBJECT_STORAGE_ENDPOINT — signed media is delivered from it to a browser',
       })
     }
     if (cfg.RENDER_DRIVER === 'MOCK') {

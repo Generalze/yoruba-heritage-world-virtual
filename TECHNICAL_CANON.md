@@ -1240,14 +1240,58 @@ Credentials live only inside the client and appear in no row, log or
 descriptor. The client is injectable, and automated verification uses a
 deterministic double — ZERO network calls.
 
+**MEASURED AUDIO IS AUTHORITY, AND THE PLAN GROWS TO FIT IT.** For the
+REAL engine, every time-bearing audio source is probed FROM ITS EXACT
+VERIFIED BYTES *before* the immutable render plan is built — approved
+human recordings and generated speech artifacts alike — and the measured
+value becomes that source's duration.
+`media_asset_versions.duration_seconds` is whole SECONDS typed by a
+person, and a speech task's duration is the provider's claim about its
+own output; neither is evidence about what is in the file. The LOCKED
+Step 16 reconciliation then does the rest by itself:
+
+```text
+finalSegmentDuration = max(plannedSegmentDuration, verifiedActualAudioDuration)
+```
+
+A 12.4-second recording whose row said 12 gets a 12.4-second segment;
+the absorbing split holds its own approved visual for the extra 400 ms;
+every later scene shifts by exactly that; the recording plays ONCE, IN
+FULL. Nothing is trimmed, stretched, sped, slowed, looped, rewritten or
+replaced, and **no render is refused merely for audio being longer than a
+stale database row** — that refusal would contradict the rule above. An
+unmeasurable recording fails closed rather than being planned around
+from a guess. The MOCK path is unchanged and still exact: it takes the
+database's number, so Step 16's round-trip proofs stay proofs. Because
+the measured value enters `renderPlanSha256`, and `verifyCompletedRender`
+rebuilds that plan and compares it byte-for-byte on every playback
+request, the measurement is a pure function of file content, memoized on
+the verified hash, and the rebuild uses the policy of the engine that
+ACTUALLY produced the row.
+
+**A HOLD FREEZES; IT NEVER REPLAYS.** All five planned fits have explicit
+compositor semantics: `STILL_HOLD` shows a still for its window; `EXACT`
+and `TRIM` play a clip bounded by its window; `HOLD_LAST_FRAME` plays a
+short clip out and then freezes its final frame for the remainder, the
+two spans covering the window exactly; and `HOLD_PREVIOUS` freezes THE
+LAST FRAME THAT WAS DISPLAYED — never frame zero, which would show the
+viewer approved footage a second time in a place nobody approved it for.
+
+**RENDERER IDENTITY IS EXACT.** The Remotion package set is pinned to ONE
+EXACT version with no caret range, and the engine persists that exact
+version (`remotion-4.0.507`). Before any render spend, and again inside
+`verifyCompletedRender`, the row's `rendererCode`, `rendererVersion` and
+`rendererIsMock` must match the resolved producing engine EXACTLY — a
+compositor upgrade is a different renderer. The pre-spend check sits
+AFTER the idempotency short-circuit, so an already-finished result is
+never condemned for having been made by the engine that legitimately
+existed at the time.
+
 **RENDERING MEASURES INSTEAD OF TRUSTING.** The real engine is opt-in
 behind `RENDER_DRIVER=REMOTION`; the mock remains the default and stays
 impossible in production. The adapter re-hashes every source against the
-plan, PROBES the actual media with ffprobe, and refuses when it cannot
-measure. Database duration metadata is never authority over a file:
-approved audio that is really longer than the slot its plan gave it
-FAILS the render — it is not trimmed, stretched, sped, slowed, looped,
-rewritten or replaced. Output is probed, not echoed: the container and
+plan and PROBES the actual media with ffprobe, refusing when it cannot
+measure. Output is probed, not echoed: the container and
 video stream are verified and the duration is read from the encoded
 media, with a tolerance derived from the ACTUAL frame rate. The
 service-level duration rule is shared by the render write and both later
@@ -1274,7 +1318,9 @@ voice — runs normally, and startup logs the reduced capability.
 **LIVENESS IS NOT READINESS.** `/api/health` says the process is alive;
 a container that is alive but misconfigured must be left for an operator
 rather than restart-looped into the same fault. `/api/ready` answers 503
-unless the preflight passes AND the database is reachable, and it is
+unless the preflight passes, the database is reachable AND — when a
+real renderer is selected — the local render tooling (ffprobe, the
+baked headless browser) is present, and it is
 what the container healthcheck and any proxy use. Both payloads are
 CLOSED schemas carrying no credential, host, bucket, endpoint, object
 key, path, personal detail or sacred text; readiness reports issue CODES
@@ -1282,7 +1328,8 @@ only, while the variable NAMES stay in the process log.
 
 **HTTP POSTURE.** One place sets CSP (`default-src 'self'`,
 `frame-ancestors 'none'`, `object-src 'none'`, `base-uri`/`form-action`
-`'self'`, `media-src 'self'`), `nosniff`, `X-Frame-Options`,
+`'self'`, `media-src` limited to `'self'`, `blob:` and the ONE configured HTTPS
+object-storage origin — never a wildcard), `nosniff`, `X-Frame-Options`,
 `Referrer-Policy`, a deny-by-default `Permissions-Policy`, and HSTS ONLY
 in production over HTTPS. Headers never overwrite what a handler chose
 deliberately — the Prayer Room's private media keeps its own caching and

@@ -6,12 +6,17 @@ import { join } from 'node:path'
 
 import {
   CONTAINER_ROUNDING_TOLERANCE_MS,
-  checkApprovedAudioFits,
+  checkRenderRuntimeDependencies,
+  measureAudioDurationFromBytes,
+  resetMeasuredAudioCacheForTests,
   frameTimingToleranceMs,
   isWithinFrameTolerance,
   probeMediaWithFfprobe,
 } from '@/providers/render/media-probe'
-import { createRemotionRenderEngine } from '@/providers/render/remotion'
+import {
+  REMOTION_PINNED_VERSION,
+  createRemotionRenderEngine,
+} from '@/providers/render/remotion'
 import { RenderEngineError } from '@/providers/render/types'
 import {
   MAX_RENDER_TIMING_TOLERANCE_MS,
@@ -193,38 +198,96 @@ describe('timing tolerance', () => {
   })
 })
 
-describe('approved audio is never altered to fit', () => {
-  it('refuses a recording longer than its planned slot instead of trimming it', () => {
-    const verdict = checkApprovedAudioFits({
-      probedDurationMs: 12_400,
-      plannedDurationMs: 12_000,
+describe('approved audio is measured, and the plan grows to hold it', () => {
+  it('measures a REAL recording from its bytes', async () => {
+    resetMeasuredAudioCacheForTests()
+    const wav = makeSilentWav(AUDIO_MS)
+    const measured = await measureAudioDurationFromBytes({
+      bytes: wav,
+      sha256: computeFileSha256(wav),
+      mimeType: 'audio/wav',
     })
-    expect(verdict.ok).toBe(false)
-    if (verdict.ok) throw new Error('expected refusal')
-    expect(verdict.reasonCode).toBe('approved_audio_longer_than_plan')
+    if (measured.ok) {
+      expect(
+        Math.abs(measured.durationMs - AUDIO_MS),
+      ).toBeLessThanOrEqual(CONTAINER_ROUNDING_TOLERANCE_MS)
+    } else {
+      // No ffprobe here: FAIL CLOSED, never a guess and never a fall
+      // back to whatever the database said.
+      expect(measured.reasonCode).toBe('probe_unavailable')
+    }
+  }, 60_000)
+
+  it('is DETERMINISTIC for identical bytes — the plan hash depends on it', async () => {
+    // TEETH: the measured duration goes into renderPlanSha256, and
+    // verifyCompletedRender rebuilds that plan and compares the hash
+    // byte-for-byte on every playback request. If the same bytes ever
+    // measured differently, a finished recording would become
+    // permanently unavailable.
+    resetMeasuredAudioCacheForTests()
+    const wav = makeSilentWav(AUDIO_MS)
+    const sha = computeFileSha256(wav)
+    const first = await measureAudioDurationFromBytes({
+      bytes: wav,
+      sha256: sha,
+      mimeType: 'audio/wav',
+    })
+    const second = await measureAudioDurationFromBytes({
+      bytes: wav,
+      sha256: sha,
+      mimeType: 'audio/wav',
+    })
+    expect(second).toEqual(first)
+  }, 60_000)
+
+  it('refuses bytes with no audio stream rather than assuming a length', async () => {
+    resetMeasuredAudioCacheForTests()
+    const measured = await measureAudioDurationFromBytes({
+      bytes: TINY_PNG,
+      sha256: computeFileSha256(TINY_PNG),
+      mimeType: 'audio/wav',
+    })
+    expect(measured.ok).toBe(false)
+    if (measured.ok) throw new Error('expected refusal')
+    expect(measured.reasonCode).not.toBe('')
+  }, 60_000)
+
+  it('refuses empty bytes', async () => {
+    const measured = await measureAudioDurationFromBytes({
+      bytes: new Uint8Array(0),
+      sha256: 'a'.repeat(64),
+      mimeType: 'audio/wav',
+    })
+    expect(measured.ok).toBe(false)
+    if (measured.ok) throw new Error('expected refusal')
+    expect(measured.reasonCode).toBe('audio_bytes_empty')
   })
 
-  it('accepts a shorter recording — the remainder is silence, which alters nothing', () => {
-    const verdict = checkApprovedAudioFits({
-      probedDurationMs: 9_000,
-      plannedDurationMs: 12_000,
-    })
-    expect(verdict.ok).toBe(true)
-    if (!verdict.ok) throw new Error('expected acceptance')
-    expect(verdict.probedDurationMs).toBe(9_000)
-  })
-
-  it('refuses an unmeasurable recording rather than assuming a duration', () => {
-    const verdict = checkApprovedAudioFits({
-      probedDurationMs: 0,
-      plannedDurationMs: 12_000,
-    })
-    expect(verdict.ok).toBe(false)
-    if (verdict.ok) throw new Error('expected refusal')
-    expect(verdict.reasonCode).toBe('audio_duration_unknown')
+  it('there is no code path that refuses audio for being longer than its plan', async () => {
+    // TEETH: the locked Step 16 rule is max(planned, actual) — the
+    // SEGMENT grows. A refusal keyed on 'longer than planned' would
+    // contradict it, so the symbol that encoded that refusal is gone
+    // and must not come back.
+    const probe = await Bun.file('src/providers/render/media-probe.ts').text()
+    const adapter = await Bun.file('src/providers/render/remotion.ts').text()
+    for (const source of [probe, adapter]) {
+      expect(source).not.toContain('checkApprovedAudioFits')
+      expect(source).not.toContain('approved_audio_longer_than_plan')
+    }
   })
 })
 
+describe('local render runtime dependencies', () => {
+  it('reports missing CAPABILITIES, never filesystem paths', async () => {
+    const runtime = await checkRenderRuntimeDependencies()
+    for (const capability of runtime.missing) {
+      expect(['ffprobe', 'render_browser']).toContain(capability)
+      expect(capability).not.toContain('/')
+      expect(capability).not.toContain('\\')
+    }
+    expect(runtime.ok).toBe(runtime.missing.length === 0)
+  }, 60_000)
+})
 // --- The adapter, with the compositor injected -------------------------------
 
 function makeRequest(overrides: Partial<RenderRequest> = {}): RenderRequest {
@@ -336,7 +399,21 @@ describe('remotion adapter', () => {
     const engine = makeEngine()
     expect(engine.isMock).toBe(false)
     expect(engine.code).toBe('REMOTION')
-    expect(engine.version).toBe('remotion-4')
+    // The EXACT compositor, not a major-version family: a render result
+    // records this forever and later verification requires it to match.
+    expect(engine.version).toBe(`remotion-${REMOTION_PINNED_VERSION}`)
+    expect(engine.version).toMatch(/^remotion-\d+\.\d+\.\d+$/)
+  })
+
+  it('pins the package set to that EXACT version, with no caret range', async () => {
+    const pkg = (await Bun.file('package.json').json()) as {
+      dependencies: Record<string, string>
+    }
+    for (const name of ['remotion', '@remotion/renderer', '@remotion/bundler']) {
+      // TEETH: a caret would let an install float to a different
+      // compositor while every persisted row still claimed this one.
+      expect(pkg.dependencies[name]).toBe(REMOTION_PINNED_VERSION)
+    }
   })
 
   it('renders, measures its own output and hashes the ACTUAL bytes', async () => {
@@ -355,8 +432,8 @@ describe('remotion adapter', () => {
     const composition = seen as unknown as CompositionInput
     expect(composition.durationInFrames).toBe(60) // 2 000 ms at 30 fps
     expect(composition.scenes).toHaveLength(1)
-    expect(composition.scenes[0].kind).toBe('IMAGE')
-    expect(composition.scenes[0].src?.startsWith('file://')).toBe(true)
+    expect(composition.scenes[0].mode).toBe('STILL')
+    expect(composition.scenes[0].src.startsWith('file://')).toBe(true)
     // The audio slot follows the MEASURED recording, so nothing is cut
     // off at the end.
     expect(composition.audio[0].durationInFrames).toBe(45) // 1 500 ms
@@ -379,14 +456,19 @@ describe('remotion adapter', () => {
     expect(composed).toBe(false)
   }, 60_000)
 
-  it('refuses to compose when approved audio is longer than its slot', async () => {
+  it('refuses audio whose FILE no longer matches the plan built from it', async () => {
+    // NOT the old "longer than its planned slot" refusal — that
+    // contradicted the locked rule `max(planned, actual)`, under which
+    // the window was already grown to hold the recording. What is
+    // caught here is the bytes CHANGING after planning: the plan
+    // reserved 1.5s because the file measured 1.5s, and the file now
+    // says 2.4s.
     const engine = makeEngine({
       probe: fakeProbe(
         {
           'audio-1': {
             ok: true,
             media: {
-              // The FILE says 2.4s; the plan gave it 1.5s.
               durationMs: 2_400,
               formatName: 'wav',
               hasAudio: true,
@@ -404,11 +486,58 @@ describe('remotion adapter', () => {
       thrown = error
     }
     expect(thrown).toBeInstanceOf(RenderEngineError)
-    // Refused — NOT trimmed to fit.
     expect((thrown as RenderEngineError).code).toBe(
-      'approved_audio_longer_than_plan',
+      'audio_source_changed_since_plan',
     )
     expect((thrown as RenderEngineError).retryable).toBe(false)
+  }, 60_000)
+
+  it('composes happily when the plan already reserved the LONGER real length', async () => {
+    // TEETH for the corrected contract: a 12.4s recording in a 12.4s
+    // planned window — which is what the reconciliation produces from a
+    // 12.0s database row — must render, not be refused.
+    const grown = 2_400
+    const request = makeRequest({
+      audio: [{ refId: 'audio-1', startMs: 0, endMs: grown, durationMs: grown }],
+      scenes: [
+        {
+          sceneId: 'scene-1',
+          startMs: 0,
+          endMs: grown,
+          durationMs: grown,
+          visualKind: 'APPROVED_MEDIA',
+          visualRefId: 'visual-1',
+          visualFit: 'STILL_HOLD',
+        },
+      ],
+      totalDurationMs: grown,
+    })
+    const engine = makeEngine({
+      probe: fakeProbe(
+        {
+          'audio-1': {
+            ok: true,
+            media: {
+              durationMs: grown,
+              formatName: 'wav',
+              hasAudio: true,
+              hasVideo: false,
+            },
+          },
+        },
+        {
+          ok: true,
+          media: {
+            durationMs: grown,
+            formatName: 'mov,mp4',
+            hasAudio: true,
+            hasVideo: true,
+          },
+        },
+      ),
+    })
+    const output = await engine.render(request)
+    expect(output.durationMs).toBe(grown)
   }, 60_000)
 
   it('refuses an unmeasurable source rather than trusting stored metadata', async () => {

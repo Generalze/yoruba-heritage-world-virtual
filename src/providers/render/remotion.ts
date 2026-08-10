@@ -6,11 +6,7 @@ import { pathToFileURL } from 'node:url'
 
 import { env } from '@/lib/env'
 import { getMediaStorage } from '@/providers/media/storage'
-import {
-  checkApprovedAudioFits,
-  frameTimingToleranceMs,
-  probeMediaWithFfprobe,
-} from './media-probe'
+import { frameTimingToleranceMs, probeMediaWithFfprobe } from './media-probe'
 import { RenderEngineError } from './types'
 import type * as RemotionBundlerModule from '@remotion/bundler'
 import type * as RemotionRendererModule from '@remotion/renderer'
@@ -35,19 +31,22 @@ type RemotionRenderer = typeof RemotionRendererModule
  * compositor":
  *
  * 1. IT MEASURES INSTEAD OF TRUSTING. Every source is materialised
- *    locally, RE-HASHED against the SHA-256 the plan recorded, and then
- *    PROBED. Database duration metadata is never authority over the
- *    file: an approved recording whose stored duration says 12.0s and
- *    whose bytes say 12.4s is caught here, before any timeline decision
- *    is taken.
+ *    locally and RE-HASHED against the SHA-256 the plan recorded before
+ *    it is used for anything.
  *
- * 2. IT REFUSES RATHER THAN TRIMS. If a probed approved recording is
- *    longer than the slot the plan gave it, the render FAILS. It is not
- *    shortened, sped up, faded out or quietly rewritten — a human
- *    decides what to do about a recording that no longer matches its
- *    plan. Sacred audio is never truncated, stretched, sped, slowed,
- *    looped, rewritten or replaced, and there is no code path in this
- *    file that could do any of those things.
+ * 2. THE PLAN ALREADY RESERVED THE REAL LENGTH. Audio is measured
+ *    BEFORE the immutable plan is built (see buildValidatedRenderPlan),
+ *    so a 12.4-second recording whose database row said 12 seconds
+ *    already has a 12.4-second window and the later scenes are already
+ *    shifted. This adapter therefore NEVER refuses a render for audio
+ *    being longer than a planned window — that refusal would contradict
+ *    the locked rule `max(planned, actual)`. What it does check is that
+ *    the file still agrees with the plan that was built from it: a
+ *    disagreement beyond container rounding means the bytes changed
+ *    after planning, which is a real fault. Sacred audio is never
+ *    truncated, stretched, sped, slowed, looped, rewritten or replaced,
+ *    and there is no code path in this file that could do any of those
+ *    things.
  *
  * 3. IT VALIDATES ITS OWN OUTPUT. The produced file is probed: it must
  *    be the planned container, must actually contain a video stream,
@@ -69,6 +68,18 @@ type RemotionRenderer = typeof RemotionRendererModule
  * smoke procedure in the runbook. The mock engine remains the default
  * and the only engine automated verification ever selects.
  */
+
+/**
+ * The EXACT Remotion release this build composes with.
+ *
+ * Kept as a literal rather than read from package.json at runtime: the
+ * value is persisted on every render result and compared on every later
+ * verification, so it must be a fact about the BUILD, not about
+ * whatever file happens to be on disk beside the process. A test pins
+ * it to the exact (caret-free) dependency versions.
+ */
+export const REMOTION_PINNED_VERSION = '4.0.507'
+export const REMOTION_ENGINE_VERSION = `remotion-${REMOTION_PINNED_VERSION}`
 
 /** The only container this platform renders to. */
 const SUPPORTED_OUTPUT_MIME = 'video/mp4'
@@ -92,20 +103,54 @@ const IMAGE_MIME_PREFIX = 'image/'
 /** Everything the compositor needs, already reconciled to frames. It
  * carries file URLs and numbers — no sacred text, no spoken text, no
  * Visual Bible rule, no provider payload. */
+/**
+ * EXPLICIT COMPOSITOR SEMANTICS FOR EVERY PLANNED FIT.
+ *
+ * The plan chooses a fit per scene; this is the exact picture each one
+ * must produce. Getting these wrong is not a cosmetic bug — replaying a
+ * clip where the plan said to hold its final frame shows the viewer
+ * approved footage a second time, in a place nobody approved it for.
+ *
+ *   STILL           a still image held for the window (STILL_HOLD, and
+ *                   any hold of an image — freezing a still IS the
+ *                   still)
+ *   PLAY            a clip played from `sourceStartFrame` for the whole
+ *                   window (EXACT, and TRIM where the surrounding
+ *                   Sequence bounds it)
+ *   PLAY_THEN_FREEZE a clip played to its end, then FROZEN on its final
+ *                   frame for the remainder of the window
+ *                   (HOLD_LAST_FRAME on a clip shorter than its window)
+ *   FREEZE          a clip shown as ONE frozen frame for the whole
+ *                   window (HOLD_PREVIOUS of a clip) — and the frozen
+ *                   frame is the LAST FRAME THAT WAS DISPLAYED, never
+ *                   frame zero
+ */
+export type SceneRenderMode = 'STILL' | 'PLAY' | 'PLAY_THEN_FREEZE' | 'FREEZE'
+
+export interface CompositionScene {
+  sceneId: string
+  fromFrame: number
+  durationInFrames: number
+  src: string
+  mode: SceneRenderMode
+  /** Where in the SOURCE this scene starts. Non-zero only when the
+   * timeline deliberately continues a clip. */
+  sourceStartFrame: number
+  /** PLAY_THEN_FREEZE only: how many frames actually play before the
+   * freeze takes over. The two spans sum EXACTLY to durationInFrames,
+   * so no frame of the window is left unpainted. */
+  playFrames: number
+  /** FREEZE / PLAY_THEN_FREEZE only: the source frame to hold. */
+  freezeFrame: number
+}
+
 export interface CompositionInput {
   fps: number
   width: number
   height: number
   durationInFrames: number
   outputPath: string
-  scenes: Array<{
-    sceneId: string
-    fromFrame: number
-    durationInFrames: number
-    src: string | null
-    kind: 'IMAGE' | 'VIDEO'
-    sourceStartFrame: number
-  }>
+  scenes: Array<CompositionScene>
   audio: Array<{
     refId: string
     fromFrame: number
@@ -192,6 +237,16 @@ const remotionCompositor: Compositor = async (input) => {
     inputProps,
     concurrency: env.REMOTION_CONCURRENCY,
     timeoutInMilliseconds: env.REMOTION_TIMEOUT_MS,
+    // THE BROWSER BAKED INTO THE IMAGE, named explicitly. Left to
+    // itself Remotion provisions its own on first use — a download at
+    // the moment of somebody's paid render, into a cache directory the
+    // container user may not even be able to write. Passing it here
+    // rather than relying on an environment variable also means the
+    // renderer and the readiness check are gating on the SAME fact.
+    browserExecutable:
+      env.REMOTION_BROWSER_EXECUTABLE.trim() === ''
+        ? null
+        : env.REMOTION_BROWSER_EXECUTABLE,
   })
 }
 
@@ -206,10 +261,16 @@ export function createRemotionRenderEngine(
 
   return {
     code: 'REMOTION',
-    // Pinned so a render result records WHICH compositor produced it.
-    // A version bump is a different renderer as far as verification is
-    // concerned, exactly as intended.
-    version: 'remotion-4',
+    // THE EXACT COMPOSITOR, not a major-version family. A render result
+    // records this string forever, and verifyCompletedRender requires
+    // the active engine to match it EXACTLY: a compositor upgrade
+    // composes differently, rounds differently and may honour a fit
+    // differently, so vouching for `remotion-4.0.507` output while
+    // `4.1.0` is installed would be vouching for something this build
+    // never produced. The package set is pinned to this same version
+    // WITHOUT a caret range (see package.json), and a test proves the
+    // two agree.
+    version: REMOTION_ENGINE_VERSION,
     /** The whole point: this produces a real, deliverable composition. */
     isMock: false,
 
@@ -326,7 +387,14 @@ async function renderInWorkDir(input: {
     })
   }
 
-  // --- 2. Approved audio must FIT, or the render is refused -------------
+  // --- 2. Audio: the plan already reserved the REAL length ------------
+  //
+  // Measurement happened BEFORE the plan was built, so track.durationMs
+  // IS the measured recording. Nothing here refuses a render for a
+  // recording being longer than a planned window — that window was
+  // already grown to hold it. What is checked is that the file still
+  // agrees with the plan built from it; a disagreement beyond container
+  // rounding means the bytes changed after planning.
   const audioTracks: CompositionInput['audio'] = []
   for (const track of request.audio) {
     const source = sources.get(track.refId)
@@ -337,38 +405,72 @@ async function renderInWorkDir(input: {
         false,
       )
     }
-    const fit = checkApprovedAudioFits({
-      probedDurationMs: source.probedDurationMs ?? 0,
-      plannedDurationMs: track.durationMs,
-    })
-    if (!fit.ok) {
-      // NOT trimmed. NOT stretched. Refused.
-      throw new RenderEngineError(fit.reasonCode, 'Approved audio does not fit its planned slot.', false)
+    const probedMs = source.probedDurationMs
+    if (probedMs == null || probedMs <= 0) {
+      throw new RenderEngineError(
+        'audio_duration_unknown',
+        'An audio source could not be measured.',
+        false,
+      )
+    }
+    if (Math.abs(probedMs - track.durationMs) > frameTimingToleranceMs(fps)) {
+      throw new RenderEngineError(
+        'audio_source_changed_since_plan',
+        'An audio source no longer matches the length the plan reserved for it.',
+        false,
+      )
     }
     audioTracks.push({
       refId: track.refId,
       fromFrame: msToFrames(track.startMs, fps),
-      // The frame count follows the MEASURED recording, not the stored
-      // metadata, so nothing is cut off at the end.
-      durationInFrames: msToFrames(fit.probedDurationMs, fps),
+      // Played ONCE, in full, at natural rate. The plan's window is at
+      // least this long by construction.
+      durationInFrames: msToFrames(track.durationMs, fps),
       src: source.url,
     })
   }
 
-  // --- 3. Scenes --------------------------------------------------------
-  const scenes: CompositionInput['scenes'] = []
-  let heldSource: MaterialisedSource | null = null
+  // --- 3. Scenes, with explicit semantics for every planned fit --------
+  const scenes: Array<CompositionScene> = []
+  /** The clip most recently DISPLAYED, and how far into it the timeline
+   * had got. This is what a HOLD_PREVIOUS scene freezes — never frame
+   * zero, which would replay approved footage the plan did not place. */
+  let lastDisplayed: { source: MaterialisedSource; endedAtSourceMs: number } | null =
+    null
   for (const scene of request.scenes) {
-    let source: MaterialisedSource | null = null
+    const windowMs = scene.durationMs
+    const durationInFrames = msToFrames(windowMs, fps)
+    let source: MaterialisedSource
+    let mode: SceneRenderMode
+    const sourceStartFrame = 0
+    let playFrames = durationInFrames
+    let freezeFrame = 0
+
     if (scene.visualKind === 'HOLD_PREVIOUS') {
-      source = heldSource
-      if (!source) {
+      if (!lastDisplayed) {
         throw new RenderEngineError(
           'hold_without_previous',
           'A HOLD_PREVIOUS scene has no earlier picture to hold.',
           false,
         )
       }
+      source = lastDisplayed.source
+      if (source.hasVideo) {
+        // FREEZE THE FRAME THAT WAS LAST ON SCREEN. Its index is where
+        // the previous scene left the clip, minus one frame; clamped so
+        // a zero-length predecessor cannot produce a negative index.
+        mode = 'FREEZE'
+        freezeFrame = Math.max(
+          0,
+          msToFrames(lastDisplayed.endedAtSourceMs, fps) - 1,
+        )
+        playFrames = 0
+      } else {
+        // Freezing a still IS the still.
+        mode = 'STILL'
+      }
+      // A hold displays no NEW footage, so the clip's position is
+      // unchanged for whatever holds it next.
     } else {
       if (scene.visualRefId == null) {
         throw new RenderEngineError(
@@ -377,39 +479,60 @@ async function renderInWorkDir(input: {
           false,
         )
       }
-      source = sources.get(scene.visualRefId) ?? null
-      if (!source || source.role !== 'VISUAL') {
+      const resolved = sources.get(scene.visualRefId)
+      if (!resolved || resolved.role !== 'VISUAL') {
         throw new RenderEngineError(
           'scene_visual_missing',
           'The plan references a visual source that was not supplied.',
           false,
         )
       }
-      heldSource = source
+      source = resolved
+      if (!source.hasVideo) {
+        mode = 'STILL'
+        lastDisplayed = { source, endedAtSourceMs: 0 }
+      } else {
+        const sourceMs = source.probedDurationMs ?? 0
+        if (sourceMs <= 0) {
+          throw new RenderEngineError(
+            'visual_duration_unknown',
+            'A moving visual source could not be measured.',
+            false,
+          )
+        }
+        if (sourceMs + frameTimingToleranceMs(fps) < windowMs) {
+          // The clip is genuinely shorter than its window: play it out
+          // and HOLD its final frame. Stretching it to fit would alter
+          // approved media; leaving black would be a gap nobody chose.
+          mode = 'PLAY_THEN_FREEZE'
+          playFrames = Math.min(
+            durationInFrames,
+            Math.max(1, msToFrames(sourceMs, fps)),
+          )
+          freezeFrame = playFrames - 1
+          lastDisplayed = { source, endedAtSourceMs: sourceMs }
+        } else {
+          // EXACT or TRIM: play from the start; the Sequence bounds it.
+          mode = 'PLAY'
+          lastDisplayed = {
+            source,
+            endedAtSourceMs: Math.min(sourceMs, windowMs),
+          }
+        }
+      }
     }
-    // A moving source asked to fill its window EXACTLY must really be
-    // long enough. Stretching it to fit would alter approved media.
-    if (
-      scene.visualFit === 'EXACT' &&
-      source.probedDurationMs != null &&
-      source.probedDurationMs + frameTimingToleranceMs(fps) < scene.durationMs
-    ) {
-      throw new RenderEngineError(
-        'visual_shorter_than_scene',
-        'A visual source is shorter than the scene the plan gave it.',
-        false,
-      )
-    }
+
     scenes.push({
       sceneId: scene.sceneId,
       fromFrame: msToFrames(scene.startMs, fps),
-      durationInFrames: msToFrames(scene.durationMs, fps),
+      durationInFrames,
       src: source.url,
-      kind: source.hasVideo ? 'VIDEO' : 'IMAGE',
-      sourceStartFrame: 0,
+      mode,
+      sourceStartFrame,
+      playFrames,
+      freezeFrame,
     })
   }
-
   // --- 4. Compose -------------------------------------------------------
   const outputPath = join(workDir, 'render.mp4')
   await compose({

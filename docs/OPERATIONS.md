@@ -121,10 +121,11 @@ no reason.
 - `GET /api/health` — **liveness**. "This process is alive." A container
   that is alive but misconfigured should be left alone for you to fix;
   restarting it just reproduces the misconfiguration more often.
-- `GET /api/ready` — **readiness**. 200 when the preflight passes and the
-  database is reachable, 503 otherwise. This is what the Docker
-  healthcheck uses and what a reverse proxy should use to take an
-  instance out of rotation.
+- `GET /api/ready` — **readiness**. 200 when the preflight passes, the
+  database is reachable, AND — when a real renderer is selected — the
+  local render tooling (ffprobe, the baked headless browser) is present.
+  503 otherwise. This is what the Docker healthcheck uses and what a
+  reverse proxy should use to take an instance out of rotation.
 
 Neither payload contains a credential, host, bucket, endpoint, object
 key, path, personal detail or sacred text. Readiness reports issue CODES
@@ -238,18 +239,31 @@ backup regime fails silently for months and then fails loudly once.
 
 `RENDER_DRIVER=REMOTION` selects the real compositor.
 
-- **ffprobe must be available** in the worker container (`FFPROBE_PATH`,
-  or on `PATH`). Probing is how the pipeline learns a real duration; a
-  renderer that cannot measure its inputs refuses to build a timeline
-  from them rather than trusting database metadata.
-- **Remotion provisions a headless browser on first use.** That is a
-  download at first render, and it needs a writable cache directory for
-  the `bun` user. Do this once, deliberately, on a maintenance window —
-  not implicitly during somebody's appointment. See "outstanding" below.
-- The renderer **refuses rather than trims**: an approved recording whose
-  real duration exceeds the slot its plan gave it fails the render. It is
-  not shortened, sped up or faded. A human decides what to do about a
-  recording that no longer matches its plan.
+- **ffprobe and the headless browser are BAKED INTO THE IMAGE** and named
+  explicitly (`FFPROBE_PATH=/usr/bin/ffprobe`,
+  `REMOTION_BROWSER_EXECUTABLE=/usr/bin/chromium`). Nothing is downloaded
+  at first render. Verify inside a container, as the unprivileged user:
+
+  ```sh
+  docker compose run --rm --no-deps worker bun run smoke:runtime
+  ```
+
+  It proves the shared media path is writable, ffprobe is executable and
+  the browser is executable — without downloading or rendering anything.
+- **Readiness gates on that tooling.** When `RENDER_DRIVER` selects the
+  real engine, `/api/ready` answers 503 if either binary is missing, so a
+  deployment that cannot render is taken out of rotation rather than
+  accepting bookings it will fail.
+- **Approved audio is MEASURED, and the plan GROWS to fit it.** Every
+  time-bearing audio source is probed from its verified bytes *before*
+  the immutable plan is built, and each segment is reserved at
+  `max(plannedSegmentDuration, actualAudioDuration)`. A recording longer
+  than its stored duration makes the timeline longer and shifts what
+  follows; it is never trimmed, stretched, sped, slowed, looped or
+  refused for that reason. A recording that cannot be measured fails
+  closed rather than being planned around from a guess.
+- **A hold freezes, it never replays.** `HOLD_PREVIOUS` and
+  `HOLD_LAST_FRAME` hold the last frame that was actually displayed.
 
 **Smoke test after any render-related change** (the real compositor is
 deliberately never invoked by the automated test suite — that would mean
@@ -346,10 +360,10 @@ Named here rather than quietly assumed:
    generated imagery.
 2. **Speech synthesis vendor.** None approved. Production runs
    `TTS_DRIVER=DISABLED`; approved human recordings are unaffected.
-3. **Remotion browser provisioning and image size.** The runtime image
-   carries the Remotion packages; the headless browser is fetched on
-   first render. Whether to bake it into the image, warm it on deploy, or
-   split a render-only image is an unmade decision.
+3. ~~Remotion browser provisioning~~ — SETTLED. ffmpeg and chromium are
+   installed at image build and named explicitly; nothing is fetched at
+   render time. The cost is image SIZE, which is now the open question:
+   see "image size" in the Step 20 report.
 4. **CSP `script-src`.** Currently requires `'unsafe-inline'` because
    TanStack Start emits inline bootstrap script and serialized router
    state. Moving to nonces or hashes is real work in the framework's

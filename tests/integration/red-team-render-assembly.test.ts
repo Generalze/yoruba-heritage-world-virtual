@@ -110,6 +110,7 @@ import {
   MAX_RENDER_MS,
   buildRenderPlan,
   buildValidatedRenderPlan,
+  verifyCompletedRender,
   computeRenderIdempotencyKey,
   computeRenderPlanSha256,
   loadRenderPlanSnapshot,
@@ -141,6 +142,7 @@ import type {
 } from '@/services/generation-storyboards'
 import type { MediaStorageProvider } from '@/providers/media/storage'
 import type { RenderEngine } from '@/providers/render/types'
+import type { AudioDurationProbe } from '@/providers/render/media-probe'
 import type {
   SpeechPollResult,
   SpeechSynthesisRequest,
@@ -1063,6 +1065,138 @@ describe('red-team: the render plan is deterministic and the render is idempoten
     expect(computeRenderPlanSha256(body)).toBe(first.plan.renderPlanSha256)
   }, 240_000)
 
+  it('a MEASURED recording longer than its database row GROWS the segment and shifts what follows', async () => {
+    // THE LOCKED RULE, end to end:
+    //   finalSegmentDuration = max(plannedSegmentDuration, actualAudio)
+    //
+    // `media_asset_versions.duration_seconds` is whole SECONDS typed by
+    // a person. A 12.4-second recording stored as 12 would be given a
+    // 12 000 ms window, and 400 ms of somebody's prayer would have
+    // nowhere to play. Measuring the file first must make the SEGMENT
+    // grow — never make the render refuse, and never trim the audio.
+    const { jobId } = await makeRenderableJob()
+    const manifest = await latestManifest(jobId)
+    const storyboard = await latestStoryboard(jobId)
+    const manifestRow = (
+      await getDb()
+        .select()
+        .from(prayerGenerationManifestSnapshots)
+        .where(eq(prayerGenerationManifestSnapshots.generationJobId, jobId))
+    ).at(-1)!
+    const job = await jobRow(jobId)
+    const context = {
+      serviceId: job.serviceIdSnapshot,
+      sacredHouseId: job.sacredHouseIdSnapshot,
+      language: job.languageSnapshot,
+    }
+
+    // The mock path: database metadata is authoritative, exactly as
+    // Step 16 has always behaved.
+    const fromDatabase = await buildValidatedRenderPlan(
+      jobId,
+      manifestRow.id,
+      storyboard,
+      manifest,
+      context,
+    )
+    expect(fromDatabase.ok).toBe(true)
+    if (!fromDatabase.ok) return
+
+    // The real path: the FILE says 400 ms more than the row did.
+    const OVERRUN_MS = 400
+    const measured: AudioDurationProbe = async () => ({
+      ok: true,
+      durationMs:
+        fromDatabase.plan.audio[0].durationMs + OVERRUN_MS,
+    })
+    const fromFile = await buildValidatedRenderPlan(
+      jobId,
+      manifestRow.id,
+      storyboard,
+      manifest,
+      context,
+      { measureAudioDuration: measured },
+    )
+    expect(fromFile.ok).toBe(true)
+    if (!fromFile.ok) return
+
+    const before = fromDatabase.plan.audio[0]
+    const after = fromFile.plan.audio[0]
+    // The recording is placed at its REAL length and played once, in
+    // full — the window grew to hold it.
+    expect(after.durationMs).toBe(before.durationMs + OVERRUN_MS)
+    expect(after.endMs - after.startMs).toBe(after.durationMs)
+    expect(after.plannedWindowMs).toBe(before.plannedWindowMs)
+    expect(after.finalWindowMs).toBe(
+      Math.max(after.plannedWindowMs, after.durationMs),
+    )
+    // Everything after it shifts by exactly the overrun; the whole
+    // timeline is longer by exactly the overrun. Nothing was cut.
+    expect(fromFile.plan.totalDurationMs).toBe(
+      fromDatabase.plan.totalDurationMs + OVERRUN_MS,
+    )
+    const lastBefore = fromDatabase.plan.scenes.at(-1)!
+    const lastAfter = fromFile.plan.scenes.at(-1)!
+    expect(lastAfter.endMs).toBe(lastBefore.endMs + OVERRUN_MS)
+    // The absorbing split holds its OWN approved visual for longer —
+    // it does not acquire a different picture.
+    expect(lastAfter.visualSourceSceneId).toBe(lastBefore.visualSourceSceneId)
+    expect(lastAfter.plannedDurationMs).toBe(lastBefore.plannedDurationMs)
+
+    // A different timeline is a different plan, and therefore a
+    // different render identity.
+    expect(fromFile.plan.renderPlanSha256).not.toBe(
+      fromDatabase.plan.renderPlanSha256,
+    )
+    // AND IT REBUILDS IDENTICALLY. verifyCompletedRender rebuilds this
+    // plan and compares the hash byte-for-byte on every playback
+    // request; if measurement were not deterministic, a finished
+    // recording would become permanently unavailable.
+    const rebuilt = await buildValidatedRenderPlan(
+      jobId,
+      manifestRow.id,
+      storyboard,
+      manifest,
+      context,
+      { measureAudioDuration: measured },
+    )
+    expect(rebuilt.ok).toBe(true)
+    if (!rebuilt.ok) return
+    expect(rebuilt.plan.renderPlanSha256).toBe(fromFile.plan.renderPlanSha256)
+  }, 240_000)
+
+  it('fails closed when a recording cannot be measured, rather than guessing from the row', async () => {
+    const { jobId } = await makeRenderableJob()
+    const manifest = await latestManifest(jobId)
+    const storyboard = await latestStoryboard(jobId)
+    const manifestRow = (
+      await getDb()
+        .select()
+        .from(prayerGenerationManifestSnapshots)
+        .where(eq(prayerGenerationManifestSnapshots.generationJobId, jobId))
+    ).at(-1)!
+    const job = await jobRow(jobId)
+    const unmeasurable: AudioDurationProbe = async () => ({
+      ok: false,
+      reasonCode: 'probe_unavailable',
+    })
+    const built = await buildValidatedRenderPlan(
+      jobId,
+      manifestRow.id,
+      storyboard,
+      manifest,
+      {
+        serviceId: job.serviceIdSnapshot,
+        sacredHouseId: job.sacredHouseIdSnapshot,
+        language: job.languageSnapshot,
+      },
+      { measureAudioDuration: unmeasurable },
+    )
+    expect(built.ok).toBe(false)
+    if (built.ok) return
+    expect(built.reasonCode).toContain('probe_unavailable')
+  }, 240_000)
+
   it('a second render cycle re-uses the SAME plan and artifact, rendering nothing again', async () => {
     const { jobId, clock } = await makeRenderableJob()
     let renderCalls = 0
@@ -1749,6 +1883,79 @@ describe('red-team: a MOCK render is never permitted in production', () => {
     const outcome = await runRenderOnce('rtr-engine-mismatch', clock)
     expect(outcome.status).not.toBe('COMPLETE')
     expect((await jobRow(jobId)).lastErrorMessage).toBe('renderer_code_mismatch')
+  }, 240_000)
+
+  it('a result whose recorded renderer VERSION was altered cannot advance', async () => {
+    // Step 20 hardening: a matching code is not enough. A compositor
+    // upgrade composes differently, rounds differently and may honour a
+    // fit differently — vouching for an artifact recorded against one
+    // version while another is installed is vouching for output this
+    // build never produced.
+    const { jobId, clock } = await makeRenderableJob()
+    expect((await runRenderOnce('rtr-version-seed', clock)).status).toBe(
+      'COMPLETE',
+    )
+    await getDb()
+      .update(prayerGenerationRenderResults)
+      .set({ rendererVersion: 'mock-99' })
+      .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ status: 'RENDERING', leaseToken: null, leaseExpiresAt: null })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    const outcome = await runRenderOnce('rtr-version-mismatch', clock)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).lastErrorMessage).toBe(
+      'renderer_version_mismatch',
+    )
+  }, 240_000)
+
+  it('a result whose recorded MOCK FLAG was altered cannot advance', async () => {
+    // TEETH: flipping the flag is how a synthetic artifact would try to
+    // pass itself off as a real render — the flag is what the
+    // production guard refuses on.
+    const { jobId, clock } = await makeRenderableJob()
+    expect((await runRenderOnce('rtr-flag-seed', clock)).status).toBe(
+      'COMPLETE',
+    )
+    await getDb()
+      .update(prayerGenerationRenderResults)
+      .set({ rendererIsMock: 0 })
+      .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ status: 'RENDERING', leaseToken: null, leaseExpiresAt: null })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    const outcome = await runRenderOnce('rtr-flag-mismatch', clock)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).lastErrorMessage).toBe(
+      'renderer_mock_flag_mismatch',
+    )
+  }, 240_000)
+
+  it('a tampered identity blocks PLAYBACK too, not merely the render worker', async () => {
+    // verifyCompletedRender is re-run by verifyCompletedUpload on every
+    // Prayer Room request, so the same refusal must hold there.
+    const { jobId, clock } = await makeRenderableJob()
+    expect((await runRenderOnce('rtr-playback-seed', clock)).status).toBe(
+      'COMPLETE',
+    )
+    const job = await jobRow(jobId)
+    const context = {
+      serviceId: job.serviceIdSnapshot,
+      sacredHouseId: job.sacredHouseIdSnapshot,
+      language: job.languageSnapshot,
+    }
+    expect((await verifyCompletedRender(jobId, context)).ok).toBe(true)
+    await getDb()
+      .update(prayerGenerationRenderResults)
+      .set({ rendererVersion: 'mock-tampered' })
+      .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+    const after = await verifyCompletedRender(jobId, context)
+    expect(after.ok).toBe(false)
+    if (after.ok) return
+    expect(after.errorCode).toBe('RENDERER_NOT_PERMITTED')
+    expect(after.detail).toBe('renderer_version_mismatch')
   }, 240_000)
 })
 
