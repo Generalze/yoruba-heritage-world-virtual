@@ -470,6 +470,23 @@ export async function claimNextAudioGenerationJob(
   )
 }
 
+/** RENDER stage claim (Step 16): a job parked in RENDERING, or a
+ * RETRYING job whose resume stage is RENDERING. Claimed from its own
+ * queue so continuous earlier-stage work cannot starve it, matching
+ * every other stage claim exactly. */
+export async function claimNextRenderJob(
+  workerId: string,
+  clock: GenerationClock,
+  leaseMs: number = DEFAULT_LEASE_MS,
+): Promise<ClaimedJob | null> {
+  return claimDueJob(workerId, clock, leaseMs, (jobs) =>
+    or(
+      eq(jobs.status, 'RENDERING'),
+      and(eq(jobs.status, 'RETRYING'), eq(jobs.resumeStatus, 'RENDERING')),
+    ),
+  )
+}
+
 /**
  * Renews a live lease. LOCK-WAIT SAFETY: the authoritative clock
  * reading is taken AFTER the job row lock is acquired, so time spent

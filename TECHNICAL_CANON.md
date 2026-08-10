@@ -797,6 +797,121 @@ GENERATING_AUDIO
 
 ---
 
+## 10.9 Amendment — Render Assembly Engine (Phase One, Step 16)
+
+```text
+RENDERING
+→ revalidate the CURRENT manifest and every visual/audio source
+→ build an immutable deterministic RENDER PLAN (canonical SHA-256)
+→ execute it through the engine-neutral RenderEngine boundary
+→ verify + store the final artifact in PRIVATE LOCAL storage
+→ UPLOADING
+→ future delivery stage (Step 17+)
+```
+
+- The render plan is IMMUTABLE, append-only and derived ONLY from
+  already-approved, already-verified upstream authority: the Step 13
+  storyboard/manifest, Step 14's verified visual outputs and approved
+  media, and Step 15's verified speech outputs and approved human
+  recordings. It carries render-significant SAFE metadata only — ids,
+  hashes, timings, bounded machine codes and private local storage
+  references — and never sacred body text, spoken text, Visual Bible
+  rule text, provider payloads, credentials or personal detail. The
+  same authority always produces the same canonical hash, which is what
+  makes retry safe and comparison at the final gate meaningful.
+- Every storyboard scene resolves EXACTLY ONCE to approved media, a
+  verified generated artifact, or a held previous visual. A leading
+  HOLD_PREVIOUS — a first scene with no earlier picture to hold — fails
+  closed rather than inventing one.
+- AUDIO IS NEVER BENT TO FIT. Sacred audio is never truncated,
+  time-stretched, sped up, slowed, looped, rewritten or replaced by a
+  synthesized substitute. An audio requirement belongs to the FULL
+  original recipe segment, so a segment split across several visual
+  scenes still carries its recording exactly once. Each segment
+  reserves `max(plannedSegmentDuration, verifiedActualAudioDuration)`:
+  when the audio is shorter the planned visual window stands and the
+  remainder is silent; when it is longer the segment grows by exactly
+  the overrun, the final approved visual of that segment is held, and
+  every later scene shifts deterministically. Total duration is
+  computed from the reconciled timeline — never guessed, never forced
+  to a target by altering approved content — under a loud global
+  ceiling that FAILS rather than silently truncating.
+- Visual sources are fitted without invention, and WHAT a source is
+  comes from authoritative asset metadata rather than from whether a
+  duration happens to be recorded: an IMAGE is held as a still whatever
+  stray duration metadata claims, a VIDEO whose length is unknown FAILS
+  CLOSED rather than being guessed at, and a generated scene is always a
+  clip with its verified Step 14 length. A shown clip longer than its
+  window is trimmed and a shorter one holds its final frame.
+  HOLD_PREVIOUS means exactly one thing — freeze the frame last
+  DISPLAYED — so it always resolves to a hold and can never become a
+  trim or a replay of the earlier footage.
+- The rendered output must be the container the plan committed to, not
+  merely an allowlisted one, and that binding is re-proved at acceptance
+  and again at the final gate.
+- Before any render is started, the durable result row must BE this
+  job’s result for this manifest snapshot, this render-plan snapshot,
+  this plan hash and this idempotency key; a mismatch means zero render
+  calls, not a discovery at finalization.
+- A worker that has lost its lease writes NOTHING onto the result row
+  after render work returns or throws: a stale failure verdict would
+  overwrite whatever the newer owner is legitimately doing with that
+  row, and the row-status CAS alone cannot tell those two apart.
+- SOURCE INTEGRITY IS RE-PROVED, NOT ASSUMED. Immediately before
+  planning and again at the final gate, every generated visual must
+  trace to its exact successful Step 14 task with intact stored bytes
+  and matching SHA-256; every approved media visual must still pass
+  current runtime/rights/consent/link/scope authority with bytes
+  matching the manifest's frozen hash; every TTS result must trace to
+  its exact successful Step 15 task with intact bytes; and every human
+  recording goes back through Step 15's own current-authority
+  verification. A missing, tampered or withdrawn source means NO
+  RENDER — never a substitute and never a partial assembly.
+- Rendering happens behind an engine-neutral RenderEngine boundary
+  (`render()`), never against a compositor directly. Remotion remains
+  the canonical REAL compositor for this platform and plugs into that
+  same boundary; such an adapter must be opt-in, must pin every
+  `@remotion/*` package to one compatible version, and must never be
+  invoked by automated verification. FFmpeg may serve as helper or
+  probing infrastructure, never as spiritual authority.
+- Phase One ships ONE engine: a deterministic MockRenderEngine, with
+  zero network and zero paid calls, whose output is a SHA-256 expansion
+  over plan and source HASHES only. It exists because Step 14/15 mock
+  artifacts are deliberately synthetic and not decodable media. It is
+  unmistakable — `isMock` is persisted on every render result, its
+  artifact carries a self-identifying magic header, and a mock engine
+  is REFUSED OUTRIGHT when NODE_ENV is production. There is no override.
+- An engine composes exactly what the plan says. No subtitles,
+  participant-name overlays, titles, watermarks, music, ambient audio,
+  invented prompts or new spiritual text are added at this stage unless
+  an existing approved authority already supplies them.
+- ONE durable render result per job + manifest snapshot + render plan,
+  keyed by sha256(job|manifestSha256|renderPlanSha256), so a
+  deterministic retry converges on the same row and the same artifact
+  instead of producing a second accepted output. Persistence records
+  the renderer code/version and mock flag, status/attempts, the plan
+  identity/hash, artifact hash/mime/duration and a private LOCAL
+  reference — never raw render input.
+- Rendering may be long-running: the periodic lease renewal stays
+  active throughout, an explicit heartbeat fences the render on both
+  sides, the render itself runs outside every DB transaction, and an
+  artifact whose result is rejected (lease lost, or a lost status CAS)
+  has its orphan bytes removed. A genuine failure uses bounded RETRYING
+  with resumeStatus=RENDERING; an expired lease still consumes retry
+  budget; a stale worker can never finalize.
+- RENDERING → UPLOADING occurs only when the current manifest
+  revalidates VALID, the persisted plan still hashes correctly AND is
+  still the plan current authority produces, every input source still
+  verifies, the render result belongs to this exact job/manifest/plan,
+  it SUCCEEDED, its stored artifact exists with a matching SHA-256 and
+  the reconciled duration, and the producing renderer is still
+  resolvable and permitted in this environment.
+- STEP 16 UPLOADS NOTHING. UPLOADING means only that a verified LOCAL
+  artifact is ready for Step 17. There is no object store, no public
+  URL, no Prayer Room and no delivery of any kind at this stage.
+
+---
+
 # 11. Visual Canon Database
 
 Each visual asset should be classified and approved.
