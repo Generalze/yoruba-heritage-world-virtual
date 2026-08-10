@@ -202,6 +202,11 @@ function AppointmentDetailPage() {
           ) : null}
         </section>
 
+        <PrayerRoomSection
+          publicId={appointment.publicId}
+          status={appointment.status}
+        />
+
         <GuidanceSection
           guidance={data.guidance}
           publicId={appointment.publicId}
@@ -319,6 +324,46 @@ function AppointmentDetailPage() {
         ) : null}
       </div>
     </main>
+  )
+}
+
+/**
+ * Recorded Prayer Room entry point (Step 18). Deliberately a LINK, not
+ * a status readout. Availability depends on the generation job being
+ * READY and its upload still verifying — neither of which this page
+ * knows — so it never claims a room is open on the strength of the
+ * clock alone, and it does not duplicate the Step 18 verifier to find
+ * out. The Prayer Room page proves ownership, the appointment-time
+ * gate and the full upload verification server-side on every load.
+ *
+ * It appears only for statuses that can ever have a recording, and it
+ * shows nothing about the generation pipeline.
+ */
+function PrayerRoomSection({
+  publicId,
+  status,
+}: {
+  publicId: string
+  status: string
+}) {
+  if (status !== 'CONFIRMED' && status !== 'COMPLETED') return null
+  return (
+    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
+      <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        Prayer Room
+      </h2>
+      <p className="mt-3 text-sm text-stone-300">
+        Your recorded Prayer Room opens at the time of your appointment,
+        once the recording is ready.
+      </p>
+      <Link
+        to="/prayer-room/$publicId"
+        params={{ publicId }}
+        className="mt-4 inline-block rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 hover:text-amber-400"
+      >
+        View Prayer Room status
+      </Link>
+    </section>
   )
 }
 

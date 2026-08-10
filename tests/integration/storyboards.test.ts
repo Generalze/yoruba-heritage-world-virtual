@@ -1431,7 +1431,17 @@ describe('guards', () => {
       join(process.cwd(), 'src', 'routeTree.gen.ts'),
       'utf8',
     )
-    expect(routeTree).not.toMatch(/prayer.?room/i)
+    // Step 18 builds the recorded Prayer Room, so "none exists" is no
+    // longer the fence. The fence is now the SHAPE of that surface:
+    // exactly one owner-only page and one AUTHENTICATED media endpoint,
+    // and nothing else — no public route, no second media path.
+    const prayerRoomPaths = [...routeTree.matchAll(/fullPath: '([^']*prayer-room[^']*)'/g)]
+      .map((match) => match[1])
+      .sort()
+    expect(prayerRoomPaths).toEqual([
+      '/api/prayer-room/$publicId/media',
+      '/prayer-room/$publicId',
+    ])
     expect(routeTree).not.toMatch(/fullPath: '\/storyboard/)
   })
 

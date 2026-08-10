@@ -1066,7 +1066,17 @@ describe('guards', () => {
     // fullPath may exist.
     expect(routeTree).not.toMatch(/fullPath: '\/media/)
     expect(routeTree).not.toMatch(/fullPath: '\/uploads/)
-    expect(routeTree).not.toMatch(/prayer.?room/i)
+    // Step 18 builds the recorded Prayer Room, so "none exists" is no
+    // longer the fence. The fence is now the SHAPE of that surface:
+    // exactly one owner-only page and one AUTHENTICATED media endpoint,
+    // and nothing else — no public route, no second media path.
+    const prayerRoomPaths = [...routeTree.matchAll(/fullPath: '([^']*prayer-room[^']*)'/g)]
+      .map((match) => match[1])
+      .sort()
+    expect(prayerRoomPaths).toEqual([
+      '/api/prayer-room/$publicId/media',
+      '/prayer-room/$publicId',
+    ])
   })
 
   it('audit metadata never contains media bytes, consent references or notes', async () => {

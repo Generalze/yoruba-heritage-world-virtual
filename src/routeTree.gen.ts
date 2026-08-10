@@ -26,6 +26,7 @@ import { Route as CheckoutAppointmentPublicIdRouteImport } from './routes/checko
 import { Route as DeitiesIndexRouteImport } from './routes/deities.index'
 import { Route as DeitiesSlugRouteImport } from './routes/deities.$slug'
 import { Route as PaymentsIndexRouteImport } from './routes/payments.index'
+import { Route as PrayerRoomPublicIdRouteImport } from './routes/prayer-room.$publicId'
 import { Route as ProfileIndexRouteImport } from './routes/profile.index'
 import { Route as ProfileConsentsRouteImport } from './routes/profile.consents'
 import { Route as ProfileEditRouteImport } from './routes/profile.edit'
@@ -71,6 +72,7 @@ import { Route as AdminCatalogueSacredHousesNewRouteImport } from './routes/admi
 import { Route as AdminCatalogueServicesIndexRouteImport } from './routes/admin.catalogue.services.index'
 import { Route as AdminCatalogueServicesIdRouteImport } from './routes/admin.catalogue.services.$id'
 import { Route as AdminCatalogueServicesNewRouteImport } from './routes/admin.catalogue.services.new'
+import { Route as ApiPrayerRoomPublicIdMediaRouteImport } from './routes/api.prayer-room.$publicId.media'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -156,6 +158,11 @@ const DeitiesSlugRoute = DeitiesSlugRouteImport.update({
 const PaymentsIndexRoute = PaymentsIndexRouteImport.update({
   id: '/payments/',
   path: '/payments/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrayerRoomPublicIdRoute = PrayerRoomPublicIdRouteImport.update({
+  id: '/prayer-room/$publicId',
+  path: '/prayer-room/$publicId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileIndexRoute = ProfileIndexRouteImport.update({
@@ -399,6 +406,12 @@ const AdminCatalogueServicesNewRoute =
     path: '/catalogue/services/new',
     getParentRoute: () => AdminRoute,
   } as any)
+const ApiPrayerRoomPublicIdMediaRoute =
+  ApiPrayerRoomPublicIdMediaRouteImport.update({
+    id: '/api/prayer-room/$publicId/media',
+    path: '/api/prayer-room/$publicId/media',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -414,6 +427,7 @@ export interface FileRoutesByFullPath {
   '/book/$serviceSlug': typeof BookServiceSlugRoute
   '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
   '/deities/$slug': typeof DeitiesSlugRoute
+  '/prayer-room/$publicId': typeof PrayerRoomPublicIdRoute
   '/profile/consents': typeof ProfileConsentsRoute
   '/profile/edit': typeof ProfileEditRoute
   '/profile/spiritual': typeof ProfileSpiritualRoute
@@ -460,6 +474,7 @@ export interface FileRoutesByFullPath {
   '/admin/catalogue/sacred-houses/new': typeof AdminCatalogueSacredHousesNewRoute
   '/admin/catalogue/services/$id': typeof AdminCatalogueServicesIdRoute
   '/admin/catalogue/services/new': typeof AdminCatalogueServicesNewRoute
+  '/api/prayer-room/$publicId/media': typeof ApiPrayerRoomPublicIdMediaRoute
   '/admin/catalogue/deities/': typeof AdminCatalogueDeitiesIndexRoute
   '/admin/catalogue/sacred-houses/': typeof AdminCatalogueSacredHousesIndexRoute
   '/admin/catalogue/services/': typeof AdminCatalogueServicesIndexRoute
@@ -477,6 +492,7 @@ export interface FileRoutesByTo {
   '/book/$serviceSlug': typeof BookServiceSlugRoute
   '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
   '/deities/$slug': typeof DeitiesSlugRoute
+  '/prayer-room/$publicId': typeof PrayerRoomPublicIdRoute
   '/profile/consents': typeof ProfileConsentsRoute
   '/profile/edit': typeof ProfileEditRoute
   '/profile/spiritual': typeof ProfileSpiritualRoute
@@ -523,6 +539,7 @@ export interface FileRoutesByTo {
   '/admin/catalogue/sacred-houses/new': typeof AdminCatalogueSacredHousesNewRoute
   '/admin/catalogue/services/$id': typeof AdminCatalogueServicesIdRoute
   '/admin/catalogue/services/new': typeof AdminCatalogueServicesNewRoute
+  '/api/prayer-room/$publicId/media': typeof ApiPrayerRoomPublicIdMediaRoute
   '/admin/catalogue/deities': typeof AdminCatalogueDeitiesIndexRoute
   '/admin/catalogue/sacred-houses': typeof AdminCatalogueSacredHousesIndexRoute
   '/admin/catalogue/services': typeof AdminCatalogueServicesIndexRoute
@@ -542,6 +559,7 @@ export interface FileRoutesById {
   '/book/$serviceSlug': typeof BookServiceSlugRoute
   '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
   '/deities/$slug': typeof DeitiesSlugRoute
+  '/prayer-room/$publicId': typeof PrayerRoomPublicIdRoute
   '/profile/consents': typeof ProfileConsentsRoute
   '/profile/edit': typeof ProfileEditRoute
   '/profile/spiritual': typeof ProfileSpiritualRoute
@@ -588,6 +606,7 @@ export interface FileRoutesById {
   '/admin/catalogue/sacred-houses/new': typeof AdminCatalogueSacredHousesNewRoute
   '/admin/catalogue/services/$id': typeof AdminCatalogueServicesIdRoute
   '/admin/catalogue/services/new': typeof AdminCatalogueServicesNewRoute
+  '/api/prayer-room/$publicId/media': typeof ApiPrayerRoomPublicIdMediaRoute
   '/admin/catalogue/deities/': typeof AdminCatalogueDeitiesIndexRoute
   '/admin/catalogue/sacred-houses/': typeof AdminCatalogueSacredHousesIndexRoute
   '/admin/catalogue/services/': typeof AdminCatalogueServicesIndexRoute
@@ -608,6 +627,7 @@ export interface FileRouteTypes {
     | '/book/$serviceSlug'
     | '/checkout/$appointmentPublicId'
     | '/deities/$slug'
+    | '/prayer-room/$publicId'
     | '/profile/consents'
     | '/profile/edit'
     | '/profile/spiritual'
@@ -654,6 +674,7 @@ export interface FileRouteTypes {
     | '/admin/catalogue/sacred-houses/new'
     | '/admin/catalogue/services/$id'
     | '/admin/catalogue/services/new'
+    | '/api/prayer-room/$publicId/media'
     | '/admin/catalogue/deities/'
     | '/admin/catalogue/sacred-houses/'
     | '/admin/catalogue/services/'
@@ -671,6 +692,7 @@ export interface FileRouteTypes {
     | '/book/$serviceSlug'
     | '/checkout/$appointmentPublicId'
     | '/deities/$slug'
+    | '/prayer-room/$publicId'
     | '/profile/consents'
     | '/profile/edit'
     | '/profile/spiritual'
@@ -717,6 +739,7 @@ export interface FileRouteTypes {
     | '/admin/catalogue/sacred-houses/new'
     | '/admin/catalogue/services/$id'
     | '/admin/catalogue/services/new'
+    | '/api/prayer-room/$publicId/media'
     | '/admin/catalogue/deities'
     | '/admin/catalogue/sacred-houses'
     | '/admin/catalogue/services'
@@ -735,6 +758,7 @@ export interface FileRouteTypes {
     | '/book/$serviceSlug'
     | '/checkout/$appointmentPublicId'
     | '/deities/$slug'
+    | '/prayer-room/$publicId'
     | '/profile/consents'
     | '/profile/edit'
     | '/profile/spiritual'
@@ -781,6 +805,7 @@ export interface FileRouteTypes {
     | '/admin/catalogue/sacred-houses/new'
     | '/admin/catalogue/services/$id'
     | '/admin/catalogue/services/new'
+    | '/api/prayer-room/$publicId/media'
     | '/admin/catalogue/deities/'
     | '/admin/catalogue/sacred-houses/'
     | '/admin/catalogue/services/'
@@ -798,6 +823,7 @@ export interface RootRouteChildren {
   BookServiceSlugRoute: typeof BookServiceSlugRoute
   CheckoutAppointmentPublicIdRoute: typeof CheckoutAppointmentPublicIdRoute
   DeitiesSlugRoute: typeof DeitiesSlugRoute
+  PrayerRoomPublicIdRoute: typeof PrayerRoomPublicIdRoute
   ProfileConsentsRoute: typeof ProfileConsentsRoute
   ProfileEditRoute: typeof ProfileEditRoute
   ProfileSpiritualRoute: typeof ProfileSpiritualRoute
@@ -812,6 +838,7 @@ export interface RootRouteChildren {
   ApiWebhooksProviderRoute: typeof ApiWebhooksProviderRoute
   PaymentsReceiptAttemptPublicIdRoute: typeof PaymentsReceiptAttemptPublicIdRoute
   PaymentsReturnProviderRoute: typeof PaymentsReturnProviderRoute
+  ApiPrayerRoomPublicIdMediaRoute: typeof ApiPrayerRoomPublicIdMediaRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -933,6 +960,13 @@ declare module '@tanstack/react-router' {
       path: '/payments'
       fullPath: '/payments/'
       preLoaderRoute: typeof PaymentsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prayer-room/$publicId': {
+      id: '/prayer-room/$publicId'
+      path: '/prayer-room/$publicId'
+      fullPath: '/prayer-room/$publicId'
+      preLoaderRoute: typeof PrayerRoomPublicIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile/': {
@@ -1250,6 +1284,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminCatalogueServicesNewRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/api/prayer-room/$publicId/media': {
+      id: '/api/prayer-room/$publicId/media'
+      path: '/api/prayer-room/$publicId/media'
+      fullPath: '/api/prayer-room/$publicId/media'
+      preLoaderRoute: typeof ApiPrayerRoomPublicIdMediaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -1347,6 +1388,7 @@ const rootRouteChildren: RootRouteChildren = {
   BookServiceSlugRoute: BookServiceSlugRoute,
   CheckoutAppointmentPublicIdRoute: CheckoutAppointmentPublicIdRoute,
   DeitiesSlugRoute: DeitiesSlugRoute,
+  PrayerRoomPublicIdRoute: PrayerRoomPublicIdRoute,
   ProfileConsentsRoute: ProfileConsentsRoute,
   ProfileEditRoute: ProfileEditRoute,
   ProfileSpiritualRoute: ProfileSpiritualRoute,
@@ -1361,6 +1403,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiWebhooksProviderRoute: ApiWebhooksProviderRoute,
   PaymentsReceiptAttemptPublicIdRoute: PaymentsReceiptAttemptPublicIdRoute,
   PaymentsReturnProviderRoute: PaymentsReturnProviderRoute,
+  ApiPrayerRoomPublicIdMediaRoute: ApiPrayerRoomPublicIdMediaRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

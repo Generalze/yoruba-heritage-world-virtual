@@ -102,6 +102,193 @@ export function buildCanonicalObjectKey(
   }
 }
 
+/** Everything a downstream consumer needs about a finished, verified
+ * upload — and nothing it does not. No bytes, no signed URL, no
+ * credential. The provider is included so a caller can read the object
+ * through the SAME backend that was just proved to hold it. */
+export interface VerifiedCompletedUpload {
+  upload: typeof prayerGenerationUploads.$inferSelect
+  objectKey: string
+  byteSize: number
+  mimeType: string
+  sha256: string
+  provider: ObjectStorageProvider
+}
+
+export type CompletedUploadVerification =
+  | { ok: true; verified: VerifiedCompletedUpload }
+  | { ok: false; errorCode: string; detail: string | null }
+
+/**
+ * THE completed-upload proof, in one place.
+ *
+ * This is what Step 17's own final gate runs before UPLOADING → READY,
+ * and it is the SAME function Step 18 re-runs on EVERY playback request
+ * — deliberately shared rather than reimplemented, because a second,
+ * slightly-weaker copy of a governance check is how two stages come to
+ * disagree about what "verified" means.
+ *
+ * It is READ-ONLY: it regenerates nothing, uploads nothing, writes no
+ * row and mutates no state. It proves, against CURRENT authority:
+ *
+ * - the entire Step 16 result still verifies (verifyCompletedRender —
+ *   manifest, render plan, sources, artifact, renderer permission);
+ * - the upload row is exactly this job's upload for that render result,
+ *   with the idempotency key and canonical object key RECOMPUTED here
+ *   rather than read from the row;
+ * - it SUCCEEDED, and its recorded hash/mime/duration/size match the
+ *   authoritative render values (the byte size recomputed from the
+ *   local bytes themselves);
+ * - the provider named by the row still resolves, is still permitted in
+ *   this environment, and still reports the same local/remote nature; and
+ * - the private object still exists remotely with matching size, mime
+ *   and SHA-256.
+ *
+ * Any failure is fail-closed with a bounded machine code. Callers that
+ * face a user must NOT surface these codes — they exist for logs and
+ * for the pipeline's own retry decisions.
+ */
+export async function verifyCompletedUpload(
+  generationJobId: number,
+  context: RenderContext,
+): Promise<CompletedUploadVerification> {
+  const render = await verifyCompletedRender(generationJobId, context)
+  if (!render.ok) {
+    return { ok: false, errorCode: render.errorCode, detail: render.detail }
+  }
+  const result = render.verified.result
+
+  // AUTHORITY COMES FROM THE FRESH RENDER, NOT FROM THE UPLOAD ROW. The
+  // row is the thing being checked, so it can never also be the thing
+  // doing the checking.
+  const localBytes = await getMediaStorage().get(result.artifactStorageRef!)
+  if (!localBytes || localBytes.length === 0) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_ARTIFACT_INVALID',
+      detail: 'local_artifact_missing',
+    }
+  }
+  const authoritativeSha256 = result.artifactSha256!
+  const authoritativeMimeType = result.artifactMimeType!
+  const authoritativeDurationMs = result.artifactDurationMs!
+  const authoritativeByteSize = localBytes.length
+
+  const idempotencyKey = computeUploadIdempotencyKey({
+    generationJobId,
+    renderResultId: result.id,
+    renderPlanSha256: result.renderPlanSha256,
+    artifactSha256: authoritativeSha256,
+  })
+  const canonical = buildCanonicalObjectKey(
+    idempotencyKey,
+    authoritativeMimeType,
+  )
+  if (!canonical.ok) {
+    return {
+      ok: false,
+      errorCode: 'UPLOAD_IDENTITY_INVALID',
+      detail: canonical.reasonCode,
+    }
+  }
+
+  const upload = (
+    await getDb()
+      .select()
+      .from(prayerGenerationUploads)
+      .where(
+        and(
+          eq(prayerGenerationUploads.generationJobId, generationJobId),
+          eq(prayerGenerationUploads.renderResultId, result.id),
+        ),
+      )
+      .limit(1)
+  ).at(0)
+  if (!upload) {
+    return { ok: false, errorCode: 'UPLOAD_ROW_MISSING', detail: null }
+  }
+  const mismatch =
+    upload.generationJobId !== generationJobId
+      ? 'upload_job_mismatch'
+      : upload.renderResultId !== result.id
+        ? 'upload_result_mismatch'
+        : upload.renderPlanSnapshotId !== render.verified.planSnapshotId
+          ? 'upload_plan_snapshot_mismatch'
+          : upload.renderPlanSha256 !== result.renderPlanSha256
+            ? 'upload_plan_hash_mismatch'
+            : upload.idempotencyKey !== idempotencyKey
+              ? 'upload_idempotency_mismatch'
+              : upload.objectKey !== canonical.objectKey
+                ? 'upload_object_key_mismatch'
+                : upload.artifactSha256 !== authoritativeSha256
+                  ? 'upload_artifact_hash_mismatch'
+                  : upload.artifactMimeType !== authoritativeMimeType
+                    ? 'upload_artifact_mime_mismatch'
+                    : upload.artifactDurationMs !== authoritativeDurationMs
+                      ? 'upload_artifact_duration_mismatch'
+                      : upload.byteSize !== authoritativeByteSize
+                        ? 'upload_byte_size_mismatch'
+                        : null
+  if (mismatch != null) {
+    return { ok: false, errorCode: 'UPLOAD_IDENTITY_MISMATCH', detail: mismatch }
+  }
+  if (upload.status !== 'SUCCEEDED') {
+    return { ok: false, errorCode: 'UPLOAD_NOT_SUCCEEDED', detail: upload.status }
+  }
+
+  // The provider holding this object must still be resolvable and still
+  // permitted HERE — a local object can never be served in production,
+  // whichever provider happens to be active now.
+  const holdingProvider = resolveObjectStorage(upload.providerCode)
+  if (!holdingProvider) {
+    return {
+      ok: false,
+      errorCode: 'OBJECT_STORAGE_NOT_PERMITTED',
+      detail: 'provider_code_mismatch',
+    }
+  }
+  const allowed = checkObjectStorageAllowed(holdingProvider)
+  if (!allowed.ok) {
+    return {
+      ok: false,
+      errorCode: 'OBJECT_STORAGE_NOT_PERMITTED',
+      detail: allowed.reasonCode,
+    }
+  }
+  if (upload.providerIsLocal !== (holdingProvider.isLocal ? 1 : 0)) {
+    return {
+      ok: false,
+      errorCode: 'UPLOAD_PROVIDER_MISMATCH',
+      detail: 'upload_provider_changed',
+    }
+  }
+  const intact = await holdingProvider.verifyPrivateObjectIntegrity({
+    objectKey: upload.objectKey,
+    expectedSha256: authoritativeSha256,
+    expectedByteSize: authoritativeByteSize,
+    expectedMimeType: authoritativeMimeType,
+  })
+  if (!intact.ok) {
+    return {
+      ok: false,
+      errorCode: 'UPLOAD_REMOTE_INTEGRITY_FAILURE',
+      detail: intact.reasonCode,
+    }
+  }
+
+  return {
+    ok: true,
+    verified: {
+      upload,
+      objectKey: upload.objectKey,
+      byteSize: authoritativeByteSize,
+      mimeType: authoritativeMimeType,
+      sha256: authoritativeSha256,
+      provider: holdingProvider,
+    },
+  }
+}
+
 // --- Persistence ------------------------------------------------------------
 
 async function ensureUploadRow(input: {
@@ -516,94 +703,21 @@ export async function runUploadOnce(
     // --- FINAL GATE ---------------------------------------------------
     if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
 
-    const revalidatedRender = await verifyCompletedRender(job.id, context, {
-      renderResultId: result.id,
-      planSnapshotId,
-    })
-    if (!revalidatedRender.ok) {
-      return fail(revalidatedRender.errorCode, revalidatedRender.detail)
+    // ONE shared proof, run again from scratch — the SAME function
+    // Step 18 re-runs on every playback request.
+    const finalProof = await verifyCompletedUpload(job.id, context)
+    if (!finalProof.ok) {
+      return fail(finalProof.errorCode, finalProof.detail)
     }
-
-    // AUTHORITY COMES FROM THE FRESH RENDER, NOT FROM THE ROW. Every
-    // render-derived field is taken from what verifyCompletedRender
-    // just re-proved, and the byte size is recomputed from the local
-    // bytes themselves — the upload row is the thing being checked, so
-    // it can never also be the thing doing the checking.
-    const authoritative = revalidatedRender.verified.result
-    const authoritativeBytes = await getMediaStorage().get(
-      authoritative.artifactStorageRef!,
-    )
-    if (!authoritativeBytes || authoritativeBytes.length === 0) {
-      return fail('RENDER_ARTIFACT_INVALID', 'local_artifact_missing')
-    }
-    const authoritativeSha256 = authoritative.artifactSha256!
-    const authoritativeMimeType = authoritative.artifactMimeType!
-    const authoritativeDurationMs = authoritative.artifactDurationMs!
-    const authoritativeByteSize = authoritativeBytes.length
-
-    const finalRow = (
-      await getDb()
-        .select()
-        .from(prayerGenerationUploads)
-        .where(eq(prayerGenerationUploads.id, row.id))
-        .limit(1)
-    ).at(0)
-    if (!finalRow) return fail('UPLOAD_ROW_MISSING', null)
-    const finalMismatch =
-      finalRow.generationJobId !== job.id
-        ? 'upload_job_mismatch'
-        : finalRow.renderResultId !== authoritative.id
-          ? 'upload_result_mismatch'
-          : finalRow.renderPlanSnapshotId !==
-              revalidatedRender.verified.planSnapshotId
-            ? 'upload_plan_snapshot_mismatch'
-            : finalRow.renderPlanSha256 !== authoritative.renderPlanSha256
-              ? 'upload_plan_hash_mismatch'
-              : finalRow.idempotencyKey !== idempotencyKey
-                ? 'upload_idempotency_mismatch'
-                : finalRow.objectKey !== canonical.objectKey
-                  ? 'upload_object_key_mismatch'
-                  : finalRow.artifactSha256 !== authoritativeSha256
-                    ? 'upload_artifact_hash_mismatch'
-                    : finalRow.artifactMimeType !== authoritativeMimeType
-                      ? 'upload_artifact_mime_mismatch'
-                      : finalRow.artifactDurationMs !== authoritativeDurationMs
-                        ? 'upload_artifact_duration_mismatch'
-                        : finalRow.byteSize !== authoritativeByteSize
-                          ? 'upload_byte_size_mismatch'
-                          : null
-    if (finalMismatch != null) {
-      return fail('UPLOAD_IDENTITY_MISMATCH', finalMismatch)
-    }
-    if (finalRow.status !== 'SUCCEEDED') {
-      return fail('UPLOAD_NOT_SUCCEEDED', finalRow.status)
-    }
-    // The provider holding this object must still be resolvable and
-    // still permitted HERE — a local object can never be walked forward
-    // in production, whichever provider happens to be active now.
-    const holdingProvider = resolveObjectStorage(finalRow.providerCode)
-    if (!holdingProvider) {
-      return fail('OBJECT_STORAGE_NOT_PERMITTED', 'provider_code_mismatch')
-    }
-    const stillAllowed = checkObjectStorageAllowed(holdingProvider)
-    if (!stillAllowed.ok) {
-      return fail('OBJECT_STORAGE_NOT_PERMITTED', stillAllowed.reasonCode)
-    }
-    // The row's own claim about which backend holds this object must
-    // still describe the provider that actually answers to that code.
-    if (finalRow.providerIsLocal !== (holdingProvider.isLocal ? 1 : 0)) {
-      return fail('UPLOAD_PROVIDER_MISMATCH', 'upload_provider_changed')
-    }
-    // Remote integrity is proved against the AUTHORITATIVE Step 16
-    // values, never against the upload row's own claims.
-    const stillIntact = await holdingProvider.verifyPrivateObjectIntegrity({
-      objectKey: finalRow.objectKey,
-      expectedSha256: authoritativeSha256,
-      expectedByteSize: authoritativeByteSize,
-      expectedMimeType: authoritativeMimeType,
-    })
-    if (!stillIntact.ok) {
-      return fail('UPLOAD_REMOTE_INTEGRITY_FAILURE', stillIntact.reasonCode)
+    // Cross-check the in-cycle identities this worker has been
+    // acting on: the shared proof re-derives everything from
+    // authority, so a disagreement means the snapshot moved under us.
+    if (
+      finalProof.verified.upload.id !== row.id ||
+      finalProof.verified.objectKey !== canonical.objectKey ||
+      finalProof.verified.upload.idempotencyKey !== idempotencyKey
+    ) {
+      return fail('UPLOAD_IDENTITY_MISMATCH', 'upload_identity_moved')
     }
 
     if (!isLegalTransition('UPLOADING', 'READY')) {
