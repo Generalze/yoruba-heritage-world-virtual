@@ -1159,6 +1159,7 @@ describe('guards', () => {
     const files = [
       'src/services/generation-jobs.ts',
       'src/services/generation-job-actions.ts',
+      'src/services/generation-pipeline.ts',
       'src/workers/prayer-generation-worker.ts',
       'src/db/schema/generation.ts',
       'src/routes/admin.generation-jobs.tsx',

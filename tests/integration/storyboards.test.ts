@@ -1408,6 +1408,7 @@ describe('guards', () => {
     const files = [
       'src/services/generation-storyboards.ts',
       'src/db/schema/storyboards.ts',
+      'src/services/generation-pipeline.ts',
       'src/workers/prayer-generation-worker.ts',
     ]
     for (const file of files) {

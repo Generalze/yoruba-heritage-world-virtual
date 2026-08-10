@@ -146,10 +146,13 @@ export type PrayerRoomAccess =
   | { ok: false; state: PrayerRoomState }
 
 /**
- * The complete access proof, in the order that spends the least on a
- * request that is going to be refused anyway: ownership, then status,
- * then the time gate, then job readiness. Only a request that survives
- * all four is allowed to cost a full upload verification.
+ * The complete access proof, cheapest refusal first: ownership, then
+ * appointment status, then job READINESS, and only then the time gate.
+ * Only a request that survives all four is allowed to cost a full
+ * upload verification.
+ *
+ * Readiness deliberately precedes the clock — see the comment at that
+ * check for why an unmade recording is PREPARING rather than LOCKED.
  */
 async function proveAccess(
   userId: number,

@@ -1093,6 +1093,75 @@ authenticated appointment OWNER
   remain out of scope at this stage.
 
 ---
+
+## 10.12 Amendment — End-to-End Autonomous Pipeline (Phase One, Step 19)
+
+```text
+user books
+→ verified payment (signed provider event → the ONE settlement path)
+→ appointment CONFIRMED + generation job QUEUED, in ONE transaction
+→ [ runGenerationPipelinePass(), repeatedly, by an unsupervised worker ]
+→ READY private upload
+→ time-gated Prayer Room playback
+```
+
+- THERE IS NO HUMAN STEP BETWEEN PAYMENT AND READY. No approval queue,
+  no operator action, no review. Human authority is spent ONCE and
+  UPSTREAM — on the spiritual content, media, templates, rights and
+  runtime switches the pipeline is permitted to draw from. The runtime
+  only assembles what was already approved, and every stage re-proves
+  that authority still holds before it spends anything.
+- ONE ORCHESTRATION, SHARED BY PRODUCTION AND TESTS.
+  `runGenerationPipelinePass(workerId, clock)` calls the six existing
+  stage workers — preparation, storyboard planning, visual generation,
+  audio generation, render assembly, private upload — in canonical
+  order, once each, and reports bounded outcomes. The worker executable
+  calls that same function and nothing else. Before Step 19 the six
+  stages met only inside the worker, where no test could reach them, so
+  end-to-end coverage necessarily tested an imitation of the pipeline;
+  the extraction exists precisely to abolish that.
+- THE PASS IS ORCHESTRATION AND NOTHING ELSE. It writes no status, no
+  lease and no event; it holds no transition authority and is not a
+  second state machine. It does not decide which stage "should" run
+  next — it runs all six and lets each stage's own claim query answer.
+  It selects no spiritual content, approves nothing, alters no
+  immutable snapshot and cannot manufacture a success. Every decision
+  remains with the stage that owns it, under the central transition map
+  and the same lease CAS as before.
+- FAIRNESS BY CONSTRUCTION. Running one cycle of EVERY stage each pass,
+  rather than draining whichever stage has work, is what prevents a
+  stream of bookings in one stage from starving the others and what
+  lets many jobs at different stages progress together.
+- LEASE RECOVERY STAYS IN THE WORKER. Recovering another worker's
+  abandoned lease is a lifecycle duty of a long-running process, on its
+  own slow cadence — not part of doing one unit of pipeline work.
+- ONE WORKER EXECUTABLE. `bun run worker:generation`, separate from the
+  web server, with graceful SIGTERM/SIGINT shutdown, idle sleeping and
+  the DB-backed queue. No second executable, no Redis, no broker.
+- FAILURE IS ISOLATED, NEVER PAPERED OVER. A job that current
+  governance cannot satisfy fails closed under the EXISTING bounded
+  rules (a structural impossibility fails without storming the retry
+  budget) and does not delay any other queued appointment. Nothing is
+  invented to make a failed job look successful, and its Prayer Room
+  says PREPARING — never AVAILABLE.
+- IDEMPOTENT AT BOTH ENDS. Replaying a provider webhook cannot produce
+  a second settlement or a second generation job (the webhook event key
+  and the UNIQUE appointment_id see to that), and further pipeline
+  passes over a READY job do nothing at all: no new snapshot, task,
+  render, upload or canonical object.
+- PRIVACY THROUGH THE WHOLE PIPELINE. Personal details, the private
+  request note and the approved sacred body appear in NO generation
+  row: not in job events, snapshots, visual or audio task identities,
+  render plans, render results or upload rows, and not in the object
+  key, which is derived from hashes alone. The approved body stays
+  where human authority put it.
+- STEP 19 PROVES AUTONOMY, NOT PRODUCTION READINESS. Steps 14–17 still
+  run on deterministic mocks and the local private-object adapter, all
+  fail-closed in production. Real generation, speech and render
+  providers, real object storage, the production media-proxy decision
+  and any queue broker remain out of scope at this stage.
+
+---
 # 11. Visual Canon Database
 
 Each visual asset should be classified and approved.
