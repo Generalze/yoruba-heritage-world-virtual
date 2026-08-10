@@ -7,6 +7,7 @@ import {
   GUIDANCE_LANGUAGES,
   appointmentGuidanceSets,
   appointments,
+  prayerGenerationAudioTasks,
   prayerGenerationJobEvents,
   prayerGenerationJobs,
   prayerGenerationManifestSnapshots,
@@ -29,7 +30,10 @@ import type { GenerationJobStatus, GuidanceLanguage } from '@/db/schema'
 import type { RequestContext } from '@/auth/service'
 // Type-only: erased at compile time, so this does NOT create a runtime
 // import cycle (generation-storyboards.ts imports FROM this module).
-import type { ManifestVisualTask } from './generation-storyboards'
+import type {
+  ManifestAudioRequirement,
+  ManifestVisualTask,
+} from './generation-storyboards'
 
 /**
  * Appointment-bound prayer generation orchestration (Phase One,
@@ -94,7 +98,20 @@ export const GENERATION_TRANSITIONS: Record<
     'FAILED',
     'CANCELLED',
   ],
-  GENERATING_AUDIO: ['RENDERING', 'RETRYING', 'FAILED', 'CANCELLED'],
+  // Step 15: the same DELIBERATE, explicit wait-without-budget
+  // self-loop the visual stage uses — how a worker legitimately
+  // awaiting an async speech result releases its lease and becomes due
+  // again WITHOUT touching the retry budget, granted through the SAME
+  // lease-guarded transitionGenerationJobUnderLease (see
+  // runAudioGenerationOnce) and therefore carrying identical
+  // stale-worker protection.
+  GENERATING_AUDIO: [
+    'GENERATING_AUDIO',
+    'RENDERING',
+    'RETRYING',
+    'FAILED',
+    'CANCELLED',
+  ],
   RENDERING: ['UPLOADING', 'RETRYING', 'FAILED', 'CANCELLED'],
   UPLOADING: ['READY', 'RETRYING', 'FAILED', 'CANCELLED'],
   READY: [],
@@ -122,6 +139,12 @@ export const DEFAULT_LEASE_MS = 2 * 60 * 1000
  * in magnitude is itself part of keeping "waiting" and "failing"
  * visibly distinct. */
 export const VISUAL_TASK_POLL_DELAY_MS = 5_000
+
+/** Step 15: the same short, seconds-scale wait for an in-flight speech
+ * synthesis. Kept as its own constant rather than reusing the visual
+ * one so the two stages can be tuned independently without either
+ * silently inheriting the other's pacing. */
+export const AUDIO_TASK_POLL_DELAY_MS = 5_000
 
 /** Injectable clock: every lease-sensitive check MUST call now() at
  * the moment of the check — a worker's start time is never authority. */
@@ -420,6 +443,28 @@ export async function claimNextVisualGenerationJob(
       and(
         eq(jobs.status, 'RETRYING'),
         eq(jobs.resumeStatus, 'GENERATING_VISUALS'),
+      ),
+    ),
+  )
+}
+
+/** AUDIO GENERATION stage claim (Step 15): a job parked in
+ * GENERATING_AUDIO (fresh arrival, OR released back to itself by the
+ * wait-without-budget self-loop — see GENERATION_TRANSITIONS), or a
+ * RETRYING job whose resume stage is GENERATING_AUDIO. Claimed from its
+ * own queue so continuous earlier-stage work cannot starve it, matching
+ * every other stage claim exactly. */
+export async function claimNextAudioGenerationJob(
+  workerId: string,
+  clock: GenerationClock,
+  leaseMs: number = DEFAULT_LEASE_MS,
+): Promise<ClaimedJob | null> {
+  return claimDueJob(workerId, clock, leaseMs, (jobs) =>
+    or(
+      eq(jobs.status, 'GENERATING_AUDIO'),
+      and(
+        eq(jobs.status, 'RETRYING'),
+        eq(jobs.resumeStatus, 'GENERATING_AUDIO'),
       ),
     ),
   )
@@ -1904,6 +1949,839 @@ export async function runVisualGenerationOnce(
           status: 'RETRY_SCHEDULED',
           jobId: job.id,
           errorCode: 'VISUAL_GENERATION_ERROR',
+        }
+  } finally {
+    clearInterval(heartbeatTimer)
+  }
+}
+
+// ============================================================================
+// STEP 15 — AUDIO GENERATION / APPROVED SPEECH SYNTHESIS
+//
+// Same shape as the Step 14 visual stage, and deliberately so: one
+// durable row per unit of work, status-CAS'd writes, provider calls
+// outside every transaction and fenced by lease heartbeats on both
+// sides, a wait-without-budget self-loop, and a finalization gate that
+// re-proves identity AND artifacts against private storage.
+//
+// What is NOT the same: an EXISTING_HUMAN_AUDIO requirement never
+// becomes a task at all. An approved human recording of sacred text is
+// resolved and re-verified in place — never synthesized, never
+// regenerated, never sent to a provider.
+// ============================================================================
+
+export type AudioTaskSubmissionResult =
+  | { status: 'SUBMITTED'; providerCode: string; providerOperationId: string }
+  | {
+      status: 'FAILED'
+      providerCode: string
+      errorCode: string
+      errorMessage: string | null
+    }
+
+export type AudioTaskPollResult =
+  | { status: 'PROCESSING' }
+  | {
+      status: 'SUCCEEDED'
+      artifactSha256: string
+      artifactMimeType: string
+      artifactDurationMs: number
+      artifactStorageRef: string
+    }
+  | { status: 'FAILED'; errorCode: string; errorMessage: string | null }
+
+export interface AudioGenerationDependencies {
+  /** Submits ONE TTS requirement. Called at most once per PENDING row —
+   * a task that already SUCCEEDED never comes back through here — but
+   * MUST be idempotent regardless, keyed on the idempotency key. */
+  submitSpeech?: (input: {
+    requirement: ManifestAudioRequirement
+    idempotencyKey: string
+  }) => Promise<AudioTaskSubmissionResult>
+  /** Polls ONE in-flight synthesis. Called with NO open DB transaction
+   * and must not itself hold one — this loop persists the result in a
+   * separate, subsequent write. */
+  pollSpeech?: (input: {
+    providerCode: string
+    providerOperationId: string
+    requirement: ManifestAudioRequirement
+    idempotencyKey: string
+  }) => Promise<AudioTaskPollResult>
+}
+
+function isIntegrityValidAudioResult(
+  row: typeof prayerGenerationAudioTasks.$inferSelect,
+): boolean {
+  return (
+    row.artifactSha256 != null &&
+    HEX64.test(row.artifactSha256) &&
+    row.artifactMimeType != null &&
+    row.artifactMimeType.length > 0 &&
+    row.artifactDurationMs != null &&
+    row.artifactDurationMs > 0
+  )
+}
+
+/** Ensures exactly ONE row exists for this audio requirement, ever.
+ * Reuses the same insert-then-fetch-on-conflict idempotency pattern as
+ * the visual stage: the UNIQUE (job, manifest snapshot, requirement id)
+ * constraint is the actual anti-duplicate-submission authority; a
+ * conflicting insert just means the row already exists. */
+async function ensureAudioTaskRow(
+  jobId: number,
+  manifestSnapshotId: number,
+  requirementId: string,
+  sceneId: string,
+  idempotencyKey: string,
+): Promise<typeof prayerGenerationAudioTasks.$inferSelect> {
+  const db = getDb()
+  const existing = (
+    await db
+      .select()
+      .from(prayerGenerationAudioTasks)
+      .where(
+        and(
+          eq(prayerGenerationAudioTasks.generationJobId, jobId),
+          eq(prayerGenerationAudioTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(prayerGenerationAudioTasks.requirementId, requirementId),
+        ),
+      )
+      .limit(1)
+  ).at(0)
+  if (existing) return existing
+  try {
+    await db.insert(prayerGenerationAudioTasks).values({
+      generationJobId: jobId,
+      manifestSnapshotId,
+      requirementId,
+      sceneId,
+      idempotencyKey,
+      status: 'PENDING',
+    })
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) throw error
+  }
+  const row = (
+    await db
+      .select()
+      .from(prayerGenerationAudioTasks)
+      .where(
+        and(
+          eq(prayerGenerationAudioTasks.generationJobId, jobId),
+          eq(prayerGenerationAudioTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(prayerGenerationAudioTasks.requirementId, requirementId),
+        ),
+      )
+      .limit(1)
+  ).at(0)
+  if (!row) {
+    throw new GenerationJobError('Audio task row vanished after insert.')
+  }
+  return row
+}
+
+/**
+ * The GENERATING_AUDIO → RENDERING gate, in full.
+ *
+ * Proves three things the per-task loop cannot:
+ *
+ *   1. IDENTITY — the persisted rows are EXACTLY the manifest's
+ *      TTS_PENDING requirements: same count, same requirement ids, same
+ *      scene/idempotency binding. A missing row, an extra row (a
+ *      requirement from a superseded manifest snapshot, a hand-inserted
+ *      row, or — worst — a row for a requirement that was supposed to
+ *      be an untouched human recording) or a re-pointed one is a
+ *      failure, never something to work around.
+ *   2. ARTIFACT — every SUCCEEDED result is re-verified against PRIVATE
+ *      STORAGE by `verifyArtifact` (bytes re-read, hash recomputed,
+ *      mime re-allowlisted, duration re-bounded).
+ *   3. HUMAN AUDIO — every EXISTING_HUMAN_AUDIO requirement is STILL
+ *      currently authorized and still byte-intact, re-proved by
+ *      `verifyHumanAudio` against present authority. Nothing was
+ *      generated for these, so nothing but a fresh re-proof can tell us
+ *      they are still usable.
+ *
+ * Fails CLOSED with a bounded machine code on the FIRST problem. NONE
+ * requirements create no work and no proof obligation beyond being
+ * counted; a manifest with no audio at all is legitimately finalizable
+ * once everything else validates.
+ */
+async function verifyFinalizedAudioRequirements(
+  requirements: ReadonlyArray<ManifestAudioRequirement>,
+  rows: ReadonlyArray<typeof prayerGenerationAudioTasks.$inferSelect>,
+  manifestSha256: string,
+  generationJobId: number,
+  context: { serviceId: number; sacredHouseId: number; language: string },
+  verifyArtifact: (claim: {
+    artifactStorageRef: string | null
+    artifactSha256: string | null
+    artifactMimeType: string | null
+    artifactDurationMs: number | null
+  }) => Promise<{ ok: true } | { ok: false; reasonCode: string }>,
+  verifyHumanAudio: (
+    requirement: ManifestAudioRequirement,
+    context: { serviceId: number; sacredHouseId: number; language: string },
+  ) => Promise<{ ok: true } | { ok: false; reasonCode: string }>,
+  computeKey: (input: {
+    generationJobId: number
+    manifestSha256: string
+    requirementId: string
+  }) => string,
+): Promise<{ ok: true } | { ok: false; reasonCode: string }> {
+  const ttsRequirements = requirements.filter(
+    (requirement) => requirement.mode === 'TTS_PENDING',
+  )
+  // Count first: with a per-requirement lookup below, equal counts +
+  // every TTS requirement found ⇒ no extras, no duplicates, no strays —
+  // and in particular no task row standing in for a human recording.
+  if (rows.length !== ttsRequirements.length) {
+    return { ok: false, reasonCode: 'task_count_mismatch' }
+  }
+  const byRequirementId = new Map(rows.map((row) => [row.requirementId, row]))
+  if (byRequirementId.size !== rows.length) {
+    return { ok: false, reasonCode: 'duplicate_task_row' }
+  }
+  for (const requirement of ttsRequirements) {
+    const requirementId = requirement.requirementId
+    if (requirementId == null) {
+      return { ok: false, reasonCode: 'incomplete_audio_requirement' }
+    }
+    const row = byRequirementId.get(requirementId)
+    if (!row) return { ok: false, reasonCode: 'task_row_missing' }
+    if (row.sceneId !== requirement.sceneId) {
+      return { ok: false, reasonCode: 'task_scene_mismatch' }
+    }
+    if (
+      row.idempotencyKey !==
+      computeKey({ generationJobId, manifestSha256, requirementId })
+    ) {
+      return { ok: false, reasonCode: 'task_idempotency_mismatch' }
+    }
+    if (row.status !== 'SUCCEEDED') {
+      return { ok: false, reasonCode: 'task_not_succeeded' }
+    }
+    if (!isIntegrityValidAudioResult(row)) {
+      return { ok: false, reasonCode: 'artifact_metadata_invalid' }
+    }
+    const verified = await verifyArtifact({
+      artifactStorageRef: row.artifactStorageRef,
+      artifactSha256: row.artifactSha256,
+      artifactMimeType: row.artifactMimeType,
+      artifactDurationMs: row.artifactDurationMs,
+    })
+    if (!verified.ok) return { ok: false, reasonCode: verified.reasonCode }
+  }
+  for (const requirement of requirements) {
+    if (requirement.mode !== 'EXISTING_HUMAN_AUDIO') continue
+    const verified = await verifyHumanAudio(requirement, context)
+    if (!verified.ok) return { ok: false, reasonCode: verified.reasonCode }
+  }
+  return { ok: true }
+}
+
+export type AudioGenerationOutcome =
+  | { status: 'IDLE' }
+  | { status: 'WAITING'; jobId: number; pendingTasks: number }
+  | { status: 'COMPLETE'; jobId: number }
+  | { status: 'RETRY_SCHEDULED'; jobId: number; errorCode: string }
+  | { status: 'FAILED'; jobId: number; errorCode: string }
+  | { status: 'LEASE_LOST'; jobId: number }
+
+/**
+ * One audio-generation cycle: claim a GENERATING_AUDIO (or resuming
+ * RETRYING) job, revalidate the CURRENT manifest, submit every
+ * not-yet-submitted TTS_PENDING requirement and poll every in-flight
+ * one — WITHOUT holding a DB transaction or a provider call open across
+ * the other — then decide ONE of three outcomes, exactly as the visual
+ * stage does:
+ *
+ *   - still work outstanding, nothing failed  → WAIT: release the lease
+ *     via the GENERATING_AUDIO→GENERATING_AUDIO self-loop, due again in
+ *     AUDIO_TASK_POLL_DELAY_MS. Does NOT touch attemptCount — awaiting
+ *     a provider is not a failure.
+ *   - a task failed for real                  → scheduleRetryOrFail
+ *     (bounded RETRYING with resume_status=GENERATING_AUDIO, or FAILED
+ *     once the job's attempt budget is exhausted). DOES consume budget,
+ *     exactly like an expired lease recovered by
+ *     recoverExpiredGenerationLeases.
+ *   - every TTS task SUCCEEDED (or there were none) → re-validate the
+ *     manifest ONE MORE TIME against CURRENT authority, prove the
+ *     persisted rows are EXACTLY the manifest's TTS requirements,
+ *     re-verify every artifact against PRIVATE STORAGE and re-prove
+ *     every EXISTING_HUMAN_AUDIO requirement is still authorized and
+ *     intact (see verifyFinalizedAudioRequirements), then finalize
+ *     GENERATING_AUDIO → RENDERING under the SAME lease-CAS as every
+ *     other transition — a stale worker can never finalize.
+ *
+ * Every provider action is fenced by an explicit lease heartbeat on
+ * BOTH sides: a worker that has already lost its lease starts no
+ * further submit/poll, and a speech result that came back after the
+ * lease went away is never accepted (its stored artifact is removed
+ * rather than orphaned).
+ *
+ * NOTHING IS RENDERED HERE. This stage produces per-segment speech
+ * artifacts and a proof that every audio requirement is satisfiable; it
+ * never composes, mixes or muxes anything (no Remotion, no FFmpeg) and
+ * never produces a deliverable video.
+ */
+export async function runAudioGenerationOnce(
+  workerId: string,
+  clock: GenerationClock,
+  dependencies: AudioGenerationDependencies = {},
+): Promise<AudioGenerationOutcome> {
+  const claimed = await claimNextAudioGenerationJob(workerId, clock)
+  if (!claimed) return { status: 'IDLE' }
+  const { job, leaseToken } = claimed
+  const attempt = job.attemptCount + 1
+
+  const heartbeat = async (): Promise<boolean> =>
+    renewGenerationLease(job.id, leaseToken, clock)
+  const heartbeatTimer = setInterval(
+    () => {
+      void renewGenerationLease(job.id, leaseToken, clock).catch(
+        () => undefined,
+      )
+    },
+    Math.max(1_000, Math.floor(DEFAULT_LEASE_MS / 3)),
+  )
+
+  try {
+    if (job.status === 'RETRYING') {
+      const resumed = await transitionGenerationJobUnderLease(
+        job.id,
+        leaseToken,
+        'RETRYING',
+        'GENERATING_AUDIO',
+        clock,
+        {
+          eventCode: 'audio_generation_resumed',
+          attemptNumber: attempt,
+          patch: { resumeStatus: null },
+        },
+      )
+      if (!resumed) return { status: 'LEASE_LOST', jobId: job.id }
+    }
+
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+
+    // Lazy imports for the same reason the visual stage uses them:
+    // generation-storyboards.ts depends on THIS module, and
+    // audio-generation.ts depends on generation-storyboards.ts, so a
+    // static import of either here would create a cycle back to this
+    // module. Dependency defaults are resolved from the SAME lazy
+    // import, never a separate stale reference.
+    const { loadAndValidateGenerationManifest, loadGenerationManifestSnapshot } =
+      await import('./generation-storyboards')
+    const {
+      submitSpeech,
+      pollSpeech,
+      computeAudioTaskIdempotencyKey,
+      verifyStoredAudioArtifact,
+      verifyExistingHumanAudio,
+      discardGeneratedSpeechArtifact,
+    } = await import('./audio-generation')
+    const doSubmit = dependencies.submitSpeech ?? submitSpeech
+    const doPoll = dependencies.pollSpeech ?? pollSpeech
+
+    const context = {
+      serviceId: job.serviceIdSnapshot,
+      sacredHouseId: job.sacredHouseIdSnapshot,
+      language: job.languageSnapshot,
+    }
+
+    const validated = await loadAndValidateGenerationManifest(job.id)
+    if (validated.status !== 'VALID') {
+      const reason = validated.status === 'INVALID' ? validated.reasons[0] : null
+      const structural =
+        reason != null && STRUCTURAL_MANIFEST_FAILURES.includes(reason)
+      const detail =
+        validated.status === 'INVALID'
+          ? validated.reasons.join(', ').slice(0, 500)
+          : null
+      if (structural) {
+        const ok = await transitionGenerationJobUnderLease(
+          job.id,
+          leaseToken,
+          'GENERATING_AUDIO',
+          'FAILED',
+          clock,
+          {
+            eventCode: 'manifest_impossible',
+            detailCode: reason.slice(0, 100),
+            attemptNumber: attempt,
+            clearLease: true,
+            patch: {
+              attemptCount: attempt,
+              lastErrorCode: reason.toUpperCase(),
+              lastErrorMessage: detail,
+              nextAttemptAt: null,
+              resumeStatus: null,
+            },
+          },
+        )
+        return ok
+          ? { status: 'FAILED', jobId: job.id, errorCode: reason.toUpperCase() }
+          : { status: 'LEASE_LOST', jobId: job.id }
+      }
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        validated.status === 'INVALID' ? 'MANIFEST_INVALID' : validated.status,
+        detail,
+        'GENERATING_AUDIO',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? { status: 'FAILED', jobId: job.id, errorCode: 'MANIFEST_INVALID' }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_INVALID',
+          }
+    }
+
+    const manifestRow = await loadGenerationManifestSnapshot(job.id)
+    if (manifestRow.status !== 'OK') {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'MANIFEST_UNREADABLE',
+        null,
+        'GENERATING_AUDIO',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? { status: 'FAILED', jobId: job.id, errorCode: 'MANIFEST_UNREADABLE' }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_UNREADABLE',
+          }
+    }
+    const manifestSnapshotId = manifestRow.snapshotId
+    const manifestSha256 = validated.manifest.manifestSha256
+    // ONLY TTS requirements become tasks. EXISTING_HUMAN_AUDIO is
+    // resolved and re-verified at the gate below; NONE creates nothing.
+    const ttsRequirements = validated.manifest.audioRequirements.filter(
+      (requirement) => requirement.mode === 'TTS_PENDING',
+    )
+
+    let anyFailed = false
+    let anyOutstanding = false
+    const nowForPoll = clock.now()
+
+    for (const requirement of ttsRequirements) {
+      const requirementId = requirement.requirementId
+      if (requirementId == null) {
+        // Structurally impossible for a manifest that just validated —
+        // treat as a real failure rather than silently skipping a
+        // requirement that would then never be satisfied.
+        anyFailed = true
+        continue
+      }
+      const idempotencyKey = computeAudioTaskIdempotencyKey({
+        generationJobId: job.id,
+        manifestSha256,
+        requirementId,
+      })
+      let row = await ensureAudioTaskRow(
+        job.id,
+        manifestSnapshotId,
+        requirementId,
+        requirement.sceneId,
+        idempotencyKey,
+      )
+
+      // A task that failed on a prior attempt gets one more shot each
+      // time the JOB ITSELF is freshly (re)claimed — the job's own
+      // bounded maxAttempts is what ultimately bounds how many times
+      // this can happen, so no separate per-task budget is needed.
+      if (row.status === 'FAILED') {
+        const reset = await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({
+            status: 'PENDING',
+            providerCode: null,
+            providerOperationId: null,
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            nextPollAt: null,
+          })
+          .where(
+            and(
+              eq(prayerGenerationAudioTasks.id, row.id),
+              eq(prayerGenerationAudioTasks.status, 'FAILED'),
+            ),
+          )
+        if (reset[0].affectedRows !== 1) {
+          // Another worker already moved this row on since we read it —
+          // it is no longer ours to redecide.
+          anyOutstanding = true
+          continue
+        }
+        row = { ...row, status: 'PENDING' }
+      }
+
+      if (row.status === 'PENDING') {
+        const statusAtRead = row.status
+        // A worker that has ALREADY lost its lease must not start
+        // another provider action — the job has moved on without it,
+        // and every further submit/poll is work nobody asked for (and,
+        // with a real provider, spend nobody authorized).
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+        const submission = await doSubmit({ requirement, idempotencyKey })
+        const freshNow = clock.now()
+        if (submission.status === 'SUBMITTED') {
+          // Non-terminal either way: even if our own write below loses
+          // the race, the provider call we just made is idempotent on
+          // the requirement's idempotency key, so it cannot have
+          // created a duplicate paid synthesis — it simply isn't OUR
+          // record to keep.
+          await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'SUBMITTED',
+              providerCode: submission.providerCode,
+              providerOperationId: submission.providerOperationId,
+              submittedAt: freshNow,
+              nextPollAt: new Date(
+                freshNow.getTime() + AUDIO_TASK_POLL_DELAY_MS,
+              ),
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, statusAtRead),
+              ),
+            )
+          anyOutstanding = true
+        } else {
+          const updated = await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'FAILED',
+              attemptCount: row.attemptCount + 1,
+              providerCode: submission.providerCode,
+              lastErrorCode: submission.errorCode.slice(0, 60),
+              lastErrorMessage: submission.errorMessage?.slice(0, 500) ?? null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows === 1) {
+            anyFailed = true
+          } else {
+            anyOutstanding = true
+          }
+        }
+        // Same reasoning as the visual stage: the status-CAS'd write is
+        // deliberately NOT gated on the lease — it records PROVIDER
+        // TRUTH (this synthesis exists, here is its id), which stays
+        // true no matter who owns the job, and dropping it would strand
+        // a real provider operation nobody can reach again. What a lost
+        // lease DOES forbid is going further.
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+        continue
+      }
+
+      if (row.status === 'SUBMITTED' || row.status === 'PROCESSING') {
+        if (row.nextPollAt != null && row.nextPollAt > nowForPoll) {
+          anyOutstanding = true
+          continue
+        }
+        const statusAtRead = row.status
+        if (row.providerCode == null || row.providerOperationId == null) {
+          // Structurally impossible (a SUBMITTED row always carries
+          // provider identity) — treat as a real failure rather than
+          // polling forever against nothing.
+          const updated = await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'FAILED',
+              attemptCount: row.attemptCount + 1,
+              lastErrorCode: 'MISSING_PROVIDER_IDENTITY',
+              completedAt: clock.now(),
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows === 1) {
+            anyFailed = true
+          } else {
+            anyOutstanding = true
+          }
+          continue
+        }
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+        const poll = await doPoll({
+          providerCode: row.providerCode,
+          providerOperationId: row.providerOperationId,
+          requirement,
+          idempotencyKey,
+        })
+        // Unlike a submission (whose id is unrecoverable once dropped),
+        // a poll result is fully REPEATABLE: the row stays SUBMITTED/
+        // PROCESSING and whoever holds the job next polls the SAME
+        // operation id for the same answer. So a result that came back
+        // after our lease went away is simply not ours to accept — and
+        // because a SUCCEEDED poll has ALREADY written artifact bytes to
+        // private storage by the time it returns, the object we just
+        // created would be referenced by nothing at all.
+        if (!(await heartbeat())) {
+          if (poll.status === 'SUCCEEDED') {
+            await discardGeneratedSpeechArtifact(poll.artifactStorageRef)
+          }
+          return { status: 'LEASE_LOST', jobId: job.id }
+        }
+        const freshNow = clock.now()
+        if (poll.status === 'PROCESSING') {
+          await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'PROCESSING',
+              nextPollAt: new Date(
+                freshNow.getTime() + AUDIO_TASK_POLL_DELAY_MS,
+              ),
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, statusAtRead),
+              ),
+            )
+          anyOutstanding = true
+        } else if (poll.status === 'SUCCEEDED') {
+          const updated = await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'SUCCEEDED',
+              artifactSha256: poll.artifactSha256,
+              artifactMimeType: poll.artifactMimeType,
+              artifactDurationMs: poll.artifactDurationMs,
+              artifactStorageRef: poll.artifactStorageRef,
+              nextPollAt: null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows !== 1) {
+            // Someone else already resolved this row — never overwrite
+            // a result we don't own. The artifact we stored moments ago
+            // lost with it: no row references that key, and none ever
+            // can (every put mints a fresh server-generated key), so
+            // remove it instead of leaving a stale worker's orphan.
+            await discardGeneratedSpeechArtifact(poll.artifactStorageRef)
+            anyOutstanding = true
+          }
+        } else {
+          const updated = await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'FAILED',
+              attemptCount: row.attemptCount + 1,
+              lastErrorCode: poll.errorCode.slice(0, 60),
+              lastErrorMessage: poll.errorMessage?.slice(0, 500) ?? null,
+              nextPollAt: null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows === 1) {
+            anyFailed = true
+          } else {
+            anyOutstanding = true
+          }
+        }
+      }
+      // SUCCEEDED / CANCELLED: terminal, nothing to do.
+    }
+
+    // Stale-worker guard: task writes above are idempotent,
+    // provider-truth records safe from any worker — but the JOB-LEVEL
+    // decision below (wait / retry / finalize) must never proceed on a
+    // lease this worker may have already lost.
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+
+    if (anyFailed) {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'AUDIO_TASK_FAILED',
+        null,
+        'GENERATING_AUDIO',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? { status: 'FAILED', jobId: job.id, errorCode: 'AUDIO_TASK_FAILED' }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'AUDIO_TASK_FAILED',
+          }
+    }
+
+    if (anyOutstanding) {
+      // WAIT: release the lease via the explicit self-loop. Authority
+      // for the next-due instant comes from freshNow inside the patch
+      // factory, taken AFTER the lock — never from clock.now() here.
+      const released = await transitionGenerationJobUnderLease(
+        job.id,
+        leaseToken,
+        'GENERATING_AUDIO',
+        'GENERATING_AUDIO',
+        clock,
+        {
+          eventCode: 'audio_generation_waiting',
+          attemptNumber: attempt,
+          clearLease: true,
+          patch: (freshNow) => ({
+            nextAttemptAt: new Date(
+              freshNow.getTime() + AUDIO_TASK_POLL_DELAY_MS,
+            ),
+          }),
+        },
+      )
+      return released
+        ? {
+            status: 'WAITING',
+            jobId: job.id,
+            pendingTasks: ttsRequirements.length,
+          }
+        : { status: 'LEASE_LOST', jobId: job.id }
+    }
+
+    // Every TTS task SUCCEEDED (or there were none). Re-validate against
+    // CURRENT authority ONE MORE TIME — never trust the check from
+    // earlier in this same cycle — then prove the persisted rows are
+    // EXACTLY this manifest's TTS requirements, that every artifact
+    // still exists intact in PRIVATE STORAGE, and that every approved
+    // human recording is still authorized and intact.
+    const revalidated = await loadAndValidateGenerationManifest(job.id)
+    if (revalidated.status !== 'VALID') {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'MANIFEST_INVALID_AT_COMPLETION',
+        revalidated.status === 'INVALID'
+          ? revalidated.reasons.join(', ').slice(0, 500)
+          : null,
+        'GENERATING_AUDIO',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? {
+            status: 'FAILED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_INVALID_AT_COMPLETION',
+          }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_INVALID_AT_COMPLETION',
+          }
+    }
+
+    const finalRows = await getDb()
+      .select()
+      .from(prayerGenerationAudioTasks)
+      .where(
+        and(
+          eq(prayerGenerationAudioTasks.generationJobId, job.id),
+          eq(prayerGenerationAudioTasks.manifestSnapshotId, manifestSnapshotId),
+        ),
+      )
+    const integrity = await verifyFinalizedAudioRequirements(
+      revalidated.manifest.audioRequirements,
+      finalRows,
+      revalidated.manifest.manifestSha256,
+      job.id,
+      context,
+      verifyStoredAudioArtifact,
+      verifyExistingHumanAudio,
+      computeAudioTaskIdempotencyKey,
+    )
+    if (!integrity.ok) {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'AUDIO_RESULT_INTEGRITY_FAILURE',
+        // A bounded machine code (never a path, hash, provider string
+        // or anything derived from content).
+        integrity.reasonCode,
+        'GENERATING_AUDIO',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? {
+            status: 'FAILED',
+            jobId: job.id,
+            errorCode: 'AUDIO_RESULT_INTEGRITY_FAILURE',
+          }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'AUDIO_RESULT_INTEGRITY_FAILURE',
+          }
+    }
+
+    const finalized = await transitionGenerationJobUnderLease(
+      job.id,
+      leaseToken,
+      'GENERATING_AUDIO',
+      'RENDERING',
+      clock,
+      {
+        eventCode: 'audio_generation_complete',
+        attemptNumber: attempt,
+        clearLease: true,
+        patch: {
+          attemptCount: attempt,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          nextAttemptAt: null,
+          resumeStatus: null,
+        },
+      },
+    )
+    return finalized
+      ? { status: 'COMPLETE', jobId: job.id }
+      : { status: 'LEASE_LOST', jobId: job.id }
+  } catch (error) {
+    const outcome = await scheduleRetryOrFail(
+      job,
+      leaseToken,
+      clock,
+      'AUDIO_GENERATION_ERROR',
+      sanitizeErrorMessage(error),
+      'GENERATING_AUDIO',
+    )
+    if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+    return outcome === 'FAILED'
+      ? { status: 'FAILED', jobId: job.id, errorCode: 'AUDIO_GENERATION_ERROR' }
+      : {
+          status: 'RETRY_SCHEDULED',
+          jobId: job.id,
+          errorCode: 'AUDIO_GENERATION_ERROR',
         }
   } finally {
     clearInterval(heartbeatTimer)

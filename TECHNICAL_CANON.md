@@ -700,6 +700,86 @@ GENERATING_VISUALS
 
 ---
 
+## 10.8 Amendment — Audio Generation & Approved Speech Synthesis (Phase One, Step 15)
+
+```text
+GENERATING_AUDIO
+→ revalidate manifest against CURRENT authority
+→ resolve EXISTING_HUMAN_AUDIO (never synthesized, re-verified in place)
+→ execute TTS_PENDING where CURRENT authority still permits it
+→ verify + store speech artifacts privately
+→ RENDERING
+→ future rendering stage (Step 16+)
+```
+
+- An approved HUMAN recording of sacred text is NEVER synthesized,
+  regenerated or replaced. The exact media version and hash Step 13
+  selected is re-resolved and re-proved against present authority —
+  rights, runtime enablement, consent, the governing sacred-media link,
+  Service/House scope and language — and the private stored object must
+  still exist with bytes hashing to the frozen value. It creates no
+  provider task of any kind. If it can no longer be validated, the job
+  fails closed; synthesis is never a fallback for a withdrawn recording.
+- Machine speech is permitted ONLY where the AUTHORITATIVE sacred
+  runtime profile still says `APPROVED_TTS_ALLOWED` at the moment of the
+  call. `HUMAN_RECORDED_REQUIRED` and `TEXT_ONLY` are refusals, not
+  gaps: they fail closed, and a manifest's snapshotted policy can never
+  override the current one in either direction.
+- Immediately before each submission and each poll, the content version,
+  its content hash, its language and its voice policy are revalidated,
+  and only then is the EXACT approved body retrieved server-side. It is
+  spoken verbatim — never rewritten, translated, summarised, extended or
+  supplemented with invented prayer. The body exists in memory for that
+  one call: it is never persisted, never logged, never returned to the
+  caller and never folded into an artifact seed.
+- NO VOICE OR LIKENESS CLONING. The provider contract carries no speaker
+  sample, reference recording or person-derived voice identifier at all,
+  so an adapter has nothing to clone from.
+- Execution is provider-neutral behind a `TtsProvider` abstraction
+  (`submitSpeech` / `pollSpeech`, statuses PENDING / COMPLETED /
+  FAILED). Only a deterministic mock exists in Phase One: no real speech
+  API, no network call, no paid synthesis. Idempotency is derived from
+  generation job + manifest hash + requirement id, so a repeated
+  submission for the same key is the SAME job, never a duplicate paid
+  synthesis, and a poll is bound to the provider code persisted at
+  submission — a provider-code mismatch fails closed rather than asking
+  a different backend about an operation it never issued.
+- Persistence carries SAFE metadata only: requirement identity,
+  idempotency key, provider code, opaque provider operation id,
+  attempts/status, artifact hash/mime/duration, a private internal
+  artifact reference, and bounded sanitised errors and timestamps.
+  Sacred bodies, spoken text, raw provider requests and responses, voice
+  samples and credentials are NEVER persisted or logged. Task identity
+  is unique on generation job + manifest snapshot + requirement, with
+  the idempotency key unique in its own right; human-audio and
+  no-audio requirements create no task at all.
+- Artifacts are validated before they count: allowed audio mime,
+  non-empty bytes, bounded positive duration and a SHA-256 recomputed
+  from the actual stored bytes — a provider-reported hash is never
+  trusted. Storage reuses the existing private local media abstraction;
+  no public URL and no object store.
+- Provider work never happens inside a DB transaction. A poll meaning
+  "still processing" releases the lease and becomes due again shortly
+  WITHOUT consuming retry budget; a real failure uses bounded retry with
+  resumeStatus=GENERATING_AUDIO; an expired lease still consumes retry
+  budget. Job-level mutations remain lease-gated, task-row writes are
+  compare-and-set on the exact status observed, every provider action is
+  fenced by a lease heartbeat on both sides, and a result rejected after
+  its bytes were stored has that orphan artifact removed.
+- GENERATING_AUDIO → RENDERING occurs only when the current manifest
+  revalidates VALID, the persisted task rows are exactly the manifest's
+  TTS requirements, every one SUCCEEDED with an artifact that still
+  verifies against private storage, and every EXISTING_HUMAN_AUDIO
+  requirement still validates and is still byte-intact. A valid manifest
+  with no audio at all may advance, but only after that same validation.
+  Every status change goes through the central generation transition
+  authority.
+- Step 15 RENDERS NOTHING. It composes, mixes and muxes no media, uses
+  no Remotion or FFmpeg, produces no deliverable video and cannot reach
+  UPLOADING or READY.
+
+---
+
 # 11. Visual Canon Database
 
 Each visual asset should be classified and approved.
