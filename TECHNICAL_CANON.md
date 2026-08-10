@@ -836,9 +836,27 @@ RENDERING
   computed from the reconciled timeline — never guessed, never forced
   to a target by altering approved content — under a loud global
   ceiling that FAILS rather than silently truncating.
-- Visual sources are fitted without invention: a video longer than its
-  window is trimmed, one shorter has its final frame held, and a still
-  image is simply held for its window.
+- Visual sources are fitted without invention, and WHAT a source is
+  comes from authoritative asset metadata rather than from whether a
+  duration happens to be recorded: an IMAGE is held as a still whatever
+  stray duration metadata claims, a VIDEO whose length is unknown FAILS
+  CLOSED rather than being guessed at, and a generated scene is always a
+  clip with its verified Step 14 length. A shown clip longer than its
+  window is trimmed and a shorter one holds its final frame.
+  HOLD_PREVIOUS means exactly one thing — freeze the frame last
+  DISPLAYED — so it always resolves to a hold and can never become a
+  trim or a replay of the earlier footage.
+- The rendered output must be the container the plan committed to, not
+  merely an allowlisted one, and that binding is re-proved at acceptance
+  and again at the final gate.
+- Before any render is started, the durable result row must BE this
+  job’s result for this manifest snapshot, this render-plan snapshot,
+  this plan hash and this idempotency key; a mismatch means zero render
+  calls, not a discovery at finalization.
+- A worker that has lost its lease writes NOTHING onto the result row
+  after render work returns or throws: a stale failure verdict would
+  overwrite whatever the newer owner is legitimately doing with that
+  row, and the row-status CAS alone cannot tell those two apart.
 - SOURCE INTEGRITY IS RE-PROVED, NOT ASSUMED. Immediately before
   planning and again at the final gate, every generated visual must
   trace to its exact successful Step 14 task with intact stored bytes

@@ -543,6 +543,82 @@ function driftingTtsProvider(deltaMs: number): TtsProvider {
   }
 }
 
+function syntheticStoryboardFor(
+  scenes: Array<Partial<GenerationStoryboard['scenes'][number]>>,
+): GenerationStoryboard {
+  return {
+    schemaVersion: 'storyboard-v1',
+    generationJobId: 1,
+    serviceId: 1,
+    sacredHouseId: 1,
+    language: 'en',
+    variationSeed: 'a'.repeat(64),
+    recipeSnapshotId: 1,
+    recipeSnapshotNumber: 1,
+    recipeSha256: 'b'.repeat(64),
+    templateVersionId: 1,
+    templateDefinitionSha256: 'c'.repeat(64),
+    visualBibleVersionId: null,
+    visualBibleVersionNumber: null,
+    visualBibleSha256: null,
+    scenes: scenes.map((scene, index) => ({
+      sceneId: `s${index}`,
+      order: index,
+      recipeSegmentIndex: index,
+      slotKey: 'MAIN_PRAYER',
+      kind: 'CONTENT',
+      contentVersionId: null,
+      contentSha256: null,
+      contentType: null,
+      themeCode: null,
+      startMs: index * 1000,
+      endMs: (index + 1) * 1000,
+      durationMs: 1000,
+      segmentStartMs: index * 1000,
+      segmentEndMs: (index + 1) * 1000,
+      splitIndex: 0,
+      splitCount: 1,
+      sourceMode: 'HOLD_PREVIOUS',
+      mediaAssetVersionId: null,
+      mediaAssetId: null,
+      mediaFileSha256: null,
+      mediaAssetKind: null,
+      generationIntent: null,
+      audio: {
+        mode: 'NONE',
+        mediaAssetVersionId: null,
+        fileSha256: null,
+        contentVersionId: null,
+        contentSha256: null,
+        language: null,
+        voicePolicy: null,
+        requirementId: null,
+      },
+      bibleRuleRefs: [],
+      ...scene,
+    })),
+    sceneCount: scenes.length,
+    totalDurationMs: scenes.length * 1000,
+    storyboardSha256: 'd'.repeat(64),
+  }
+}
+
+function emptyManifestFor(): GenerationManifest {
+  return {
+  schemaVersion: 'manifest-v1',
+  generationJobId: 1,
+  storyboardSnapshotId: 1,
+  storyboardSnapshotNumber: 1,
+  storyboardSha256: 'd'.repeat(64),
+  totalDurationMs: 1000,
+  visualTasks: [],
+  approvedMedia: [],
+  audioRequirements: [],
+    manifestSha256: 'e'.repeat(64),
+  }
+}
+
+
 /** Wraps the suite storage and records every key minted during a run,
  * so an orphan-cleanup test can name the exact object and prove it is
  * gone rather than inferring it from a null column. */
@@ -1169,83 +1245,10 @@ describe('red-team: the timeline bends around sacred audio, never the reverse', 
 // ----------------------------------------------------------------------------
 
 describe('red-team: every scene resolves exactly once, and nothing is invented', () => {
-  function syntheticStoryboard(
-    scenes: Array<Partial<GenerationStoryboard['scenes'][number]>>,
-  ): GenerationStoryboard {
-    return {
-      schemaVersion: 'storyboard-v1',
-      generationJobId: 1,
-      serviceId: 1,
-      sacredHouseId: 1,
-      language: 'en',
-      variationSeed: 'a'.repeat(64),
-      recipeSnapshotId: 1,
-      recipeSnapshotNumber: 1,
-      recipeSha256: 'b'.repeat(64),
-      templateVersionId: 1,
-      templateDefinitionSha256: 'c'.repeat(64),
-      visualBibleVersionId: null,
-      visualBibleVersionNumber: null,
-      visualBibleSha256: null,
-      scenes: scenes.map((scene, index) => ({
-        sceneId: `s${index}`,
-        order: index,
-        recipeSegmentIndex: index,
-        slotKey: 'MAIN_PRAYER',
-        kind: 'CONTENT',
-        contentVersionId: null,
-        contentSha256: null,
-        contentType: null,
-        themeCode: null,
-        startMs: index * 1000,
-        endMs: (index + 1) * 1000,
-        durationMs: 1000,
-        segmentStartMs: index * 1000,
-        segmentEndMs: (index + 1) * 1000,
-        splitIndex: 0,
-        splitCount: 1,
-        sourceMode: 'HOLD_PREVIOUS',
-        mediaAssetVersionId: null,
-        mediaAssetId: null,
-        mediaFileSha256: null,
-        mediaAssetKind: null,
-        generationIntent: null,
-        audio: {
-          mode: 'NONE',
-          mediaAssetVersionId: null,
-          fileSha256: null,
-          contentVersionId: null,
-          contentSha256: null,
-          language: null,
-          voicePolicy: null,
-          requirementId: null,
-        },
-        bibleRuleRefs: [],
-        ...scene,
-      })),
-      sceneCount: scenes.length,
-      totalDurationMs: scenes.length * 1000,
-      storyboardSha256: 'd'.repeat(64),
-    }
-  }
-
-  const emptyManifest: GenerationManifest = {
-    schemaVersion: 'manifest-v1',
-    generationJobId: 1,
-    storyboardSnapshotId: 1,
-    storyboardSnapshotNumber: 1,
-    storyboardSha256: 'd'.repeat(64),
-    totalDurationMs: 1000,
-    visualTasks: [],
-    approvedMedia: [],
-    audioRequirements: [],
-    manifestSha256: 'e'.repeat(64),
-  }
-
   it('a LEADING HOLD_PREVIOUS scene fails closed', () => {
     const built = buildRenderPlan({
-      storyboard: syntheticStoryboard([{ sourceMode: 'HOLD_PREVIOUS' }]),
-      manifest: emptyManifest,
+      storyboard: syntheticStoryboardFor([{ sourceMode: 'HOLD_PREVIOUS' }]),
+      manifest: emptyManifestFor(),
       manifestSnapshotId: 1,
       visualBySceneId: new Map(),
       audioBySegment: new Map(),
@@ -1259,8 +1262,8 @@ describe('red-team: every scene resolves exactly once, and nothing is invented',
 
   it('a scene with no resolved visual fails closed rather than rendering a gap', () => {
     const built = buildRenderPlan({
-      storyboard: syntheticStoryboard([{ sourceMode: 'APPROVED_MEDIA' }]),
-      manifest: emptyManifest,
+      storyboard: syntheticStoryboardFor([{ sourceMode: 'APPROVED_MEDIA' }]),
+      manifest: emptyManifestFor(),
       manifestSnapshotId: 1,
       visualBySceneId: new Map(),
       audioBySegment: new Map(),
@@ -1902,5 +1905,377 @@ describe('red-team: no real compositor, network or upload anywhere in Step 16', 
       'sceneId',
       'startMs',
     ])
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 16 hardening item 1: visual type and hold semantics
+//
+// What a source IS comes from authoritative asset metadata, never from
+// whether a duration happens to be recorded. And HOLD_PREVIOUS means
+// exactly one thing — freeze the frame that was last displayed.
+// ----------------------------------------------------------------------------
+
+describe('red-team: hold semantics and visual type are unambiguous', () => {
+  /** Minimal storyboard for the unit-level fit tests: scene 0 shows a
+   * visual, scene 1 holds it. */
+  function holdStoryboard(): GenerationStoryboard {
+    return syntheticStoryboardFor([
+      { sceneId: 'v0', sourceMode: 'APPROVED_MEDIA', recipeSegmentIndex: 0 },
+      { sceneId: 'h1', sourceMode: 'HOLD_PREVIOUS', recipeSegmentIndex: 1 },
+    ])
+  }
+
+  it('HOLD_PREVIOUS after a LONGER video holds the last frame — never TRIM, never replay', () => {
+    const built = buildRenderPlan({
+      storyboard: holdStoryboard(),
+      manifest: emptyManifestFor(),
+      manifestSnapshotId: 1,
+      visualBySceneId: new Map([
+        [
+          'v0',
+          {
+            sceneId: 'v0',
+            kind: 'APPROVED_MEDIA' as const,
+            mediaKind: 'VIDEO' as const,
+            mediaAssetVersionId: 1,
+            visualTaskId: null,
+            storageKey: 'ab/' + 'c'.repeat(32) + '.mp4',
+            sha256: 'a'.repeat(64),
+            mimeType: 'video/mp4',
+            // Far LONGER than either scene window.
+            durationMs: 30_000,
+          },
+        ],
+      ]),
+      audioBySegment: new Map(),
+      audioRequirementBySegment: new Map(),
+    })
+    expect(built.ok).toBe(true)
+    if (!built.ok) return
+    // The scene that actually SHOWS the clip trims it to its window …
+    expect(built.plan.scenes[0].visualKind).toBe('APPROVED_MEDIA')
+    expect(built.plan.scenes[0].visualFit).toBe('TRIM')
+    // … and the scene that HOLDS it freezes, whatever footage remains.
+    // TEETH: a hold is not a second chance to play the clip.
+    expect(built.plan.scenes[1].visualKind).toBe('HOLD_PREVIOUS')
+    expect(built.plan.scenes[1].visualFit).toBe('HOLD_LAST_FRAME')
+    expect(built.plan.scenes[1].visualSourceSceneId).toBe('v0')
+  })
+
+  it('HOLD_PREVIOUS after a still also holds — one unambiguous fit either way', () => {
+    const built = buildRenderPlan({
+      storyboard: holdStoryboard(),
+      manifest: emptyManifestFor(),
+      manifestSnapshotId: 1,
+      visualBySceneId: new Map([
+        [
+          'v0',
+          {
+            sceneId: 'v0',
+            kind: 'APPROVED_MEDIA' as const,
+            mediaKind: 'IMAGE' as const,
+            mediaAssetVersionId: 1,
+            visualTaskId: null,
+            storageKey: 'ab/' + 'c'.repeat(32) + '.png',
+            sha256: 'a'.repeat(64),
+            mimeType: 'image/png',
+            durationMs: null,
+          },
+        ],
+      ]),
+      audioBySegment: new Map(),
+      audioRequirementBySegment: new Map(),
+    })
+    expect(built.ok).toBe(true)
+    if (!built.ok) return
+    expect(built.plan.scenes[0].visualFit).toBe('STILL_HOLD')
+    expect(built.plan.scenes[1].visualFit).toBe('HOLD_LAST_FRAME')
+  })
+
+  it('an IMAGE with stray duration metadata is STILL held, never treated as a clip', async () => {
+    const serviceId = nextService()
+    const theme = `${CODE_PREFIX}_IMGD_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+    await makeEligibleSacred({
+      themeCode: theme,
+      contentType: 'PRAYER',
+      voicePolicy: 'TEXT_ONLY',
+      durationHintSeconds: 10,
+    })
+    await makeEligibleMedia({
+      assetKind: 'IMAGE',
+      contentType: 'PRAYER',
+      themeCode: theme,
+      // Nonsense for a still — and exactly the kind of stray metadata
+      // that must not decide how it is composed.
+      durationSeconds: 7,
+    })
+    await makeServiceTemplate(serviceId, [
+      filterSlot({ themeCode: theme, contentType: 'PRAYER' }),
+    ])
+    const { jobId, clock } = await driveToRendering(serviceId)
+    expect((await runRenderOnce('rtr-image-duration', clock)).status).toBe(
+      'COMPLETE',
+    )
+    const loaded = await loadRenderPlanSnapshot(jobId)
+    expect(loaded.status).toBe('OK')
+    if (loaded.status !== 'OK') return
+    // TEETH: the asset's declared kind decides, not its metadata.
+    expect(loaded.plan.scenes[0].visualKind).toBe('APPROVED_MEDIA')
+    expect(loaded.plan.scenes[0].visualFit).toBe('STILL_HOLD')
+    expect(loaded.plan.scenes[0].visualSourceDurationMs).toBeNull()
+  }, 240_000)
+
+  it('a VIDEO with NO recorded duration fails closed rather than being guessed at', async () => {
+    const serviceId = nextService()
+    const theme = `${CODE_PREFIX}_VIDN_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+    await makeEligibleSacred({
+      themeCode: theme,
+      contentType: 'PRAYER',
+      voicePolicy: 'TEXT_ONLY',
+      durationHintSeconds: 10,
+    })
+    await makeEligibleMedia({
+      assetKind: 'VIDEO',
+      contentType: 'PRAYER',
+      themeCode: theme,
+      durationSeconds: null,
+    })
+    await makeServiceTemplate(serviceId, [
+      filterSlot({ themeCode: theme, contentType: 'PRAYER' }),
+    ])
+    const { jobId, clock } = await driveToRendering(serviceId)
+    let renderCalls = 0
+    const outcome = await runRenderOnce('rtr-video-unknown', clock, {
+      render: async () => {
+        renderCalls += 1
+        throw new Error('engine must not be reached')
+      },
+    })
+    // TEETH: an unknown clip length cannot be trimmed or held
+    // correctly, so nothing is rendered at all.
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(renderCalls).toBe(0)
+    expect((await jobRow(jobId)).status).not.toBe('UPLOADING')
+    expect((await jobRow(jobId)).lastErrorMessage).toBe(
+      'approved_video_duration_unknown',
+    )
+  }, 240_000)
+
+  it('a VIDEO with a known duration plans normally (control)', async () => {
+    const serviceId = nextService()
+    const theme = `${CODE_PREFIX}_VIDK_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+    await makeEligibleSacred({
+      themeCode: theme,
+      contentType: 'PRAYER',
+      voicePolicy: 'TEXT_ONLY',
+      durationHintSeconds: 10,
+    })
+    await makeEligibleMedia({
+      assetKind: 'VIDEO',
+      contentType: 'PRAYER',
+      themeCode: theme,
+      // Longer than the 10s window, so this also proves a real clip
+      // still trims when it is the scene actually being shown.
+      durationSeconds: 30,
+    })
+    await makeServiceTemplate(serviceId, [
+      filterSlot({ themeCode: theme, contentType: 'PRAYER' }),
+    ])
+    const { jobId, clock } = await driveToRendering(serviceId)
+    expect((await runRenderOnce('rtr-video-known', clock)).status).toBe(
+      'COMPLETE',
+    )
+    const loaded = await loadRenderPlanSnapshot(jobId)
+    expect(loaded.status).toBe('OK')
+    if (loaded.status !== 'OK') return
+    expect(loaded.plan.scenes[0].visualSourceDurationMs).toBe(30_000)
+    expect(loaded.plan.scenes[0].visualFit).toBe('TRIM')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 16 hardening item 2: the output container is bound to the plan
+// ----------------------------------------------------------------------------
+
+describe('red-team: the render output must be the container the plan committed to', () => {
+  it('a WEBM result for an MP4 plan is refused at acceptance', async () => {
+    const { jobId, clock } = await makeRenderableJob()
+    const outcome = await runRenderOnce('rtr-mime-webm', clock, {
+      render: async (request) => {
+        const output = await createMockRenderEngine().render(request)
+        // Allowlisted, well-formed, correct length — and the WRONG
+        // container for this plan.
+        return { ...output, mimeType: 'video/webm' }
+      },
+    })
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('UPLOADING')
+    expect((await jobRow(jobId)).lastErrorMessage).toBe('artifact_mime_mismatch')
+    const results = await renderResultRows(jobId)
+    // TEETH: never accepted, and no artifact reference recorded.
+    expect(results[0].status).toBe('FAILED')
+    expect(results[0].artifactStorageRef).toBeNull()
+  }, 240_000)
+
+  it('a stored result whose mime was edited afterwards cannot pass the final gate', async () => {
+    const { jobId, clock } = await makeRenderableJob()
+    expect((await runRenderOnce('rtr-mime-seed', clock)).status).toBe(
+      'COMPLETE',
+    )
+    await getDb()
+      .update(prayerGenerationRenderResults)
+      .set({ artifactMimeType: 'video/webm' })
+      .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ status: 'RENDERING', leaseToken: null, leaseExpiresAt: null })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    const outcome = await runRenderOnce('rtr-mime-gate', clock)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('UPLOADING')
+    expect((await jobRow(jobId)).lastErrorMessage).toBe('artifact_mime_mismatch')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 16 hardening item 3: result-row identity before any render spend
+// ----------------------------------------------------------------------------
+
+describe('red-team: a tampered result row never reaches the engine', () => {
+  /** Seeds a result row through one failing cycle, tampers with it, then
+   * runs a second cycle whose engine must never be called. */
+  async function runAfterResultTamper(
+    label: string,
+    tamper: (jobId: number) => Promise<void>,
+  ) {
+    const { jobId, clock } = await makeRenderableJob()
+    await runRenderOnce(`${label}-seed`, clock, {
+      render: async () => {
+        throw new Error('seed failure to create the result row')
+      },
+    })
+    expect((await renderResultRows(jobId)).length).toBe(1)
+    await tamper(jobId)
+    // The seed failure consumed budget; reset so THIS cycle's outcome is
+    // about identity, not an exhausted attempt count.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ status: 'RENDERING', attemptCount: 0, leaseToken: null, leaseExpiresAt: null })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let renderCalls = 0
+    const outcome = await runRenderOnce(`${label}-run`, clock, {
+      render: async () => {
+        renderCalls += 1
+        throw new Error('engine must not be reached')
+      },
+    })
+    return { jobId, outcome, renderCalls, job: await jobRow(jobId) }
+  }
+
+  it('a forged idempotency key blocks BEFORE the render', async () => {
+    const { outcome, renderCalls, job } = await runAfterResultTamper(
+      'rtr-rid-key',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationRenderResults)
+          .set({ idempotencyKey: 'f'.repeat(64) })
+          .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+      },
+    )
+    // TEETH: refused at the identity gate — no engine call, no spend —
+    // rather than discovered after the render.
+    expect(renderCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('UPLOADING')
+    expect(job.lastErrorCode).toBe('RENDER_RESULT_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('result_idempotency_mismatch')
+  }, 240_000)
+
+  it('a re-pointed plan hash blocks BEFORE the render', async () => {
+    const { outcome, renderCalls, job } = await runAfterResultTamper(
+      'rtr-rid-plan',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationRenderResults)
+          .set({ renderPlanSha256: 'e'.repeat(64) })
+          .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+      },
+    )
+    expect(renderCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorCode).toBe('RENDER_RESULT_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('result_plan_hash_mismatch')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 16 hardening item 4: a worker that lost its lease writes nothing
+// ----------------------------------------------------------------------------
+
+describe('red-team: a stale worker never writes its verdict onto a newer row', () => {
+  const NEWER_MARKER = 'newer_worker_owns_this_row'
+
+  /** Models the real race: while our render is in flight the lease
+   * expires, is recovered, and the newer owner resets the row for its
+   * own attempt. Whatever our render then does must not touch it. */
+  async function loseLeaseThen<T>(
+    jobId: number,
+    clock: ReturnType<typeof makeFakeClock>,
+    then: () => Promise<T>,
+  ): Promise<T> {
+    clock.advance(DEFAULT_LEASE_MS + 60_000)
+    expect(await recoverExpiredGenerationLeases(clock)).toBeGreaterThanOrEqual(1)
+    await getDb()
+      .update(prayerGenerationRenderResults)
+      .set({
+        // The newer owner has taken this row for its OWN attempt, so it
+        // is legitimately RUNNING again. The status CAS alone cannot
+        // tell that apart from our own stale attempt — only the lease
+        // can, which is exactly why the fence exists.
+        status: 'RUNNING',
+        attemptCount: 99,
+        lastErrorCode: NEWER_MARKER,
+      })
+      .where(eq(prayerGenerationRenderResults.generationJobId, jobId))
+    return then()
+  }
+
+  it('a render that THROWS after the lease was lost leaves the row untouched', async () => {
+    const { jobId, clock } = await makeRenderableJob()
+    const outcome = await runRenderOnce('rtr-stale-throw', clock, {
+      render: async () =>
+        loseLeaseThen(jobId, clock, async () => {
+          throw new Error('synthetic failure from a worker that lost its lease')
+        }),
+    })
+    expect(outcome.status).toBe('LEASE_LOST')
+    const row = (await renderResultRows(jobId))[0]
+    // TEETH: our FAILED verdict was never written — the newer owner's
+    // in-flight attempt stands exactly as it left it.
+    expect(row.status).toBe('RUNNING')
+    expect(row.attemptCount).toBe(99)
+    expect(row.lastErrorCode).toBe(NEWER_MARKER)
+    expect(row.artifactStorageRef).toBeNull()
+    expect((await jobRow(jobId)).status).not.toBe('UPLOADING')
+  }, 240_000)
+
+  it('an INVALID render result produced after the lease was lost leaves the row untouched', async () => {
+    const { jobId, clock } = await makeRenderableJob()
+    const outcome = await runRenderOnce('rtr-stale-invalid', clock, {
+      render: async (request) =>
+        loseLeaseThen(jobId, clock, async () => {
+          const output = await createMockRenderEngine().render(request)
+          // Rejected on arrival — but by then we no longer own the job.
+          return { ...output, mimeType: 'video/webm' }
+        }),
+    })
+    expect(outcome.status).toBe('LEASE_LOST')
+    const row = (await renderResultRows(jobId))[0]
+    expect(row.status).toBe('RUNNING')
+    expect(row.attemptCount).toBe(99)
+    expect(row.lastErrorCode).toBe(NEWER_MARKER)
+    expect(row.artifactStorageRef).toBeNull()
+    expect((await jobRow(jobId)).status).not.toBe('UPLOADING')
   }, 240_000)
 })

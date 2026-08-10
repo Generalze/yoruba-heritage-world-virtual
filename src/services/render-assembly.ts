@@ -43,7 +43,7 @@ import {
   verifyStoredAudioArtifact,
 } from './audio-generation'
 import { verifyStoredArtifact } from './visual-generation'
-import { isMediaAssetRuntimeEligible } from './media-assets'
+import { MEDIA_MIME_TYPES, isMediaAssetRuntimeEligible } from './media-assets'
 import { isLanguageCompatible, isScopeApplicable } from './video-recipes'
 import type { GenerationClock } from './generation-jobs'
 import type {
@@ -259,14 +259,24 @@ export function computeRenderIdempotencyKey(input: {
 
 // --- Source verification ----------------------------------------------------
 
+/** What KIND of picture a source is, decided from authoritative asset
+ * metadata — never inferred from whether a duration happens to be
+ * recorded. A still and a clip are composed differently, and guessing
+ * from missing metadata is how a video silently becomes a freeze. */
+export type RenderMediaKind = 'IMAGE' | 'VIDEO'
+
 interface VerifiedVisualSource {
   sceneId: string
   kind: 'APPROVED_MEDIA' | 'GENERATED_ARTIFACT'
+  mediaKind: RenderMediaKind
   mediaAssetVersionId: number | null
   visualTaskId: string | null
   storageKey: string
   sha256: string
   mimeType: string
+  /** ALWAYS null for an IMAGE (a still has no length of its own) and
+   * ALWAYS a positive number for a VIDEO — an unknown video length
+   * fails closed rather than being planned around. */
   durationMs: number | null
 }
 
@@ -337,6 +347,32 @@ async function verifyApprovedMediaVisual(
   if (!isValidStorageKey(row.version.storageKey)) {
     return { ok: false, reasonCode: 'approved_media_storage_ref_invalid' }
   }
+  // AUTHORITATIVE kind: the asset's own declared kind, cross-checked
+  // against the version's allowlisted mime. Duration metadata is
+  // evidence about a video's length, never evidence about what the
+  // asset IS — a video with no recorded duration must not quietly
+  // become a still, and a still with a stray duration must not quietly
+  // become a clip.
+  const assetKind = row.asset.assetKind
+  if (assetKind !== 'IMAGE' && assetKind !== 'VIDEO') {
+    return { ok: false, reasonCode: 'approved_media_not_visual' }
+  }
+  if (!Object.hasOwn(MEDIA_MIME_TYPES[assetKind], row.version.mimeType)) {
+    return { ok: false, reasonCode: 'approved_media_mime_kind_mismatch' }
+  }
+  let sourceDurationMs: number | null = null
+  if (assetKind === 'VIDEO') {
+    if (
+      row.version.durationSeconds == null ||
+      row.version.durationSeconds <= 0
+    ) {
+      // A clip of unknown length cannot be trimmed or held correctly;
+      // planning around a guess would either cut approved footage or
+      // freeze on a frame nobody chose.
+      return { ok: false, reasonCode: 'approved_video_duration_unknown' }
+    }
+    sourceDurationMs = row.version.durationSeconds * 1000
+  }
   // Independent of the eligibility check: prove the bytes behind the
   // reference hash to the MANIFEST's frozen value, not merely to the
   // row's own copy of it.
@@ -352,15 +388,13 @@ async function verifyApprovedMediaVisual(
     source: {
       sceneId,
       kind: 'APPROVED_MEDIA',
+      mediaKind: assetKind,
       mediaAssetVersionId,
       visualTaskId: null,
       storageKey: row.version.storageKey,
       sha256: expectedSha256,
       mimeType: row.version.mimeType,
-      durationMs:
-        row.version.durationSeconds != null
-          ? row.version.durationSeconds * 1000
-          : null,
+      durationMs: sourceDurationMs,
     },
   }
 }
@@ -417,6 +451,10 @@ async function verifyGeneratedVisual(
     source: {
       sceneId,
       kind: 'GENERATED_ARTIFACT',
+      // A generated scene is always a CLIP, and Step 14's own
+      // verification already proved its duration is present and
+      // positive — there is no unknown-length case to handle here.
+      mediaKind: 'VIDEO',
       mediaAssetVersionId: null,
       visualTaskId: task.taskId,
       storageKey: row.artifactStorageRef!,
@@ -542,16 +580,27 @@ async function verifyAudioRequirement(
 
 // --- Plan construction ------------------------------------------------------
 
-function visualFitFor(
-  kind: RenderVisualKind,
-  sourceDurationMs: number | null,
-  windowMs: number,
-): RenderVisualFit {
-  // A still image has no length of its own: it is simply held.
-  if (sourceDurationMs == null) return 'STILL_HOLD'
-  if (sourceDurationMs > windowMs) return 'TRIM'
-  if (sourceDurationMs < windowMs) return 'HOLD_LAST_FRAME'
-  void kind
+function visualFitFor(input: {
+  visualKind: RenderVisualKind
+  mediaKind: RenderMediaKind
+  sourceDurationMs: number | null
+  windowMs: number
+}): RenderVisualFit {
+  // HOLD_PREVIOUS means exactly one thing: freeze the frame that was
+  // last DISPLAYED. It is never a second chance to play the earlier
+  // clip, so it can never resolve to TRIM or to an EXACT replay — the
+  // source's own length is irrelevant to a scene that shows no new
+  // footage at all.
+  if (input.visualKind === 'HOLD_PREVIOUS') return 'HOLD_LAST_FRAME'
+  // A still has no length of its own, whatever duration metadata may
+  // claim: it is simply held for its window.
+  if (input.mediaKind === 'IMAGE') return 'STILL_HOLD'
+  // A clip's length is known by construction here (an unknown-length
+  // video failed closed during verification), so this is a real
+  // comparison rather than a guess.
+  if (input.sourceDurationMs == null) return 'HOLD_LAST_FRAME'
+  if (input.sourceDurationMs > input.windowMs) return 'TRIM'
+  if (input.sourceDurationMs < input.windowMs) return 'HOLD_LAST_FRAME'
   return 'EXACT'
 }
 
@@ -661,7 +710,12 @@ export function buildRenderPlan(input: {
         visualSha256: source.sha256,
         visualMimeType: source.mimeType,
         visualSourceDurationMs: source.durationMs,
-        visualFit: visualFitFor(visualKind, source.durationMs, durationMs),
+        visualFit: visualFitFor({
+          visualKind,
+          mediaKind: source.mediaKind,
+          sourceDurationMs: source.durationMs,
+          windowMs: durationMs,
+        }),
         startMs: cursorMs,
         endMs: cursorMs + durationMs,
         durationMs,
@@ -942,6 +996,13 @@ async function verifyAndStoreRenderOutput(
 > {
   const extension = RENDER_MIME_EXTENSIONS[output.mimeType]
   if (!extension) return { ok: false, reasonCode: 'artifact_mime_invalid' }
+  // Allowlisted is necessary but NOT sufficient: the plan committed to
+  // one output type, and an engine that returned a different (even
+  // perfectly legal) container did not render the plan that was
+  // approved.
+  if (output.mimeType !== plan.outputMimeType) {
+    return { ok: false, reasonCode: 'artifact_mime_mismatch' }
+  }
   // An engine crosses a trust boundary exactly like a provider does.
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (!output.bytes || output.bytes.length === 0) {
@@ -1315,8 +1376,27 @@ export async function runRenderOnce(
       built.plan.renderPlanSha256,
       engine,
     )
-    if (row.renderPlanSha256 !== built.plan.renderPlanSha256) {
-      return fail('RENDER_RESULT_IDENTITY_MISMATCH', 'plan_hash_mismatch')
+    // IDENTITY BEFORE SPEND. The row we are about to render into must
+    // BE this job's result for this manifest snapshot and this exact
+    // plan. ensureRenderResultRow looks a row up by that triple, so a
+    // disagreement here means the row was altered after it was
+    // created; rendering into it would attach an artifact to an
+    // identity we cannot vouch for. Discovering that at finalization
+    // would be far too late — the render would already have happened.
+    const identityFailure =
+      row.generationJobId !== job.id
+        ? 'result_job_mismatch'
+        : row.manifestSnapshotId !== manifestSnapshotId
+          ? 'result_manifest_mismatch'
+          : row.renderPlanSnapshotId !== planSnapshot.snapshotId
+            ? 'result_plan_snapshot_mismatch'
+            : row.renderPlanSha256 !== built.plan.renderPlanSha256
+              ? 'result_plan_hash_mismatch'
+              : row.idempotencyKey !== idempotencyKey
+                ? 'result_idempotency_mismatch'
+                : null
+    if (identityFailure != null) {
+      return fail('RENDER_RESULT_IDENTITY_MISMATCH', identityFailure)
     }
 
     // IDEMPOTENCY: an already-SUCCEEDED result for this exact authority
@@ -1354,6 +1434,14 @@ export async function runRenderOnce(
       } catch (error) {
         const code =
           error instanceof RenderEngineError ? error.code : 'render_failed'
+        // STALE FAILURE FENCE. A render that threw may have taken long
+        // enough for this worker to lose the job. Recording OUR verdict
+        // then would overwrite whatever the newer owner has since done
+        // with this row — a stale worker's failure is not news, it is
+        // corruption. The status CAS on RUNNING alone is not enough:
+        // the newer worker may legitimately have moved the row back to
+        // RUNNING for its own attempt.
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
         await getDb()
           .update(prayerGenerationRenderResults)
           .set({
@@ -1375,6 +1463,10 @@ export async function runRenderOnce(
 
       const stored = await verifyAndStoreRenderOutput(output, built.plan)
       if (!stored.ok) {
+        // Same fence as the throw path above: a rejected result from a
+        // worker that no longer owns the job is not a verdict anyone
+        // should record.
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
         await getDb()
           .update(prayerGenerationRenderResults)
           .set({
@@ -1493,6 +1585,11 @@ export async function runRenderOnce(
     }
     if (finalRow.artifactDurationMs !== loadedPlan.plan.totalDurationMs) {
       return fail('RENDER_ARTIFACT_INVALID', 'artifact_duration_mismatch')
+    }
+    // Re-proved here as well as at acceptance: a row edited in between
+    // must not be able to walk a different container forward.
+    if (finalRow.artifactMimeType !== loadedPlan.plan.outputMimeType) {
+      return fail('RENDER_ARTIFACT_INVALID', 'artifact_mime_mismatch')
     }
     // The engine that produced this result must still be resolvable and
     // still permitted HERE — a mock artifact can never be walked
