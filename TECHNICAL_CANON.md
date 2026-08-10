@@ -725,13 +725,30 @@ GENERATING_AUDIO
   call. `HUMAN_RECORDED_REQUIRED` and `TEXT_ONLY` are refusals, not
   gaps: they fail closed, and a manifest's snapshotted policy can never
   override the current one in either direction.
-- Immediately before each submission and each poll, the content version,
-  its content hash, its language and its voice policy are revalidated,
-  and only then is the EXACT approved body retrieved server-side. It is
-  spoken verbatim — never rewritten, translated, summarised, extended or
-  supplemented with invented prayer. The body exists in memory for that
-  one call: it is never persisted, never logged, never returned to the
+- Authority is proved in TWO STAGES, and the order is itself a rule.
+  Immediately before each submission and each poll, the content version,
+  its content hash, its language and its voice policy are revalidated
+  from METADATA ONLY — the query does not name the body column at all.
+  Only once that proof passes, and only on the submission path, is the
+  EXACT approved body retrieved server-side and re-validated against the
+  authoritative content hash. A forbidden or withdrawn requirement is
+  therefore refused with the sacred body never having been read. Polling
+  CONTINUES an existing operation: it re-proves current authority but
+  never retrieves, recompiles, resends or rewrites the text.
+- The body is spoken verbatim — never rewritten, translated, summarised,
+  extended or supplemented with invented prayer. It exists in memory for
+  that one call: never persisted, never logged, never returned to the
   caller and never folded into an artifact seed.
+- The idempotency key is AUTHORITY, not input. It is always recomputed
+  from generation job + manifest hash + requirement id; a caller-supplied
+  key is treated as a claim and any mismatch fails closed before a
+  provider is contacted, because a well-formed but wrong key would mint
+  a second paid synthesis of speech that already exists.
+- Before any provider spend, the durable task row must BE the manifest
+  requirement it claims: same requirement id, scene, authoritative
+  idempotency key and manifest snapshot. A tampered row is refused at
+  that gate with zero provider calls, never discovered at finalization
+  after the spend.
 - NO VOICE OR LIKENESS CLONING. The provider contract carries no speaker
   sample, reference recording or person-derived voice identifier at all,
   so an adapter has nothing to clone from.

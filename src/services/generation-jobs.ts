@@ -1990,23 +1990,35 @@ export type AudioTaskPollResult =
     }
   | { status: 'FAILED'; errorCode: string; errorMessage: string | null }
 
+/** The manifest-derived identity every provider action is keyed on.
+ * `idempotencyKey` is a CLAIM, not authority: the executor recomputes
+ * it from (generationJobId, manifestSha256, requirementId) and refuses
+ * any value that disagrees, before contacting a provider. */
+export interface AudioTaskIdentityInput {
+  requirement: ManifestAudioRequirement
+  generationJobId: number
+  manifestSha256: string
+  idempotencyKey?: string
+}
+
 export interface AudioGenerationDependencies {
   /** Submits ONE TTS requirement. Called at most once per PENDING row —
    * a task that already SUCCEEDED never comes back through here — but
-   * MUST be idempotent regardless, keyed on the idempotency key. */
-  submitSpeech?: (input: {
-    requirement: ManifestAudioRequirement
-    idempotencyKey: string
-  }) => Promise<AudioTaskSubmissionResult>
+   * MUST be idempotent regardless, keyed on the authoritative
+   * idempotency key. */
+  submitSpeech?: (
+    input: AudioTaskIdentityInput,
+  ) => Promise<AudioTaskSubmissionResult>
   /** Polls ONE in-flight synthesis. Called with NO open DB transaction
    * and must not itself hold one — this loop persists the result in a
-   * separate, subsequent write. */
-  pollSpeech?: (input: {
-    providerCode: string
-    providerOperationId: string
-    requirement: ManifestAudioRequirement
-    idempotencyKey: string
-  }) => Promise<AudioTaskPollResult>
+   * separate, subsequent write. Continues an EXISTING operation: it
+   * never recompiles or resends the approved text. */
+  pollSpeech?: (
+    input: AudioTaskIdentityInput & {
+      providerCode: string
+      providerOperationId: string
+    },
+  ) => Promise<AudioTaskPollResult>
 }
 
 function isIntegrityValidAudioResult(
@@ -2370,6 +2382,10 @@ export async function runAudioGenerationOnce(
 
     let anyFailed = false
     let anyOutstanding = false
+    /** Set by the identity-before-spend guard below; reported as its own
+     * bounded failure so a tampered task row is never mistaken for a
+     * provider failure. */
+    let taskIdentityFailure: string | null = null
     const nowForPoll = clock.now()
 
     for (const requirement of ttsRequirements) {
@@ -2393,6 +2409,30 @@ export async function runAudioGenerationOnce(
         requirement.sceneId,
         idempotencyKey,
       )
+
+      // IDENTITY BEFORE SPEND. The row we are about to act on must BE
+      // this manifest requirement — same requirement id, same scene,
+      // same authoritative idempotency key, same manifest snapshot.
+      // ensureAudioTaskRow looks a row up by (job, snapshot,
+      // requirement), so a disagreement here means the row was altered
+      // after it was created; acting on it would submit (and pay for)
+      // speech against an identity we cannot vouch for. Discovering
+      // that at finalization would be far too late — the provider call
+      // would already have happened.
+      if (
+        row.requirementId !== requirementId ||
+        row.sceneId !== requirement.sceneId ||
+        row.idempotencyKey !== idempotencyKey ||
+        row.manifestSnapshotId !== manifestSnapshotId
+      ) {
+        taskIdentityFailure =
+          row.idempotencyKey !== idempotencyKey
+            ? 'task_idempotency_mismatch'
+            : row.sceneId !== requirement.sceneId
+              ? 'task_scene_mismatch'
+              : 'task_identity_mismatch'
+        continue
+      }
 
       // A task that failed on a prior attempt gets one more shot each
       // time the JOB ITSELF is freshly (re)claimed — the job's own
@@ -2431,7 +2471,12 @@ export async function runAudioGenerationOnce(
         // and every further submit/poll is work nobody asked for (and,
         // with a real provider, spend nobody authorized).
         if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
-        const submission = await doSubmit({ requirement, idempotencyKey })
+        const submission = await doSubmit({
+          requirement,
+          generationJobId: job.id,
+          manifestSha256,
+          idempotencyKey,
+        })
         const freshNow = clock.now()
         if (submission.status === 'SUBMITTED') {
           // Non-terminal either way: even if our own write below loses
@@ -2526,6 +2571,8 @@ export async function runAudioGenerationOnce(
           providerCode: row.providerCode,
           providerOperationId: row.providerOperationId,
           requirement,
+          generationJobId: job.id,
+          manifestSha256,
           idempotencyKey,
         })
         // Unlike a submission (whose id is unrecoverable once dropped),
@@ -2618,6 +2665,32 @@ export async function runAudioGenerationOnce(
     // decision below (wait / retry / finalize) must never proceed on a
     // lease this worker may have already lost.
     if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+
+    // A tampered task row is decided FIRST and on its own code: no
+    // provider call happened for it, so calling it a provider failure
+    // would misreport what actually went wrong.
+    if (taskIdentityFailure != null) {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'AUDIO_TASK_IDENTITY_MISMATCH',
+        taskIdentityFailure,
+        'GENERATING_AUDIO',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? {
+            status: 'FAILED',
+            jobId: job.id,
+            errorCode: 'AUDIO_TASK_IDENTITY_MISMATCH',
+          }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'AUDIO_TASK_IDENTITY_MISMATCH',
+          }
+    }
 
     if (anyFailed) {
       const outcome = await scheduleRetryOrFail(

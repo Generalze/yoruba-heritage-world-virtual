@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { and, eq, inArray, like } from 'drizzle-orm'
 import { migrate } from 'drizzle-orm/mysql2/migrator'
 
-import { closeDb, getDb } from '@/db'
+import { closeDb, getDb, getPool } from '@/db'
 import {
   appointmentGuidanceAssignments,
   appointmentGuidanceSets,
@@ -632,6 +632,15 @@ async function makeTextOnlyJob(): Promise<{
   return { jobId, manifest }
 }
 
+/** The manifest-derived identity every provider action is keyed on.
+ * Tests pass this rather than inventing a key: the executor recomputes
+ * the authoritative one and refuses anything that disagrees, so a
+ * hand-made key would only ever prove the refusal path (which has its
+ * own dedicated tests below). */
+function identity(jobId: number, manifest: GenerationManifest) {
+  return { generationJobId: jobId, manifestSha256: manifest.manifestSha256 }
+}
+
 /** Real executor wiring — the same functions the worker uses. */
 const realDependencies: AudioGenerationDependencies = {
   submitSpeech,
@@ -934,8 +943,8 @@ describe('red-team: approved human audio is never synthesized', () => {
   }, 240_000)
 
   it('compileSpeechSynthesisRequest refuses a human-audio requirement outright', async () => {
-    const { requirement } = await makeHumanAudioJob()
-    const compiled = await compileSpeechSynthesisRequest(requirement, 'k'.repeat(64))
+    const { jobId, manifest, requirement } = await makeHumanAudioJob()
+    const compiled = await compileSpeechSynthesisRequest(requirement, identity(jobId, manifest))
     expect(compiled.status).toBe('FAILED')
     if (compiled.status === 'FAILED') {
       expect(compiled.reasonCode).toBe('not_a_tts_requirement')
@@ -949,7 +958,8 @@ describe('red-team: approved human audio is never synthesized', () => {
 
 describe('red-team: a forbidding voice policy is never synthesized', () => {
   it('HUMAN_RECORDED_REQUIRED content fails closed even if a TTS requirement claims otherwise', async () => {
-    const { requirement, contentVersionId } = await makeHumanAudioJob()
+    const { jobId, manifest, requirement, contentVersionId } =
+      await makeHumanAudioJob()
     // A tampered/forged requirement that CLAIMS TTS for content whose
     // authoritative policy demands a human voice.
     const forged: ManifestAudioRequirement = {
@@ -961,7 +971,7 @@ describe('red-team: a forbidding voice policy is never synthesized', () => {
     const counters = { submits: 0, polls: 0 }
     setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
     try {
-      const compiled = await compileSpeechSynthesisRequest(forged, 'k'.repeat(64))
+      const compiled = await compileSpeechSynthesisRequest(forged, identity(jobId, manifest))
       // TEETH: the AUTHORITATIVE profile policy decides, not the
       // manifest's copy of it.
       expect(compiled.status).toBe('FAILED')
@@ -970,7 +980,7 @@ describe('red-team: a forbidding voice policy is never synthesized', () => {
       }
       const submitted = await submitSpeech({
         requirement: forged,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       expect(submitted.status).toBe('FAILED')
       // TEETH: refused before any provider call — a human-voice-only
@@ -983,12 +993,12 @@ describe('red-team: a forbidding voice policy is never synthesized', () => {
   }, 240_000)
 
   it('a requirement whose snapshotted policy is not APPROVED_TTS_ALLOWED is refused without touching the database', async () => {
-    const { requirement } = await makeTtsJob()
+    const { jobId, manifest, requirement } = await makeTtsJob()
     const forged: ManifestAudioRequirement = {
       ...requirement,
       voicePolicy: 'TEXT_ONLY',
     }
-    const compiled = await compileSpeechSynthesisRequest(forged, 'k'.repeat(64))
+    const compiled = await compileSpeechSynthesisRequest(forged, identity(jobId, manifest))
     expect(compiled.status).toBe('FAILED')
     if (compiled.status === 'FAILED') {
       expect(compiled.reasonCode).toBe('voice_policy_forbids_tts')
@@ -1064,18 +1074,25 @@ function capturingProvider(
 
 describe('red-team: the approved body is spoken exactly and never persisted', () => {
   it('the provider receives the EXACT approved text and nothing else', async () => {
-    const { requirement, bodyMarker } = await makeTtsJob()
+    const { jobId, manifest, requirement, bodyMarker } = await makeTtsJob()
     const captured: Array<SpeechSynthesisRequest> = []
     setTtsProviderForTests(capturingProvider(captured))
     try {
-      const key = computeAudioTaskIdempotencyKey({
-        generationJobId: 1,
-        manifestSha256: 'a'.repeat(64),
-        requirementId: requirement.requirementId!,
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
       })
-      const submitted = await submitSpeech({ requirement, idempotencyKey: key })
       expect(submitted.status).toBe('SUBMITTED')
       expect(captured.length).toBe(1)
+      // TEETH: the key the provider was handed is the AUTHORITATIVE one,
+      // derived from manifest authority — not something a caller chose.
+      expect(captured[0].idempotencyKey).toBe(
+        computeAudioTaskIdempotencyKey({
+          generationJobId: jobId,
+          manifestSha256: manifest.manifestSha256,
+          requirementId: requirement.requirementId!,
+        }),
+      )
       // TEETH: byte-for-byte the approved body — not rewritten, not
       // translated, not summarized, not extended with an invented
       // prayer or a synthesized introduction.
@@ -1158,14 +1175,15 @@ describe('red-team: authority withdrawal fails closed before spending anything',
   }, 240_000)
 
   it('the executor itself re-verifies authority at SUBMIT time, independently of the job loop', async () => {
-    const { requirement, contentVersionId } = await makeTtsJob()
+    const { jobId, manifest, requirement, contentVersionId } =
+      await makeTtsJob()
     await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, false)
     const counters = { submits: 0, polls: 0 }
     setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
     try {
       const submitted = await submitSpeech({
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       // TEETH: submitScene's own re-verification is not a duplicate of
       // the loop's — it is what protects any other caller, and it fails
@@ -1182,14 +1200,15 @@ describe('red-team: authority withdrawal fails closed before spending anything',
   }, 240_000)
 
   it('authority withdrawn while a synthesis is IN FLIGHT stops the result being accepted', async () => {
-    const { requirement, contentVersionId } = await makeTtsJob()
+    const { jobId, manifest, requirement, contentVersionId } =
+      await makeTtsJob()
     const counters = { submits: 0, polls: 0 }
     setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
     try {
       // Submitted while fully authorized …
       const submitted = await submitSpeech({
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       expect(submitted.status).toBe('SUBMITTED')
       if (submitted.status !== 'SUBMITTED') return
@@ -1205,7 +1224,7 @@ describe('red-team: authority withdrawal fails closed before spending anything',
         providerCode: submitted.providerCode,
         providerOperationId: submitted.providerOperationId,
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       // TEETH: polling re-verifies authority BEFORE accepting a result
       // — a completed synthesis whose governing rights vanished
@@ -1306,11 +1325,14 @@ describe('red-team: duplicate submission is structurally impossible', () => {
     const countingDeps = (): AudioGenerationDependencies => ({
       submitSpeech: async (input) => {
         submitCalls += 1
-        seenKeys.add(input.idempotencyKey)
+        // The loop always supplies the key it wrote on the row; the
+        // executor would recompute and reject a wrong one.
+        expect(input.idempotencyKey).toBeDefined()
+        seenKeys.add(input.idempotencyKey!)
         return {
           status: 'SUBMITTED',
           providerCode: 'MOCK_TTS',
-          providerOperationId: `op-${input.idempotencyKey}`,
+          providerOperationId: `op-${input.idempotencyKey!}`,
         }
       },
       pollSpeech: async () => ({ status: 'PROCESSING' }),
@@ -1375,7 +1397,7 @@ function countingProvider(
 
 describe('red-team: a poll is bound to the provider that issued the operation', () => {
   it('a persisted provider code that no longer matches the active provider fails closed WITHOUT polling', async () => {
-    const { requirement } = await makeTtsJob()
+    const { jobId, manifest, requirement } = await makeTtsJob()
     const counters = { submits: 0, polls: 0 }
     setTtsProviderForTests(countingProvider('OTHER_TTS', counters))
     try {
@@ -1383,7 +1405,7 @@ describe('red-team: a poll is bound to the provider that issued the operation', 
         providerCode: 'MOCK_TTS',
         providerOperationId: 'operation-issued-by-a-different-provider',
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       // TEETH: refused on identity alone — a foreign recording is never
       // accepted as the voice of approved sacred text.
@@ -1398,13 +1420,13 @@ describe('red-team: a poll is bound to the provider that issued the operation', 
   }, 240_000)
 
   it('the SAME poll succeeds once the persisted code names the active provider (control)', async () => {
-    const { requirement } = await makeTtsJob()
+    const { jobId, manifest, requirement } = await makeTtsJob()
     const counters = { submits: 0, polls: 0 }
     setTtsProviderForTests(countingProvider('OTHER_TTS', counters))
     try {
       const submitted = await submitSpeech({
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       expect(submitted.status).toBe('SUBMITTED')
       if (submitted.status !== 'SUBMITTED') return
@@ -1413,7 +1435,7 @@ describe('red-team: a poll is bound to the provider that issued the operation', 
         providerCode: submitted.providerCode,
         providerOperationId: submitted.providerOperationId,
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       expect(result.status).toBe('SUCCEEDED')
       expect(counters.polls).toBe(1)
@@ -1810,7 +1832,7 @@ describe('red-team: malformed provider output is never persisted as success', ()
     poll: () => Promise<SpeechPollResult>,
     expectedReasonCode: string,
   ) {
-    const { requirement } = await makeTtsJob()
+    const { jobId, manifest, requirement } = await makeTtsJob()
     setTtsProviderForTests({
       code: 'BAD_TTS',
       displayName: 'Red-team malformed-output TTS provider',
@@ -1824,7 +1846,7 @@ describe('red-team: malformed provider output is never persisted as success', ()
     try {
       const submitted = await submitSpeech({
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       expect(submitted.status).toBe('SUBMITTED')
       if (submitted.status !== 'SUBMITTED') return
@@ -1832,7 +1854,7 @@ describe('red-team: malformed provider output is never persisted as success', ()
         providerCode: submitted.providerCode,
         providerOperationId: submitted.providerOperationId,
         requirement,
-        idempotencyKey: 'k'.repeat(64),
+        ...identity(jobId, manifest),
       })
       expect(polled.status).toBe('FAILED')
       if (polled.status === 'FAILED') {
@@ -2036,4 +2058,345 @@ describe('red-team: no real provider/network calls anywhere in the Step 15 layer
       )
     }
   })
+})
+
+// ----------------------------------------------------------------------------
+// Step 15 hardening item 1: the sacred body is never READ unless synthesis is
+// currently authorized
+// ----------------------------------------------------------------------------
+
+/**
+ * Counts how many times the sacred BODY column is actually selected, by
+ * spying on the shared db client's query path. Nothing subtler will do:
+ * "the body was fetched and then not used" is exactly the failure this
+ * suite exists to rule out, and only observing the read itself can rule
+ * it out.
+ */
+async function countBodyReads<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; bodyReads: number }> {
+  const pool = getPool() as unknown as Record<
+    string,
+    (...args: Array<unknown>) => unknown
+  >
+  const originalQuery = pool.query.bind(pool)
+  const originalExecute = pool.execute.bind(pool)
+  let bodyReads = 0
+  const inspect = (args: Array<unknown>) => {
+    const first = args[0]
+    const sql =
+      typeof first === 'string'
+        ? first
+        : String((first as { sql?: string } | undefined)?.sql ?? '')
+    if (sql.includes('spiritual_content_versions') && /`body`/.test(sql)) {
+      bodyReads += 1
+    }
+  }
+  pool.query = (...args: Array<unknown>) => {
+    inspect(args)
+    return originalQuery(...args)
+  }
+  pool.execute = (...args: Array<unknown>) => {
+    inspect(args)
+    return originalExecute(...args)
+  }
+  try {
+    return { result: await run(), bodyReads }
+  } finally {
+    pool.query = originalQuery
+    pool.execute = originalExecute
+  }
+}
+
+describe('red-team: a forbidden requirement never reaches the sacred body', () => {
+  it('a CURRENT voice policy that forbids TTS causes ZERO body reads and ZERO provider calls', async () => {
+    const { jobId, manifest, requirement, contentVersionId } = await makeTtsJob()
+    // The policy is withdrawn after planning: the manifest still says
+    // APPROVED_TTS_ALLOWED, the authoritative profile no longer does.
+    await getDb()
+      .update(sacredContentVersionProfiles)
+      .set({ voicePolicy: 'HUMAN_RECORDED_REQUIRED' })
+      .where(eq(sacredContentVersionProfiles.contentVersionId, contentVersionId))
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await submitSpeech({ requirement, ...identity(jobId, manifest) }),
+      )
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('voice_policy_forbids_tts')
+      }
+      // TEETH: the body was never even SELECTed. Authorization is
+      // proved on metadata alone, and only an authorized synthesis is
+      // allowed to read the approved text at all.
+      expect(bodyReads).toBe(0)
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+      await getDb()
+        .update(sacredContentVersionProfiles)
+        .set({ voicePolicy: 'APPROVED_TTS_ALLOWED' })
+        .where(
+          eq(sacredContentVersionProfiles.contentVersionId, contentVersionId),
+        )
+    }
+  }, 240_000)
+
+  it('a withdrawn runtime flag causes ZERO body reads on the submission path', async () => {
+    const { jobId, manifest, requirement, contentVersionId } = await makeTtsJob()
+    await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, false)
+    try {
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await submitSpeech({ requirement, ...identity(jobId, manifest) }),
+      )
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('sacred_content_ineligible')
+      }
+      expect(bodyReads).toBe(0)
+    } finally {
+      await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, true)
+    }
+  }, 240_000)
+
+  it('an AUTHORIZED submission does read the body exactly once (control)', async () => {
+    const { jobId, manifest, requirement, bodyMarker } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await submitSpeech({ requirement, ...identity(jobId, manifest) }),
+      )
+      expect(result.status).toBe('SUBMITTED')
+      // TEETH: the zero-read assertions above are about ORDER, not about
+      // the body being unreachable — an authorized synthesis still reads
+      // it, once, and speaks it verbatim.
+      expect(bodyReads).toBe(1)
+      expect(captured[0].approvedText).toBe(bodyMarker)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('POLLING never reads the body and never recompiles a request', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('SUBMITTED')
+      if (submitted.status !== 'SUBMITTED') return
+      const submissionCount = captured.length
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await pollSpeech({
+            providerCode: submitted.providerCode,
+            providerOperationId: submitted.providerOperationId,
+            requirement,
+            ...identity(jobId, manifest),
+          }),
+      )
+      expect(result.status).toBe('SUCCEEDED')
+      // TEETH: a poll CONTINUES an operation. It re-proves current
+      // authority (metadata only) but never re-reads the approved text
+      // and never hands a provider a second request — there is nothing
+      // to rewrite, resend or re-translate on this path.
+      expect(bodyReads).toBe(0)
+      expect(captured.length).toBe(submissionCount)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 15 hardening item 2: the idempotency key is authority, not input
+// ----------------------------------------------------------------------------
+
+describe('red-team: a caller-supplied idempotency key is never trusted', () => {
+  it('a well-formed but WRONG key fails closed before any provider call, on submit', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const result = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+        // 64 hex characters, structurally indistinguishable from the
+        // real thing — and for a DIFFERENT task.
+        idempotencyKey: 'a'.repeat(64),
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('idempotency_key_mismatch')
+      }
+      // TEETH: an accepted wrong key would mint a brand-new provider job
+      // for speech that may already have been synthesized and paid for.
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a wrong key fails closed on poll too, without contacting the provider', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const result = await pollSpeech({
+        providerCode: 'MOCK_TTS',
+        providerOperationId: 'op-whatever',
+        requirement,
+        ...identity(jobId, manifest),
+        idempotencyKey: 'b'.repeat(64),
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('idempotency_key_mismatch')
+      }
+      expect(counters.polls).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a key for the RIGHT requirement but the WRONG job is still refused', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const result = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+        // Correctly DERIVED — just derived for somebody else's job.
+        idempotencyKey: computeAudioTaskIdempotencyKey({
+          generationJobId: jobId + 1,
+          manifestSha256: manifest.manifestSha256,
+          requirementId: requirement.requirementId!,
+        }),
+      })
+      expect(result.status).toBe('FAILED')
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('the executor computes the authoritative key when none is supplied (control)', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const result = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(result.status).toBe('SUBMITTED')
+      expect(captured[0].idempotencyKey).toBe(
+        computeAudioTaskIdempotencyKey({
+          generationJobId: jobId,
+          manifestSha256: manifest.manifestSha256,
+          requirementId: requirement.requirementId!,
+        }),
+      )
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 15 hardening item 3: task row identity is proved BEFORE provider spend
+// ----------------------------------------------------------------------------
+
+describe('red-team: a tampered task row never reaches a provider', () => {
+  /** Seeds the task row through one real cycle, tampers with it, then
+   * runs a second cycle whose dependencies must never be called. */
+  async function runAfterTamper(
+    label: string,
+    tamper: (jobId: number) => Promise<void>,
+  ) {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce(`${label}-seed`, clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    await tamper(jobId)
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    const outcome = await runAudioGenerationOnce(
+      `${label}-run`,
+      clock,
+      neverCalledDeps(spy),
+    )
+    return { jobId, outcome, spy, job: await jobRow(jobId) }
+  }
+
+  it('a tampered sceneId blocks BEFORE the provider call', async () => {
+    const { outcome, spy, job } = await runAfterTamper(
+      'rta-ident-scene',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ sceneId: 'NOT-THIS-SCENE' })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    // TEETH: refused at the identity gate — no submit, no poll, no
+    // spend — rather than discovered at finalization after the provider
+    // had already been paid.
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+    expect(job.lastErrorCode).toBe('AUDIO_TASK_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('task_scene_mismatch')
+  }, 240_000)
+
+  it('a tampered idempotencyKey blocks BEFORE the provider call', async () => {
+    const { outcome, spy, job } = await runAfterTamper(
+      'rta-ident-key',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ idempotencyKey: 'c'.repeat(64) })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+    expect(job.lastErrorCode).toBe('AUDIO_TASK_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('task_idempotency_mismatch')
+  }, 240_000)
+
+  it('a tampered requirementId blocks BEFORE the provider call', async () => {
+    const { outcome, spy, job } = await runAfterTamper(
+      'rta-ident-req',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ requirementId: 'not-a-manifest-requirement' })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    // A re-pointed requirement id is not found by the row lookup, so a
+    // FRESH row is inserted for the real requirement — and that insert
+    // collides with the tampered row's still-unique idempotency key.
+    // Either way the outcome is the same one that matters: nothing was
+    // submitted and the job did not advance.
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+  }, 240_000)
 })

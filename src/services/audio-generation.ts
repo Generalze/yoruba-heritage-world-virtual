@@ -86,6 +86,57 @@ export function computeAudioTaskIdempotencyKey(input: {
     .digest('hex')
 }
 
+/**
+ * The context every provider action is keyed on. `idempotencyKey` is
+ * OPTIONAL and, when present, is treated as a claim to be checked — not
+ * as authority. See resolveAuthoritativeIdempotencyKey.
+ */
+export interface SpeechTaskIdentity {
+  generationJobId: number
+  manifestSha256: string
+  /** What the caller BELIEVES the key is. Recomputed here and rejected
+   * on mismatch; omitting it is equally valid (and safer). */
+  idempotencyKey?: string
+}
+
+/**
+ * Derives the authoritative idempotency key and refuses any supplied
+ * value that disagrees with it.
+ *
+ * The key is what stops a second paid synthesis of the same speech, so
+ * it can never be whatever a caller passes in: a well-formed but WRONG
+ * 64-hex key would silently mint a brand-new provider job for text that
+ * has already been synthesized. It is therefore always recomputed from
+ * manifest authority (job + manifest hash + requirement id), and a
+ * mismatch fails CLOSED here — before any provider is contacted and
+ * before the sacred body is anywhere near this code path.
+ */
+function resolveAuthoritativeIdempotencyKey(
+  requirement: ManifestAudioRequirement,
+  input: SpeechTaskIdentity,
+): { ok: true; idempotencyKey: string } | { ok: false; reasonCode: string } {
+  const requirementId = requirement.requirementId
+  if (requirementId == null) {
+    return { ok: false, reasonCode: 'incomplete_audio_requirement' }
+  }
+  if (
+    !Number.isInteger(input.generationJobId) ||
+    input.generationJobId <= 0 ||
+    !SPEECH_HEX64.test(input.manifestSha256)
+  ) {
+    return { ok: false, reasonCode: 'idempotency_context_invalid' }
+  }
+  const computed = computeAudioTaskIdempotencyKey({
+    generationJobId: input.generationJobId,
+    manifestSha256: input.manifestSha256,
+    requirementId,
+  })
+  if (input.idempotencyKey != null && input.idempotencyKey !== computed) {
+    return { ok: false, reasonCode: 'idempotency_key_mismatch' }
+  }
+  return { ok: true, idempotencyKey: computed }
+}
+
 // --- Artifact rules ---------------------------------------------------------
 
 /** The mock emits exactly one type today; a future real provider adds
@@ -126,12 +177,16 @@ export type CompiledSpeechSynthesisRequest =
 const TTS_PERMITTED_VOICE_POLICY = 'APPROVED_TTS_ALLOWED'
 
 /**
- * Loads the sacred version WITH its body and its authoritative runtime
- * profile. Used ONLY on the TTS path, immediately before a submission,
- * after which the body either enters the in-memory request or is
- * discarded.
+ * STAGE ONE of the two-stage authority check: metadata ONLY, with the
+ * body column deliberately absent from the projection.
+ *
+ * "Never retrieve the sacred body unless synthesis is currently
+ * authorized" is enforced here by CONSTRUCTION — a forbidden or
+ * withdrawn requirement is refused without the body ever having been
+ * read out of the database — rather than by fetching it and choosing
+ * not to use it. Mirrors the Step 14 METADATA_ONLY discipline.
  */
-async function loadSacredSpeechSource(contentVersionId: number) {
+async function loadSacredSpeechAuthority(contentVersionId: number) {
   return (
     await getDb()
       .select({
@@ -140,7 +195,6 @@ async function loadSacredSpeechSource(contentVersionId: number) {
         itemActive: spiritualContentItems.active,
         versionStatus: spiritualContentVersions.status,
         versionLanguage: spiritualContentVersions.language,
-        versionBody: spiritualContentVersions.body,
         profileDigitalStorageAuthorized:
           sacredContentVersionProfiles.digitalStorageAuthorized,
         profileRightsStatus: sacredContentVersionProfiles.rightsStatus,
@@ -167,122 +221,232 @@ async function loadSacredSpeechSource(contentVersionId: number) {
 }
 
 /**
- * Re-verifies ONE TTS_PENDING requirement against CURRENT authority and
- * compiles the provider request in memory, IMMEDIATELY before the
- * submission it is built for.
+ * STAGE TWO: the approved body, fetched ONLY after stage one proved the
+ * synthesis is currently authorized. Selected on its own so the read is
+ * unmistakably a consequence of that proof.
+ */
+async function loadApprovedSpeechBody(
+  contentVersionId: number,
+): Promise<string | null> {
+  const row = (
+    await getDb()
+      .select({ body: spiritualContentVersions.body })
+      .from(spiritualContentVersions)
+      .where(eq(spiritualContentVersions.id, contentVersionId))
+      .limit(1)
+  ).at(0)
+  return row?.body ?? null
+}
+
+/** What stage one proved, carried forward so stage two never re-derives
+ * (or silently disagrees about) any of it. */
+export interface VerifiedTtsAuthority {
+  contentVersionId: number
+  requirementId: string
+  sceneId: string
+  language: string
+  contentSha256: string
+  targetDurationMs: number
+  /** The full metadata row, so the canonical eligibility formula can be
+   * re-run WITH the body once it is legitimately available. */
+  metadata: NonNullable<Awaited<ReturnType<typeof loadSacredSpeechAuthority>>>
+}
+
+export type TtsAuthorityVerification =
+  | { ok: true; authority: VerifiedTtsAuthority }
+  | { ok: false; reasonCode: string }
+
+/**
+ * Re-verifies ONE TTS_PENDING requirement against CURRENT authority
+ * WITHOUT retrieving the sacred body.
  *
  * Everything here is a re-proof, not a lookup of an earlier decision:
  * the manifest froze a plan, but a rights withdrawal, a runtime
- * disable, an edited body or a voice-policy change since then must all
- * stop the synthesis. In particular the voice policy is read from the
- * AUTHORITATIVE Step 8 sacred profile and must BOTH be
+ * disable, a re-published body or a voice-policy change since then must
+ * all stop the synthesis. In particular the voice policy is read from
+ * the AUTHORITATIVE Step 8 sacred profile and must BOTH be
  * APPROVED_TTS_ALLOWED right now AND still match what the manifest
  * snapshotted — a caller cannot downgrade HUMAN_RECORDED_REQUIRED or
  * TEXT_ONLY into a synthesis, and a policy that changed under a frozen
  * plan fails closed rather than proceeding on the stale value.
  *
- * The approved body is retrieved only after every one of those checks
- * passes, is placed verbatim into the in-memory request, and is never
- * rewritten, translated, summarized or extended.
+ * This is the ONLY authority check polling needs: a poll continues an
+ * operation that already exists and must never compile, resend or
+ * rewrite text.
  */
-export async function compileSpeechSynthesisRequest(
+export async function verifyTtsAuthority(
   requirement: ManifestAudioRequirement,
-  idempotencyKey: string,
-): Promise<CompiledSpeechSynthesisRequest> {
+): Promise<TtsAuthorityVerification> {
   // `requirement` ultimately traces back to JSON.parse of a persisted
   // manifest row, asserted to its type with NO field-by-field runtime
   // validation at that boundary — a tampered row with a recomputed
   // checksum can carry any shape here regardless of what the static
   // type claims. These are this function's own trust-boundary guards.
   if (requirement.mode !== 'TTS_PENDING') {
-    return { status: 'FAILED', reasonCode: 'not_a_tts_requirement' }
+    return { ok: false, reasonCode: 'not_a_tts_requirement' }
   }
   const contentVersionId = requirement.contentVersionId
+  const requirementId = requirement.requirementId
   if (
     contentVersionId == null ||
     requirement.contentSha256 == null ||
     requirement.language == null ||
     requirement.voicePolicy == null ||
-    requirement.requirementId == null
+    requirementId == null
   ) {
-    return { status: 'FAILED', reasonCode: 'incomplete_audio_requirement' }
+    return { ok: false, reasonCode: 'incomplete_audio_requirement' }
   }
   // The SNAPSHOTTED policy must itself be the permitted one — a
   // requirement that was never TTS-authorized is never synthesized,
   // whatever the row says today.
   if (requirement.voicePolicy !== TTS_PERMITTED_VOICE_POLICY) {
-    return { status: 'FAILED', reasonCode: 'voice_policy_forbids_tts' }
+    return { ok: false, reasonCode: 'voice_policy_forbids_tts' }
   }
 
-  const row = await loadSacredSpeechSource(contentVersionId)
-  if (!row) return { status: 'FAILED', reasonCode: 'sacred_content_missing' }
+  const row = await loadSacredSpeechAuthority(contentVersionId)
+  if (!row) return { ok: false, reasonCode: 'sacred_content_missing' }
   if (
     row.itemContentDomain !== 'SACRED_RUNTIME' ||
     !(SACRED_RUNTIME_CONTENT_TYPES as ReadonlyArray<string>).includes(
       row.itemContentType,
     )
   ) {
-    return { status: 'FAILED', reasonCode: 'wrong_content_domain' }
+    return { ok: false, reasonCode: 'wrong_content_domain' }
   }
-  // The canonical Step 8 formula, including its body-vs-hash integrity
-  // check — never a second, looser re-implementation here.
+  // CURRENT authoritative voice policy — the decisive check, and the
+  // one that must come before any thought of reading the body.
+  if (row.profileVoicePolicy !== TTS_PERMITTED_VOICE_POLICY) {
+    return { ok: false, reasonCode: 'voice_policy_forbids_tts' }
+  }
+  // Every metadata gate of the canonical Step 8 formula. The remaining
+  // gate — body vs. hash — is re-run in compileSpeechSynthesisRequest
+  // once the body may legitimately be read; it is never skipped, only
+  // deferred to the point where it is checkable.
+  const failures: Array<string> = []
+  if (!row.itemActive) failures.push('item_inactive')
+  if (row.versionStatus !== 'PUBLISHED') failures.push('not_published')
+  if (
+    !(GUIDANCE_LANGUAGES as ReadonlyArray<string>).includes(row.versionLanguage)
+  ) {
+    failures.push('unsupported_language')
+  }
+  if (row.profileRightsStatus == null) {
+    failures.push('profile_missing')
+  } else {
+    if (!row.profileDigitalStorageAuthorized) {
+      failures.push('storage_not_authorized')
+    }
+    if (row.profileRightsStatus !== 'CLEARED') failures.push('rights_not_cleared')
+    if (row.profileAccessPolicy !== 'PRAYER_ROOM_PRIVATE') {
+      failures.push('access_policy_not_prayer_room_private')
+    }
+    if (!row.profileRuntimeEnabled) failures.push('runtime_not_enabled')
+    if (!row.profileContentSha256) failures.push('hash_missing')
+  }
+  if (failures.length > 0) {
+    return { ok: false, reasonCode: 'sacred_content_ineligible' }
+  }
+  if (row.profileContentSha256 !== requirement.contentSha256) {
+    return { ok: false, reasonCode: 'sacred_content_hash_changed' }
+  }
+  // Speak the approved body in ITS OWN language — never a translation.
+  if (row.versionLanguage !== requirement.language) {
+    return { ok: false, reasonCode: 'language_changed' }
+  }
+
+  const targetDurationMs = requirement.endMs - requirement.startMs
+  if (targetDurationMs <= 0 || targetDurationMs > MAX_SPEECH_MS) {
+    return { ok: false, reasonCode: 'audio_window_invalid' }
+  }
+
+  return {
+    ok: true,
+    authority: {
+      contentVersionId,
+      requirementId,
+      sceneId: requirement.sceneId,
+      language: row.versionLanguage,
+      contentSha256: requirement.contentSha256,
+      targetDurationMs,
+      metadata: row,
+    },
+  }
+}
+
+/**
+ * Compiles the in-memory submission request — the ONLY path on which
+ * the sacred body is ever retrieved.
+ *
+ * Order matters and is the point of this function: `verifyTtsAuthority`
+ * proves synthesis is currently authorized using metadata alone, and
+ * only then is the body fetched. It is then re-validated against the
+ * AUTHORITATIVE content hash through the canonical Step 8 formula (the
+ * body-vs-hash gate deferred from stage one) before being placed
+ * verbatim into the request — never rewritten, translated, summarized
+ * or extended.
+ *
+ * The body is never returned to the caller, never persisted, never
+ * logged: it exists only inside the request handed to the provider for
+ * this one submission.
+ */
+export async function compileSpeechSynthesisRequest(
+  requirement: ManifestAudioRequirement,
+  input: SpeechTaskIdentity,
+): Promise<CompiledSpeechSynthesisRequest> {
+  const key = resolveAuthoritativeIdempotencyKey(requirement, input)
+  if (!key.ok) return { status: 'FAILED', reasonCode: key.reasonCode }
+  const verified = await verifyTtsAuthority(requirement)
+  if (!verified.ok) {
+    return { status: 'FAILED', reasonCode: verified.reasonCode }
+  }
+  const authority = verified.authority
+
+  // AUTHORIZED — and only now — retrieve the approved body.
+  const body = await loadApprovedSpeechBody(authority.contentVersionId)
+  if (body == null) {
+    return { status: 'FAILED', reasonCode: 'sacred_content_missing' }
+  }
+  // The canonical Step 8 formula, now WITH the body, so its
+  // body-vs-hash integrity check runs against exactly the text that is
+  // about to be spoken — never a second, looser re-implementation.
   const evaluated = isSacredVersionRuntimeEligible({
     item: {
-      contentDomain: row.itemContentDomain,
-      contentType: row.itemContentType,
-      active: row.itemActive,
+      contentDomain: authority.metadata.itemContentDomain,
+      contentType: authority.metadata.itemContentType,
+      active: authority.metadata.itemActive,
     },
     version: {
-      status: row.versionStatus,
-      language: row.versionLanguage,
-      body: row.versionBody,
+      status: authority.metadata.versionStatus,
+      language: authority.metadata.versionLanguage,
+      body,
     },
     profile:
-      row.profileRightsStatus == null
+      authority.metadata.profileRightsStatus == null
         ? null
         : {
             digitalStorageAuthorized:
-              row.profileDigitalStorageAuthorized ?? false,
-            rightsStatus: row.profileRightsStatus,
-            accessPolicy: row.profileAccessPolicy ?? '',
-            runtimeEnabled: row.profileRuntimeEnabled ?? false,
-            contentSha256: row.profileContentSha256,
+              authority.metadata.profileDigitalStorageAuthorized ?? false,
+            rightsStatus: authority.metadata.profileRightsStatus,
+            accessPolicy: authority.metadata.profileAccessPolicy ?? '',
+            runtimeEnabled: authority.metadata.profileRuntimeEnabled ?? false,
+            contentSha256: authority.metadata.profileContentSha256,
           },
   })
   if (!evaluated.eligible) {
     return { status: 'FAILED', reasonCode: 'sacred_content_ineligible' }
   }
-  // CURRENT authoritative voice policy — the decisive check.
-  if (row.profileVoicePolicy !== TTS_PERMITTED_VOICE_POLICY) {
-    return { status: 'FAILED', reasonCode: 'voice_policy_forbids_tts' }
-  }
-  if (row.profileContentSha256 !== requirement.contentSha256) {
-    return { status: 'FAILED', reasonCode: 'sacred_content_hash_changed' }
-  }
-  // Speak the approved body in ITS OWN language — never a translation.
-  if (
-    row.versionLanguage !== requirement.language ||
-    !(GUIDANCE_LANGUAGES as ReadonlyArray<string>).includes(row.versionLanguage)
-  ) {
-    return { status: 'FAILED', reasonCode: 'language_changed' }
-  }
-
-  const targetDurationMs = requirement.endMs - requirement.startMs
-  if (targetDurationMs <= 0 || targetDurationMs > MAX_SPEECH_MS) {
-    return { status: 'FAILED', reasonCode: 'audio_window_invalid' }
-  }
 
   return {
     status: 'OK',
     request: {
-      idempotencyKey,
-      requirementId: requirement.requirementId,
-      sceneId: requirement.sceneId,
+      idempotencyKey: key.idempotencyKey,
+      requirementId: authority.requirementId,
+      sceneId: authority.sceneId,
       // EXACT approved text — verbatim, nothing added, nothing removed.
-      approvedText: row.versionBody,
-      language: row.versionLanguage,
+      approvedText: body,
+      language: authority.language,
       voicePolicy: TTS_PERMITTED_VOICE_POLICY,
-      targetDurationMs,
+      targetDurationMs: authority.targetDurationMs,
     },
   }
 }
@@ -392,7 +556,6 @@ export async function verifyExistingHumanAudio(
 
 async function verifyAndStoreSpeechArtifact(
   artifact: SpeechArtifact,
-  targetDurationMs: number,
 ): Promise<
   | {
       ok: true
@@ -425,7 +588,6 @@ async function verifyAndStoreSpeechArtifact(
   if (artifact.durationMs <= 0 || artifact.durationMs > MAX_SPEECH_MS) {
     return { ok: false, reasonCode: 'artifact_duration_bound' }
   }
-  void targetDurationMs
   // Fresh server-side hash from the exact bytes — a provider-reported
   // hash is never part of this contract and would never be trusted if
   // it were, mirroring MediaStorageProvider's own discipline.
@@ -537,23 +699,20 @@ function reasonToErrorCode(
  * Submits ONE TTS requirement. Called by `runAudioGenerationOnce` at
  * most once per PENDING row (a task that already SUCCEEDED never comes
  * back through here) — but is itself idempotent regardless, since the
- * provider is keyed on the requirement's idempotency key and a
+ * provider is keyed on the AUTHORITATIVE idempotency key and a
  * re-submission of the SAME request is a no-op at the provider layer,
  * never a second paid synthesis.
  *
- * The approved body exists only for the duration of this call: it is
- * compiled into the request immediately before the provider call and is
- * never returned, persisted or logged.
+ * The key is recomputed here from manifest authority, never taken on
+ * trust from the caller, and the approved body exists only for the
+ * duration of this call: it is compiled into the request immediately
+ * before the provider call and is never returned, persisted or logged.
  */
-export async function submitSpeech(input: {
-  requirement: ManifestAudioRequirement
-  idempotencyKey: string
-}): Promise<AudioTaskSubmissionResult> {
+export async function submitSpeech(
+  input: SpeechTaskIdentity & { requirement: ManifestAudioRequirement },
+): Promise<AudioTaskSubmissionResult> {
   const provider = getTtsProvider()
-  const compiled = await compileSpeechSynthesisRequest(
-    input.requirement,
-    input.idempotencyKey,
-  )
+  const compiled = await compileSpeechSynthesisRequest(input.requirement, input)
   if (compiled.status !== 'OK') {
     return {
       status: 'FAILED',
@@ -591,14 +750,18 @@ export async function submitSpeech(input: {
 }
 
 /**
- * Polls ONE in-flight synthesis. Re-runs the SAME authority
- * re-verification as `submitSpeech` before ever calling the provider —
- * a task can sit SUBMITTED/PROCESSING across many worker cycles, and
- * authority (a rights change, a runtime disable, an edited body, a
- * voice-policy change) can shift in that window; a result whose
- * authority has since been withdrawn is never accepted. Holds no DB
- * transaction and persists nothing itself — the caller writes the
- * result in a separate, subsequent write.
+ * Polls ONE in-flight synthesis.
+ *
+ * Polling CONTINUES an operation that already exists. It therefore does
+ * NOT compile a submission request and never retrieves, resends or
+ * rewrites the approved text — the provider already holds whatever it
+ * was given at submission. What it does re-run is the SAME
+ * current-authority verification (`verifyTtsAuthority`, metadata only),
+ * because a task can sit SUBMITTED/PROCESSING across many worker cycles
+ * and a rights change, runtime disable, re-published body or
+ * voice-policy change in that window must stop the result being
+ * accepted. Holds no DB transaction and persists nothing itself — the
+ * caller writes the result in a separate, subsequent write.
  *
  * `providerOperationId` is opaque and only meaningful to the provider
  * that ISSUED it, so the provider is resolved by the `providerCode`
@@ -608,12 +771,13 @@ export async function submitSpeech(input: {
  * ever return someone else's recording, and accepting that as the voice
  * of approved sacred text would be far worse than retrying.
  */
-export async function pollSpeech(input: {
-  providerCode: string
-  providerOperationId: string
-  requirement: ManifestAudioRequirement
-  idempotencyKey: string
-}): Promise<AudioTaskPollResult> {
+export async function pollSpeech(
+  input: SpeechTaskIdentity & {
+    providerCode: string
+    providerOperationId: string
+    requirement: ManifestAudioRequirement
+  },
+): Promise<AudioTaskPollResult> {
   const provider = resolveTtsProvider(input.providerCode)
   if (!provider) {
     return {
@@ -622,14 +786,18 @@ export async function pollSpeech(input: {
       errorMessage: null,
     }
   }
-  const compiled = await compileSpeechSynthesisRequest(
-    input.requirement,
-    input.idempotencyKey,
-  )
-  if (compiled.status !== 'OK') {
+  // The key is not used to poll (the operation id is), but a caller
+  // whose key disagrees with manifest authority is a caller acting on a
+  // task identity we cannot vouch for — refuse before spending.
+  const key = resolveAuthoritativeIdempotencyKey(input.requirement, input)
+  if (!key.ok) {
+    return { status: 'FAILED', errorCode: key.reasonCode, errorMessage: null }
+  }
+  const verified = await verifyTtsAuthority(input.requirement)
+  if (!verified.ok) {
     return {
       status: 'FAILED',
-      errorCode: reasonToErrorCode(compiled),
+      errorCode: verified.reasonCode,
       errorMessage: null,
     }
   }
@@ -643,23 +811,20 @@ export async function pollSpeech(input: {
         errorMessage: null,
       }
     }
-    const verified = await verifyAndStoreSpeechArtifact(
-      poll.artifact,
-      compiled.request.targetDurationMs,
-    )
-    if (!verified.ok) {
+    const verifiedArtifact = await verifyAndStoreSpeechArtifact(poll.artifact)
+    if (!verifiedArtifact.ok) {
       return {
         status: 'FAILED',
-        errorCode: verified.reasonCode,
+        errorCode: verifiedArtifact.reasonCode,
         errorMessage: null,
       }
     }
     return {
       status: 'SUCCEEDED',
-      artifactSha256: verified.fileSha256,
-      artifactMimeType: verified.mimeType,
-      artifactDurationMs: verified.durationMs,
-      artifactStorageRef: verified.storageKey,
+      artifactSha256: verifiedArtifact.fileSha256,
+      artifactMimeType: verifiedArtifact.mimeType,
+      artifactDurationMs: verifiedArtifact.durationMs,
+      artifactStorageRef: verifiedArtifact.storageKey,
     }
   } catch (error) {
     if (error instanceof TtsProviderError) {
