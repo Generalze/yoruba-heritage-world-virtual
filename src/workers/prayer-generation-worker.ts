@@ -9,6 +9,7 @@ import {
   systemGenerationClock,
 } from '@/services/generation-jobs'
 import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
+import { runRenderOnce } from '@/services/render-assembly'
 
 /**
  * DB-backed prayer generation worker (Phase One, Step 12).
@@ -118,11 +119,21 @@ async function main(): Promise<void> {
           `[${WORKER_ID}] audio generation job ${'jobId' in audio ? audio.jobId : '?'} → ${audio.status}`,
         )
       }
+      // Step 16: assembles a verified LOCAL artifact through the
+      // engine-neutral RenderEngine boundary (deterministic mock only
+      // at this stage). Uploads nothing.
+      const render = await runRenderOnce(WORKER_ID, systemGenerationClock)
+      if (render.status !== 'IDLE') {
+        console.log(
+          `[${WORKER_ID}] render job ${'jobId' in render ? render.jobId : '?'} → ${render.status}`,
+        )
+      }
       if (
         preparation.status === 'IDLE' &&
         storyboard.status === 'IDLE' &&
         visuals.status === 'IDLE' &&
-        audio.status === 'IDLE'
+        audio.status === 'IDLE' &&
+        render.status === 'IDLE'
       ) {
         await sleep(IDLE_SLEEP_MS)
       }

@@ -99,6 +99,13 @@
       "when": 1786343266731,
       "tag": "0013_audio_generation_tasks",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1786348187309,
+      "tag": "0014_render_assembly",
+      "breakpoints": true
     }
   ]
 }
