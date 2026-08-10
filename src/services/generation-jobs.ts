@@ -487,6 +487,23 @@ export async function claimNextRenderJob(
   )
 }
 
+/** UPLOAD stage claim (Step 17): a job parked in UPLOADING, or a
+ * RETRYING job whose resume stage is UPLOADING. Claimed from its own
+ * queue so continuous earlier-stage work cannot starve it, matching
+ * every other stage claim exactly. */
+export async function claimNextUploadJob(
+  workerId: string,
+  clock: GenerationClock,
+  leaseMs: number = DEFAULT_LEASE_MS,
+): Promise<ClaimedJob | null> {
+  return claimDueJob(workerId, clock, leaseMs, (jobs) =>
+    or(
+      eq(jobs.status, 'UPLOADING'),
+      and(eq(jobs.status, 'RETRYING'), eq(jobs.resumeStatus, 'UPLOADING')),
+    ),
+  )
+}
+
 /**
  * Renews a live lease. LOCK-WAIT SAFETY: the authoritative clock
  * reading is taken AFTER the job row lock is acquired, so time spent

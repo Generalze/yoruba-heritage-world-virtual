@@ -1229,6 +1229,213 @@ async function ensureRenderResultRow(
   return row
 }
 
+/** Everything a downstream stage needs about a completed render, and
+ * nothing it does not: identities, the immutable plan, and the result
+ * row. No bytes, no signed URLs, no provider payloads. */
+export interface VerifiedCompletedRender {
+  manifestSnapshotId: number
+  planSnapshotId: number
+  plan: RenderPlan
+  result: typeof prayerGenerationRenderResults.$inferSelect
+}
+
+export type CompletedRenderVerification =
+  | { ok: true; verified: VerifiedCompletedRender }
+  | { ok: false; errorCode: string; detail: string | null }
+
+/**
+ * THE completed-render proof, in one place.
+ *
+ * This is what Step 16's own final gate runs before RENDERING →
+ * UPLOADING, and it is the SAME function Step 17 re-runs before it
+ * uploads anything — deliberately shared rather than reimplemented,
+ * because a second, slightly-weaker copy of a governance check is how
+ * two stages come to disagree about what "verified" means.
+ *
+ * Proves, against CURRENT authority:
+ * - the manifest still validates;
+ * - the persisted render plan still passes its own integrity check AND
+ *   is still the plan current authority produces (rebuilt and compared
+ *   by hash, which also re-verifies every visual/audio source);
+ * - the render result belongs to exactly this job, manifest snapshot,
+ *   plan snapshot, plan hash and idempotency key;
+ * - it SUCCEEDED, and its stored local artifact still exists with
+ *   matching bytes, hash, mime and duration; and
+ * - the renderer that produced it is still resolvable and still
+ *   permitted in this environment (so a mock artifact can never be
+ *   walked forward in production).
+ *
+ * `expected` lets a caller that already holds in-cycle identities
+ * cross-check them, catching a snapshot that moved underneath it.
+ */
+export async function verifyCompletedRender(
+  generationJobId: number,
+  context: RenderContext,
+  expected: {
+    manifestSnapshotId?: number
+    planSnapshotId?: number
+    renderResultId?: number
+  } = {},
+): Promise<CompletedRenderVerification> {
+  const revalidated = await loadAndValidateGenerationManifest(generationJobId)
+  if (revalidated.status !== 'VALID') {
+    return {
+      ok: false,
+      errorCode: 'MANIFEST_INVALID_AT_COMPLETION',
+      detail:
+        revalidated.status === 'INVALID'
+          ? revalidated.reasons.join(', ').slice(0, 500)
+          : revalidated.status,
+    }
+  }
+  const manifestRow = await loadGenerationManifestSnapshot(generationJobId)
+  if (manifestRow.status !== 'OK') {
+    return { ok: false, errorCode: 'MANIFEST_UNREADABLE', detail: null }
+  }
+  const manifestSnapshotId = manifestRow.snapshotId
+  if (
+    expected.manifestSnapshotId != null &&
+    expected.manifestSnapshotId !== manifestSnapshotId
+  ) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_PLAN_STALE',
+      detail: 'manifest_snapshot_moved',
+    }
+  }
+
+  const loadedPlan = await loadRenderPlanSnapshot(generationJobId)
+  if (loadedPlan.status !== 'OK') {
+    return {
+      ok: false,
+      errorCode: 'RENDER_PLAN_UNREADABLE',
+      detail: loadedPlan.status,
+    }
+  }
+  const rebuilt = await buildValidatedRenderPlan(
+    generationJobId,
+    manifestSnapshotId,
+    revalidated.storyboard,
+    revalidated.manifest,
+    context,
+  )
+  if (!rebuilt.ok) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_SOURCE_INVALID',
+      detail: rebuilt.reasonCode,
+    }
+  }
+  if (
+    rebuilt.plan.renderPlanSha256 !== loadedPlan.plan.renderPlanSha256 ||
+    loadedPlan.manifestSnapshotId !== manifestSnapshotId ||
+    (expected.planSnapshotId != null &&
+      expected.planSnapshotId !== loadedPlan.snapshotId)
+  ) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_PLAN_STALE',
+      detail: 'plan_no_longer_current',
+    }
+  }
+
+  const result = (
+    await getDb()
+      .select()
+      .from(prayerGenerationRenderResults)
+      .where(
+        and(
+          eq(prayerGenerationRenderResults.generationJobId, generationJobId),
+          eq(
+            prayerGenerationRenderResults.manifestSnapshotId,
+            manifestSnapshotId,
+          ),
+          eq(
+            prayerGenerationRenderResults.renderPlanSnapshotId,
+            loadedPlan.snapshotId,
+          ),
+        ),
+      )
+      .limit(1)
+  ).at(0)
+  if (!result) {
+    return { ok: false, errorCode: 'RENDER_RESULT_MISSING', detail: null }
+  }
+  if (
+    (expected.renderResultId != null && expected.renderResultId !== result.id) ||
+    result.generationJobId !== generationJobId ||
+    result.manifestSnapshotId !== manifestSnapshotId ||
+    result.renderPlanSnapshotId !== loadedPlan.snapshotId ||
+    result.renderPlanSha256 !== loadedPlan.plan.renderPlanSha256 ||
+    result.idempotencyKey !==
+      computeRenderIdempotencyKey({
+        generationJobId,
+        manifestSha256: loadedPlan.plan.manifestSha256,
+        renderPlanSha256: loadedPlan.plan.renderPlanSha256,
+      })
+  ) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_RESULT_IDENTITY_MISMATCH',
+      detail: null,
+    }
+  }
+  if (result.status !== 'SUCCEEDED') {
+    return {
+      ok: false,
+      errorCode: 'RENDER_RESULT_NOT_SUCCEEDED',
+      detail: result.status,
+    }
+  }
+  const artifact = await verifyStoredRenderArtifact(result)
+  if (!artifact.ok) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_ARTIFACT_INVALID',
+      detail: artifact.reasonCode,
+    }
+  }
+  if (result.artifactDurationMs !== loadedPlan.plan.totalDurationMs) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_ARTIFACT_INVALID',
+      detail: 'artifact_duration_mismatch',
+    }
+  }
+  if (result.artifactMimeType !== loadedPlan.plan.outputMimeType) {
+    return {
+      ok: false,
+      errorCode: 'RENDER_ARTIFACT_INVALID',
+      detail: 'artifact_mime_mismatch',
+    }
+  }
+  const producingEngine = resolveRenderEngine(result.rendererCode)
+  if (!producingEngine) {
+    return {
+      ok: false,
+      errorCode: 'RENDERER_NOT_PERMITTED',
+      detail: 'renderer_code_mismatch',
+    }
+  }
+  const stillAllowed = checkRenderEngineAllowed(producingEngine)
+  if (!stillAllowed.ok) {
+    return {
+      ok: false,
+      errorCode: 'RENDERER_NOT_PERMITTED',
+      detail: stillAllowed.reasonCode,
+    }
+  }
+  return {
+    ok: true,
+    verified: {
+      manifestSnapshotId,
+      planSnapshotId: loadedPlan.snapshotId,
+      plan: loadedPlan.plan,
+      result,
+    },
+  }
+}
+
 // --- Execution --------------------------------------------------------------
 
 export type RenderOutcome =
@@ -1522,86 +1729,14 @@ export async function runRenderOnce(
     // Never trust the checks from earlier in this same cycle.
     if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
 
-    const revalidated = await loadAndValidateGenerationManifest(job.id)
-    if (revalidated.status !== 'VALID') {
-      return fail(
-        'MANIFEST_INVALID_AT_COMPLETION',
-        revalidated.status === 'INVALID'
-          ? revalidated.reasons.join(', ').slice(0, 500)
-          : revalidated.status,
-      )
-    }
-    // The persisted plan must still hash correctly AND still be the
-    // plan CURRENT authority produces — a plan that no longer matches
-    // the storyboard/manifest is not a plan for this video.
-    const loadedPlan = await loadRenderPlanSnapshot(job.id)
-    if (loadedPlan.status !== 'OK') {
-      return fail('RENDER_PLAN_UNREADABLE', loadedPlan.status)
-    }
-    const rebuilt = await buildValidatedRenderPlan(
-      job.id,
+    // ONE shared proof, run again from scratch — the same function
+    // Step 17 re-runs before it uploads anything.
+    const verified = await verifyCompletedRender(job.id, context, {
       manifestSnapshotId,
-      revalidated.storyboard,
-      revalidated.manifest,
-      context,
-    )
-    if (!rebuilt.ok) return fail('RENDER_SOURCE_INVALID', rebuilt.reasonCode)
-    if (
-      rebuilt.plan.renderPlanSha256 !== loadedPlan.plan.renderPlanSha256 ||
-      loadedPlan.snapshotId !== planSnapshot.snapshotId ||
-      loadedPlan.manifestSnapshotId !== manifestSnapshotId
-    ) {
-      return fail('RENDER_PLAN_STALE', 'plan_no_longer_current')
-    }
-
-    const finalRow = (
-      await getDb()
-        .select()
-        .from(prayerGenerationRenderResults)
-        .where(eq(prayerGenerationRenderResults.id, row.id))
-        .limit(1)
-    ).at(0)
-    if (!finalRow) return fail('RENDER_RESULT_MISSING', null)
-    if (
-      finalRow.generationJobId !== job.id ||
-      finalRow.manifestSnapshotId !== manifestSnapshotId ||
-      finalRow.renderPlanSnapshotId !== planSnapshot.snapshotId ||
-      finalRow.renderPlanSha256 !== loadedPlan.plan.renderPlanSha256 ||
-      finalRow.idempotencyKey !==
-        computeRenderIdempotencyKey({
-          generationJobId: job.id,
-          manifestSha256: loadedPlan.plan.manifestSha256,
-          renderPlanSha256: loadedPlan.plan.renderPlanSha256,
-        })
-    ) {
-      return fail('RENDER_RESULT_IDENTITY_MISMATCH', null)
-    }
-    if (finalRow.status !== 'SUCCEEDED') {
-      return fail('RENDER_RESULT_NOT_SUCCEEDED', finalRow.status)
-    }
-    const artifact = await verifyStoredRenderArtifact(finalRow)
-    if (!artifact.ok) {
-      return fail('RENDER_ARTIFACT_INVALID', artifact.reasonCode)
-    }
-    if (finalRow.artifactDurationMs !== loadedPlan.plan.totalDurationMs) {
-      return fail('RENDER_ARTIFACT_INVALID', 'artifact_duration_mismatch')
-    }
-    // Re-proved here as well as at acceptance: a row edited in between
-    // must not be able to walk a different container forward.
-    if (finalRow.artifactMimeType !== loadedPlan.plan.outputMimeType) {
-      return fail('RENDER_ARTIFACT_INVALID', 'artifact_mime_mismatch')
-    }
-    // The engine that produced this result must still be resolvable and
-    // still permitted HERE — a mock artifact can never be walked
-    // forward in production, whichever engine happens to be active now.
-    const producingEngine = resolveRenderEngine(finalRow.rendererCode)
-    if (!producingEngine) {
-      return fail('RENDERER_NOT_PERMITTED', 'renderer_code_mismatch')
-    }
-    const stillAllowed = checkRenderEngineAllowed(producingEngine)
-    if (!stillAllowed.ok) {
-      return fail('RENDERER_NOT_PERMITTED', stillAllowed.reasonCode)
-    }
+      planSnapshotId: planSnapshot.snapshotId,
+      renderResultId: row.id,
+    })
+    if (!verified.ok) return fail(verified.errorCode, verified.detail)
 
     if (!isLegalTransition('RENDERING', 'UPLOADING')) {
       throw new GenerationJobError('Illegal transition RENDERING → UPLOADING.')

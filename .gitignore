@@ -39,3 +39,7 @@ db-data/
 # --- Private media storage (Step 10) ---
 # Uploaded media binaries are NEVER committed.
 var/media/
+
+# --- Private object storage (Step 17) ---
+# Uploaded render objects are NEVER committed.
+var/objects/

@@ -10,6 +10,7 @@ import {
 } from '@/services/generation-jobs'
 import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 import { runRenderOnce } from '@/services/render-assembly'
+import { runUploadOnce } from '@/services/render-upload'
 
 /**
  * DB-backed prayer generation worker (Phase One, Step 12).
@@ -128,12 +129,22 @@ async function main(): Promise<void> {
           `[${WORKER_ID}] render job ${'jobId' in render ? render.jobId : '?'} → ${render.status}`,
         )
       }
+      // Step 17: uploads the verified local artifact to PRIVATE object
+      // storage (deterministic local adapter only at this stage) and
+      // re-proves it remotely before READY.
+      const upload = await runUploadOnce(WORKER_ID, systemGenerationClock)
+      if (upload.status !== 'IDLE') {
+        console.log(
+          `[${WORKER_ID}] upload job ${'jobId' in upload ? upload.jobId : '?'} → ${upload.status}`,
+        )
+      }
       if (
         preparation.status === 'IDLE' &&
         storyboard.status === 'IDLE' &&
         visuals.status === 'IDLE' &&
         audio.status === 'IDLE' &&
-        render.status === 'IDLE'
+        render.status === 'IDLE' &&
+        upload.status === 'IDLE'
       ) {
         await sleep(IDLE_SLEEP_MS)
       }
