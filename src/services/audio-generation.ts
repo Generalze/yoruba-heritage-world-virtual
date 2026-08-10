@@ -712,6 +712,21 @@ export async function submitSpeech(
   input: SpeechTaskIdentity & { requirement: ManifestAudioRequirement },
 ): Promise<AudioTaskSubmissionResult> {
   const provider = getTtsProvider()
+  // A DISABLED adapter is refused HERE — before compilation, and
+  // therefore before the approved body is read at all. Step 15's rule
+  // is that the sacred body is retrieved only when synthesis is
+  // currently authorized; a deployment with no speech backend is a
+  // deployment where it never is. The refusal is a recorded task
+  // failure, never a silent skip: a TTS requirement that goes
+  // unsatisfied must stop the recording, not quietly vanish from it.
+  if (!provider.isEnabled()) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'tts_unavailable',
+      errorMessage: null,
+    }
+  }
   const compiled = await compileSpeechSynthesisRequest(input.requirement, input)
   if (compiled.status !== 'OK') {
     return {

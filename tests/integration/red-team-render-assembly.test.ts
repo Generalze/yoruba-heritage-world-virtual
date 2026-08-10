@@ -1828,7 +1828,13 @@ describe('red-team: no real compositor, network or upload anywhere in Step 16', 
     }
   })
 
-  it('no Remotion package is installed or depended on at this stage', () => {
+  it('Remotion is present, version-locked, and never the default engine', async () => {
+    // Through Step 19 this asserted that NO Remotion package existed,
+    // which was right while the compositor was a documented boundary.
+    // Step 20 is the step that legitimately lands it. The fence is not
+    // deleted — it now enforces the two conditions the original comment
+    // named as the price of admission: ONE compatible version across
+    // every @remotion/* package, and OPT-IN selection only.
     const pkg = JSON.parse(
       readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
     ) as {
@@ -1839,15 +1845,23 @@ describe('red-team: no real compositor, network or upload anywhere in Step 16', 
       ...(pkg.dependencies ?? {}),
       ...(pkg.devDependencies ?? {}),
     }
-    const remotion = Object.keys(all).filter((name) =>
-      /^@?remotion/.test(name),
+    const remotion = Object.keys(all)
+      .filter((name) => /^@?remotion/.test(name))
+      .sort()
+    expect(remotion).toEqual(['@remotion/bundler', '@remotion/renderer', 'remotion'])
+    expect(new Set(remotion.map((name) => all[name])).size).toBe(1)
+
+    // OPT-IN: the mock is still what the registry selects unless
+    // RENDER_DRIVER says otherwise, and this suite — like all automated
+    // verification — runs on the mock.
+    const registry = readFileSync(
+      join(process.cwd(), 'src/providers/render/registry.ts'),
+      'utf8',
     )
-    // If a Remotion adapter is ever added it must be opt-in and every
-    // @remotion/* package must share one compatible version — this test
-    // is the reminder, and the version check, in one place.
-    const versions = new Set(remotion.map((name) => all[name]))
-    expect(versions.size).toBeLessThanOrEqual(1)
-    expect(remotion.length).toBe(0)
+    expect(registry).toContain("case 'REMOTION':")
+    expect(registry).toContain("case 'MOCK':")
+    const { getRenderEngine } = await import('@/providers/render/registry')
+    expect(getRenderEngine().isMock).toBe(true)
   })
 
   it('the plan contains only identities, hashes and timings — no presentation invented', async () => {

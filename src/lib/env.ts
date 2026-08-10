@@ -29,7 +29,63 @@ const currencyList = z
       .filter((code) => /^[A-Z]{3}$/.test(code)),
   )
 
-export const envSchema = z
+/**
+ * Variables for which PRESENT BUT EMPTY means NOT SET.
+ *
+ * Docker Compose materialises every referenced variable, so an unset
+ * `TRUST_PROXY` arrives in the container as `""` rather than as absent.
+ * For a switch or an enum that is meaningless: `""` is not `false` and
+ * not a driver name, and parsing it as a VALUE produces a type error
+ * instead of the preflight's clear, actionable message.
+ *
+ * The list is EXPLICIT rather than a blanket rule, because for other
+ * variables an empty string is genuinely meaningful and must keep
+ * failing validation. `DATABASE_NAME=""` is a misconfiguration, not an
+ * omission, and `PAYSTACK_SECRET_KEY=""` is exactly what the
+ * enabled-without-credentials check exists to catch — stripping either
+ * would turn a caught error into a silent default.
+ */
+const EMPTY_MEANS_UNSET: ReadonlySet<string> = new Set([
+  'NODE_ENV',
+  'APP_PORT',
+  'APP_BASE_URL',
+  'TRUST_PROXY',
+  'DATABASE_PORT',
+  'PAYMENTS_ENABLED',
+  'PAYSTACK_ENABLED',
+  'PAYPAL_ENABLED',
+  'PAYPAL_ENV',
+  'STRIPE_ENABLED',
+  'CRYPTO_ENABLED',
+  'CRYPTO_PROVIDER',
+  'OBJECT_STORAGE_DRIVER',
+  'OBJECT_STORAGE_FORCE_PATH_STYLE',
+  'RENDER_DRIVER',
+  'VISUAL_GENERATION_DRIVER',
+  'TTS_DRIVER',
+  'REMOTION_CONCURRENCY',
+  'REMOTION_TIMEOUT_MS',
+])
+
+function stripEmptyValues(source: unknown): unknown {
+  if (source == null || typeof source !== 'object') return source
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(
+    source as Record<string, unknown>,
+  )) {
+    if (
+      typeof value === 'string' &&
+      value.trim() === '' &&
+      EMPTY_MEANS_UNSET.has(key)
+    ) {
+      continue
+    }
+    out[key] = value
+  }
+  return out
+}
+
+const envObjectSchema = z
   .object({
     NODE_ENV: z
       .enum(['development', 'test', 'production'])
@@ -78,6 +134,54 @@ export const envSchema = z
     CRYPTO_API_KEY: z.string().default(''),
     CRYPTO_WEBHOOK_SECRET: z.string().default(''),
     CRYPTO_FIAT_CURRENCIES: currencyList,
+
+    // --- Runtime drivers (Phase One, Step 20) -----------------------------
+    //
+    // Every driver is an EXPLICIT ENUM, so an unknown or misspelt value
+    // is a startup failure in EVERY environment rather than a silent
+    // fall back to the local/mock adapter. "It quietly used the mock"
+    // is the exact production failure these enums exist to make
+    // impossible; a typo must stop the process, not downgrade it.
+    /** LOCAL = a directory on one machine (development/test only).
+     * S3 = any S3-compatible PRIVATE bucket. */
+    OBJECT_STORAGE_DRIVER: z.enum(['LOCAL', 'S3']).default('LOCAL'),
+    OBJECT_STORAGE_ROOT: z.string().default(''),
+    OBJECT_STORAGE_ENDPOINT: z.string().default(''),
+    OBJECT_STORAGE_REGION: z.string().default(''),
+    OBJECT_STORAGE_BUCKET: z.string().default(''),
+    OBJECT_STORAGE_ACCESS_KEY_ID: z.string().default(''),
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: z.string().default(''),
+    /** Most non-AWS S3-compatible services need path-style addressing. */
+    OBJECT_STORAGE_FORCE_PATH_STYLE: z.stringbool().default(true),
+
+    /** MOCK = the deterministic synthetic renderer (development/test
+     * only). REMOTION = the real compositor. */
+    RENDER_DRIVER: z.enum(['MOCK', 'REMOTION']).default('MOCK'),
+    /** Absolute path to `ffprobe`. Empty means "resolve from PATH".
+     * Probing is how a real duration is learned; it is never optional
+     * for the real renderer. */
+    FFPROBE_PATH: z.string().default(''),
+    /** Bounded concurrency for the real compositor on a small VPS. */
+    REMOTION_CONCURRENCY: z.coerce.number().int().positive().max(16).default(1),
+    REMOTION_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(10 * 60 * 1000),
+
+    /**
+     * MOCK = the deterministic synthetic provider (development/test
+     * only). DISABLED = no synthesis backend is configured, so a
+     * manifest that REQUIRES generation fails closed rather than being
+     * silently skipped, and a manifest that requires none proceeds
+     * normally.
+     *
+     * There is deliberately no third value: no external visual
+     * generation or speech vendor has been approved, and this codebase
+     * does not name one on its own initiative.
+     */
+    VISUAL_GENERATION_DRIVER: z.enum(['MOCK', 'DISABLED']).default('MOCK'),
+    TTS_DRIVER: z.enum(['MOCK', 'DISABLED']).default('MOCK'),
   })
   .superRefine((cfg, ctx) => {
     // A provider switched on without its credentials is a configuration
@@ -137,18 +241,88 @@ export const envSchema = z
         })
       }
     }
-    if (
-      cfg.NODE_ENV === 'production' &&
-      cfg.PAYMENTS_ENABLED &&
-      !cfg.APP_BASE_URL.startsWith('https://')
-    ) {
+    // An S3 driver without complete credentials is a configuration
+    // error EVERYWHERE, not only in production: a developer who sets
+    // the driver and forgets the bucket must be told so, not handed a
+    // local directory that looks like it worked.
+    if (cfg.OBJECT_STORAGE_DRIVER === 'S3') {
+      for (const key of [
+        'OBJECT_STORAGE_ENDPOINT',
+        'OBJECT_STORAGE_REGION',
+        'OBJECT_STORAGE_BUCKET',
+        'OBJECT_STORAGE_ACCESS_KEY_ID',
+        'OBJECT_STORAGE_SECRET_ACCESS_KEY',
+      ] as const) {
+        if (cfg[key].trim().length === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `OBJECT_STORAGE_DRIVER=S3 requires ${key}`,
+          })
+        }
+      }
+    }
+
+    if (cfg.NODE_ENV !== 'production') return
+
+    // --- Production-only requirements -------------------------------------
+    //
+    // These are duplicated by the startup preflight on purpose. This
+    // one refuses to construct a configuration object at all; the
+    // preflight refuses to serve traffic or claim a job, and reports
+    // the same codes for an operator. Neither is the other's backup.
+    if (!cfg.APP_BASE_URL.startsWith('https://')) {
       ctx.addIssue({
         code: 'custom',
         path: ['APP_BASE_URL'],
-        message: 'Production payments require an HTTPS APP_BASE_URL',
+        // Not only for payments: every cookie, redirect and signed URL
+        // in production assumes a channel that cannot be read in
+        // transit.
+        message: 'Production requires an HTTPS APP_BASE_URL',
+      })
+    }
+    if (cfg.DATABASE_PASSWORD.length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['DATABASE_PASSWORD'],
+        message: 'Production requires a non-empty DATABASE_PASSWORD',
+      })
+    }
+    if (cfg.OBJECT_STORAGE_DRIVER === 'LOCAL') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['OBJECT_STORAGE_DRIVER'],
+        message:
+          'OBJECT_STORAGE_DRIVER=LOCAL is invalid in production — a directory on one machine is not durable private object storage',
+      })
+    }
+    if (cfg.RENDER_DRIVER === 'MOCK') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RENDER_DRIVER'],
+        message:
+          'RENDER_DRIVER=MOCK is invalid in production — the mock produces a synthetic artifact, not a real composition',
+      })
+    }
+    if (cfg.VISUAL_GENERATION_DRIVER === 'MOCK') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['VISUAL_GENERATION_DRIVER'],
+        message:
+          'VISUAL_GENERATION_DRIVER=MOCK is invalid in production; set DISABLED until an approved adapter is selected',
+      })
+    }
+    if (cfg.TTS_DRIVER === 'MOCK') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TTS_DRIVER'],
+        message:
+          'TTS_DRIVER=MOCK is invalid in production; set DISABLED until an approved adapter is selected',
       })
     }
   })
+
+export const envSchema = z.preprocess(stripEmptyValues, envObjectSchema)
 
 export type Env = z.infer<typeof envSchema>
 

@@ -1200,10 +1200,25 @@ describe('Mock payment provider', () => {
 // --- Environment enablement validation (§57/§58) ----------------------------
 
 describe('payment environment validation', () => {
+  // A COMPLETE production baseline. Step 20 made production require
+  // more than payments alone — real object storage, a real renderer,
+  // and a non-mock setting for the two unapproved adapters — so this
+  // fixture now supplies them. Every case below still varies only the
+  // payment settings, which is what it is testing.
   const base = {
     NODE_ENV: 'production',
     DATABASE_PASSWORD: 'x',
     APP_BASE_URL: 'https://example.org',
+    TRUST_PROXY: 'false',
+    OBJECT_STORAGE_DRIVER: 'S3',
+    OBJECT_STORAGE_ENDPOINT: 'https://s3.example',
+    OBJECT_STORAGE_REGION: 'eu-west-1',
+    OBJECT_STORAGE_BUCKET: 'bucket-placeholder',
+    OBJECT_STORAGE_ACCESS_KEY_ID: 'key-id-placeholder',
+    OBJECT_STORAGE_SECRET_ACCESS_KEY: 'secret-placeholder',
+    RENDER_DRIVER: 'REMOTION',
+    VISUAL_GENERATION_DRIVER: 'DISABLED',
+    TTS_DRIVER: 'DISABLED',
   }
 
   it('defaults everything payment to disabled', () => {

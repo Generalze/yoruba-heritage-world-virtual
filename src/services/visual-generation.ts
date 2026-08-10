@@ -539,6 +539,18 @@ export async function submitScene(
   task: ManifestVisualTask,
 ): Promise<VisualTaskSubmissionResult> {
   const provider = getVisualGenerationProvider()
+  // A DISABLED adapter is refused here, as a recorded task failure. A
+  // GENERATION_REQUIRED task means a scene has no approved picture, so
+  // skipping it would ship a recording that is missing something a
+  // person was promised — the one outcome that must be impossible.
+  if (!provider.isEnabled()) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'visual_generation_unavailable',
+      errorMessage: null,
+    }
+  }
   const compiled = await compileVisualGenerationRequest(task)
   if (compiled.status !== 'OK') {
     return {

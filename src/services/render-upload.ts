@@ -24,7 +24,10 @@ import {
   scheduleRetryOrFail,
   transitionGenerationJobUnderLease,
 } from './generation-jobs'
-import { verifyCompletedRender } from './render-assembly'
+import {
+  renderedDurationMatchesPlan,
+  verifyCompletedRender,
+} from './render-assembly'
 import type { RenderContext } from './render-assembly'
 import type { GenerationClock } from './generation-jobs'
 import type { ObjectStorageProvider } from '@/providers/object-storage/types'
@@ -527,7 +530,17 @@ export async function runUploadOnce(
     if (row.artifactMimeType !== plan.outputMimeType) {
       return fail('UPLOAD_IDENTITY_MISMATCH', 'upload_plan_mime_mismatch')
     }
-    if (row.artifactDurationMs !== plan.totalDurationMs) {
+    // The SAME duration rule the render write and the Step 16 gate use
+    // — a real compositor's bounded frame/container envelope, a mock's
+    // exactness — rather than a third, stricter copy that would fail
+    // every real render at the last possible moment.
+    if (
+      !renderedDurationMatchesPlan({
+        actualMs: row.artifactDurationMs,
+        plannedMs: plan.totalDurationMs,
+        rendererIsMock: result.rendererIsMock === 1,
+      })
+    ) {
       return fail('UPLOAD_IDENTITY_MISMATCH', 'upload_plan_duration_mismatch')
     }
 

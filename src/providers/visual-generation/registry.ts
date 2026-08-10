@@ -1,4 +1,7 @@
+import { env } from '@/lib/env'
+import { createDisabledVisualGenerationProvider } from './disabled'
 import { createMockVisualGenerationProvider } from './mock'
+import { VisualGenerationProviderError } from './types'
 import type { VisualGenerationProvider } from './types'
 
 /**
@@ -9,18 +12,49 @@ import type { VisualGenerationProvider } from './types'
  * than the multi-provider Map registry payments uses for several
  * simultaneously-enabled checkout options).
  *
- * Only the mock exists at this stage; a future real adapter (Kling/
- * OpenArt) plugs in here behind the SAME VisualGenerationProvider
- * interface with no change to the executor service.
+ * TWO configurations exist, selected by VISUAL_GENERATION_DRIVER: the
+ * deterministic MOCK (development and test only — refused in
+ * production) and DISABLED, the honest production statement that no
+ * external vendor has been approved. A real adapter plugs in here
+ * behind the SAME VisualGenerationProvider interface with no change to
+ * the executor service, once one is chosen — and choosing one is a
+ * decision for people, not for this file.
  */
 
 let overrideProvider: VisualGenerationProvider | null = null
 let defaultProvider: VisualGenerationProvider | null = null
 
+/**
+ * EXPLICIT SELECTION ONLY. The driver is a validated enum, so an
+ * unknown value stops the process at configuration time in EVERY
+ * environment; the default branch below throws rather than falling back
+ * to the mock, so a value added to the enum and forgotten here cannot
+ * silently start generating synthetic imagery.
+ */
 export function getVisualGenerationProvider(): VisualGenerationProvider {
   if (overrideProvider) return overrideProvider
-  defaultProvider ??= createMockVisualGenerationProvider()
+  if (defaultProvider) return defaultProvider
+  switch (env.VISUAL_GENERATION_DRIVER) {
+    case 'MOCK':
+      defaultProvider = createMockVisualGenerationProvider()
+      break
+    case 'DISABLED':
+      defaultProvider = createDisabledVisualGenerationProvider()
+      break
+    default:
+      throw new VisualGenerationProviderError(
+        'visual_generation_driver_unknown',
+        'VISUAL_GENERATION_DRIVER names no implemented adapter; the mock is never a substitute.',
+        false,
+      )
+  }
   return defaultProvider
+}
+
+/** Drops the memoized provider so a configuration change (or a test
+ * that varies the driver) is observed rather than cached forever. */
+export function resetVisualGenerationDefaultForTests(): void {
+  defaultProvider = null
 }
 
 /**

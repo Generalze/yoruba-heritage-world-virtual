@@ -1,0 +1,361 @@
+# Operations runbook
+
+Phase One, Step 20. Everything an operator needs to start, stop, migrate,
+back up and restore this platform — and the things that are deliberately
+NOT automated, with the reason.
+
+Nothing in this document contains a credential, and no command in it
+prints one. If you find yourself pasting a password into a shell, stop
+and use the `.env` file instead.
+
+---
+
+## 1. Topology
+
+Three containers, from `docker-compose.yml`:
+
+| service  | what it is                          | command                       |
+| -------- | ----------------------------------- | ----------------------------- |
+| `app`    | web server (SSR pages + `/api`)     | `bun server.ts`               |
+| `worker` | autonomous generation pipeline      | `bun run worker:generation`   |
+| `db`     | MariaDB 11                          | —                             |
+
+`app` and `worker` run **the same image at the same revision**. They are
+built once and tagged `yhwv-app:${APP_REVISION}`; set `APP_REVISION` to
+the git SHA you are deploying. A worker one commit behind the app is a
+worker enforcing last week's governance rules, which is why this is not
+negotiable.
+
+**The database publishes no port.** It is reachable only on the Compose
+network. Local development gets the port back explicitly:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+```
+
+That override binds `127.0.0.1:3306` only, never `0.0.0.0`, and is never
+used in production.
+
+---
+
+## 2. Configuration and the preflight
+
+Both processes run the SAME production preflight before doing anything:
+the app before it binds a port, the worker before it claims a job. A
+misconfigured production deployment refuses to start rather than
+starting and discovering the problem while somebody's paid appointment
+is halfway through the pipeline.
+
+Failures are logged as bounded codes plus the ENVIRONMENT VARIABLE NAME
+to set — never a value:
+
+```
+[preflight] worker: local_object_storage_forbidden_in_production (set OBJECT_STORAGE_DRIVER)
+```
+
+Production requires, at minimum:
+
+- `APP_BASE_URL` — must be `https://`
+- `DATABASE_PASSWORD` — non-empty
+- `TRUST_PROXY` — **explicitly set**, true or false. There is no safe
+  default: off, and every client IP collapses to the proxy's, so rate
+  limiting protects nobody; on without a proxy that overwrites
+  `X-Forwarded-For`, and any client can forge one to evade the same rate
+  limiting. Set it to `true` only when the reverse proxy in front of
+  this app overwrites the header.
+- `OBJECT_STORAGE_DRIVER=S3` plus its five settings — `LOCAL` is refused
+- `RENDER_DRIVER=REMOTION` — `MOCK` is refused
+- `VISUAL_GENERATION_DRIVER` and `TTS_DRIVER` — `MOCK` is refused
+
+Sessions need **no** `SESSION_SECRET`: they are 256-bit random bearer
+tokens stored hashed, so there is nothing to leak or rotate.
+
+### Deliberately reduced capability
+
+`VISUAL_GENERATION_DRIVER=DISABLED` and `TTS_DRIVER=DISABLED` are valid
+production settings, and today they are the only honest ones — no
+external image-generation or speech vendor has been approved. They mean:
+
+- a job that REQUIRES that work **fails closed** and is recorded as
+  failed. It is never silently skipped, because a recording assembled
+  without a required scene or voice is missing something a person was
+  promised;
+- a job that requires neither — approved media for every scene, approved
+  human recordings for every voice — runs normally.
+
+The startup log says so:
+
+```
+[preflight] worker: reduced capability — visual_generation_disabled, tts_disabled
+```
+
+---
+
+## 3. Starting and stopping
+
+```sh
+# build both processes from one image
+APP_REVISION=$(git rev-parse --short HEAD) docker compose build
+
+# start
+APP_REVISION=$(git rev-parse --short HEAD) docker compose up -d
+
+# watch the preflight decide
+docker compose logs -f app worker
+```
+
+**Stopping is graceful and the grace periods differ on purpose.**
+`docker compose stop` sends `SIGTERM`; the app drains in-flight requests
+(30s grace) so nobody is cut off mid-booking or mid-webhook, and the
+worker finishes its current pipeline pass and closes the pool (120s
+grace) because a render can be long-running and tearing it out mid-encode
+wastes the work and consumes a retry.
+
+Never `docker compose kill` the worker in normal operation. A hard kill
+leaves a lease held; it is recovered automatically after expiry by the
+lease sweep, but the job loses one attempt from its bounded budget for
+no reason.
+
+### Health endpoints
+
+- `GET /api/health` — **liveness**. "This process is alive." A container
+  that is alive but misconfigured should be left alone for you to fix;
+  restarting it just reproduces the misconfiguration more often.
+- `GET /api/ready` — **readiness**. 200 when the preflight passes and the
+  database is reachable, 503 otherwise. This is what the Docker
+  healthcheck uses and what a reverse proxy should use to take an
+  instance out of rotation.
+
+Neither payload contains a credential, host, bucket, endpoint, object
+key, path, personal detail or sacred text. Readiness reports issue CODES
+only; the variable NAMES stay in the process log, where you already are.
+
+---
+
+## 4. Migrations
+
+**Migrations are never applied automatically.** Not at boot, not at
+request time, not by a healthcheck. An application that migrates itself
+on startup will, one day, migrate itself during an incident, on a
+half-rolled-out revision, twice concurrently.
+
+They ship inside the image, so the exact schema a revision expects is
+always present.
+
+```sh
+# 1. BACK UP FIRST (§5). Not optional.
+./scripts/backup-db.sh
+
+# 2. Inspect what is pending
+docker compose run --rm --no-deps app bun run db:migrate --help
+
+# 3. Apply, from the same image as the revision being deployed
+APP_REVISION=$(git rev-parse --short HEAD) \
+  docker compose run --rm app bun run db:migrate
+
+# 4. Verify
+docker compose exec db mariadb -u"$DATABASE_USER" -p"$DATABASE_PASSWORD" \
+  "$DATABASE_NAME" -e "SELECT COUNT(*) AS applied FROM __drizzle_migrations;"
+```
+
+Order for a schema-changing deploy: **back up → migrate → deploy**. Stop
+the worker first if a migration touches generation tables, so no pass is
+mid-transaction against a schema that is changing underneath it:
+
+```sh
+docker compose stop worker
+# migrate
+docker compose start worker
+```
+
+---
+
+## 5. Backup and restore
+
+Scripts live in `scripts/`. Both read credentials from the environment
+and **print none of them**; both refuse to write inside the repository.
+
+### Back up
+
+```sh
+BACKUP_DIR=/var/backups/yhwv ./scripts/backup-db.sh
+```
+
+Writes `yhwv-<database>-<UTC timestamp>.sql.gz` to `BACKUP_DIR`
+(default `/var/backups/yhwv`), with `--single-transaction` so the dump is
+consistent without locking the site, then prints the file name and its
+SHA-256.
+
+**Backups belong outside Git and off this machine.** The script refuses a
+`BACKUP_DIR` inside the working tree. A backup that only exists on the
+server it is backing up is not a backup.
+
+The database is not the whole system. Also back up:
+
+- the **private object bucket** — the finished recordings. Use the
+  storage provider's own versioning/replication; the application never
+  deletes a canonical object, but an operator with credentials can.
+- the **`media_data` volume** — approved and intermediate media. The
+  approved media is the input the pipeline cannot regenerate.
+
+### Restore
+
+```sh
+BACKUP_FILE=/var/backups/yhwv/yhwv-....sql.gz ./scripts/restore-db.sh
+```
+
+The script is deliberately awkward: it requires `CONFIRM_RESTORE=yes`,
+refuses to run while `app` or `worker` is up, and verifies the archive's
+SHA-256 against a `.sha256` sidecar before touching anything.
+
+**Operator verification, every time — a backup you have not restored is
+a hypothesis:**
+
+```sh
+# 1. Restore into a THROWAWAY database, never production
+DATABASE_NAME=yhwv_restore_check ./scripts/restore-db.sh
+
+# 2. Prove it is the schema you expect
+docker compose exec db mariadb ... -e "
+  SELECT COUNT(*) AS tables_now FROM information_schema.tables
+   WHERE table_schema = 'yhwv_restore_check';
+  SELECT COUNT(*) AS applied FROM yhwv_restore_check.__drizzle_migrations;"
+
+# 3. Prove it has the data you expect (counts only — never dump content)
+docker compose exec db mariadb ... -e "
+  SELECT COUNT(*) FROM yhwv_restore_check.appointments;
+  SELECT COUNT(*) FROM yhwv_restore_check.prayer_generation_uploads;"
+
+# 4. Drop it
+```
+
+Record the date of the last successful verification. An unverified
+backup regime fails silently for months and then fails loudly once.
+
+---
+
+## 6. Rendering in production
+
+`RENDER_DRIVER=REMOTION` selects the real compositor.
+
+- **ffprobe must be available** in the worker container (`FFPROBE_PATH`,
+  or on `PATH`). Probing is how the pipeline learns a real duration; a
+  renderer that cannot measure its inputs refuses to build a timeline
+  from them rather than trusting database metadata.
+- **Remotion provisions a headless browser on first use.** That is a
+  download at first render, and it needs a writable cache directory for
+  the `bun` user. Do this once, deliberately, on a maintenance window —
+  not implicitly during somebody's appointment. See "outstanding" below.
+- The renderer **refuses rather than trims**: an approved recording whose
+  real duration exceeds the slot its plan gave it fails the render. It is
+  not shortened, sped up or faded. A human decides what to do about a
+  recording that no longer matches its plan.
+
+**Smoke test after any render-related change** (the real compositor is
+deliberately never invoked by the automated test suite — that would mean
+a network download and a non-deterministic render):
+
+```sh
+docker compose logs -f worker    # watch one job go RENDERING → UPLOADING → READY
+```
+
+Then open the Prayer Room for that appointment as its owner and confirm
+the recording plays.
+
+---
+
+## 7. Reverse proxy
+
+Put TLS termination in front of `app` and make the proxy:
+
+- set `X-Forwarded-For` by **overwriting**, never appending a
+  client-supplied value — then set `TRUST_PROXY=true`;
+- forward `Host` unchanged so `APP_BASE_URL` matching works;
+- forward request bodies **byte-for-byte** on `/api/webhooks/*`. Payment
+  webhooks are verified by HMAC over raw bytes; a proxy that
+  re-serializes JSON breaks every signature.
+
+The app already sends its own security headers (CSP, HSTS in production
+over HTTPS, `nosniff`, `Referrer-Policy`, `X-Frame-Options`,
+`Permissions-Policy`). Do not duplicate or weaken them at the proxy.
+
+---
+
+## 8. Known-good local development
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+bun run db:migrate
+bun run dev
+bun run worker:generation      # separate terminal
+```
+
+Development runs `OBJECT_STORAGE_DRIVER=LOCAL`, `RENDER_DRIVER=MOCK`,
+`VISUAL_GENERATION_DRIVER=MOCK`, `TTS_DRIVER=MOCK` — all four of which
+production refuses outright.
+
+### Run migrations BEFORE the test suite on a cold database
+
+Every integration suite calls `migrate()` in its `beforeAll`, which is a
+fast no-op once the schema exists. On a **freshly created volume** the
+first one to run pays the whole cost — measured at 12–14 seconds on
+Docker Desktop for Windows — which exceeds `bun test`'s default 5-second
+hook timeout. The hook is killed mid-migration, leaving tables created
+but the journal unwritten, and every later suite then fails with
+`Table … already exists`.
+
+So on a cold database, migrate first:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+bun run db:migrate      # once — 12–14s on a cold volume
+bun test
+```
+
+This is a property of the environment, not of the application: the same
+failure reproduces on earlier revisions of this repository against the
+same cold volume. It is diagnosed here rather than papered over by
+loosening a timeout or by making the application migrate itself.
+
+### Test database connection resets
+
+`bun test` occasionally fails mid-run with `ECONNREFUSED 127.0.0.1:3306`
+while the container remains `healthy`, `RestartCount=0` and its log shows
+`ready for connections`. This is host-side Docker Desktop port-proxy
+churn, not application behaviour. Diagnose before assuming otherwise:
+
+```sh
+docker inspect --format='health={{.State.Health.Status}} restarts={{.RestartCount}} oom={{.State.OOMKilled}}' \
+  yoruba-heritage-world-virtual-db-1
+docker logs yoruba-heritage-world-virtual-db-1 | tail
+```
+
+If the container is healthy and never restarted, re-run the suite.
+**Do not** add retry/reconnect logic to the application to paper over it:
+that would hide genuine database unavailability in production, which is
+exactly the signal readiness exists to surface.
+
+---
+
+## 9. Outstanding — not yet decided
+
+Named here rather than quietly assumed:
+
+1. **Visual generation vendor.** None approved. Production runs
+   `VISUAL_GENERATION_DRIVER=DISABLED` and fails closed on jobs that need
+   generated imagery.
+2. **Speech synthesis vendor.** None approved. Production runs
+   `TTS_DRIVER=DISABLED`; approved human recordings are unaffected.
+3. **Remotion browser provisioning and image size.** The runtime image
+   carries the Remotion packages; the headless browser is fetched on
+   first render. Whether to bake it into the image, warm it on deploy, or
+   split a render-only image is an unmade decision.
+4. **CSP `script-src`.** Currently requires `'unsafe-inline'` because
+   TanStack Start emits inline bootstrap script and serialized router
+   state. Moving to nonces or hashes is real work in the framework's
+   rendering path and is not claimed as done.
+5. **Production media delivery.** Step 18 proxies local storage
+   server-side and validates signed reads; with a remote provider, the
+   choice between signed redirects (a bounded bearer capability) and full
+   server-side proxying — and what revocation each implies — is still
+   open.

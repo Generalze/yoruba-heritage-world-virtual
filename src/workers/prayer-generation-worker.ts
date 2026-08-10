@@ -6,6 +6,7 @@ import {
   systemGenerationClock,
 } from '@/services/generation-jobs'
 import { runGenerationPipelinePass } from '@/services/generation-pipeline'
+import { assertProductionPreflight } from '@/server/production-preflight'
 
 /**
  * DB-backed prayer generation worker (Phase One, Step 12; autonomous
@@ -71,6 +72,13 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // BEFORE THE FIRST JOB IS CLAIMED, and using the SAME function the
+  // web server calls, so the two processes can never disagree about
+  // whether this deployment is fit to run. A worker that started
+  // anyway would claim somebody's paid appointment and then fail it on
+  // configuration — consuming its bounded retry budget for a fault
+  // that has nothing to do with the booking.
+  assertProductionPreflight('worker')
   console.log(`[${WORKER_ID}] prayer generation worker started (DB queue)`)
   let lastSweep = 0
   while (!shuttingDown) {
@@ -118,4 +126,13 @@ async function main(): Promise<void> {
   await closeDb()
 }
 
-void main()
+// A refused preflight must EXIT NON-ZERO, so the container restart
+// policy and the operator both see a failed process rather than a
+// quiet one that stopped doing work.
+void main().catch((error: unknown) => {
+  console.error(
+    `[${WORKER_ID}] fatal: ${error instanceof Error ? error.message : String(error)}`,
+  )
+  process.exitCode = 1
+  void closeDb().catch(() => undefined)
+})

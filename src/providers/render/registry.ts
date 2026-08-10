@@ -1,5 +1,7 @@
 import { env } from '@/lib/env'
 import { createMockRenderEngine } from './mock'
+import { createRemotionRenderEngine } from './remotion'
+import { RenderEngineError } from './types'
 import type { RenderEngine } from './types'
 
 /**
@@ -7,18 +9,49 @@ import type { RenderEngine } from './types'
  * assembly service obtains an engine — mirrors the Step 14/15 provider
  * registries (exactly one active slot, swappable for tests).
  *
- * Only the deterministic mock exists at this stage. A real Remotion
- * adapter plugs in here behind the SAME RenderEngine interface, opt-in
- * and explicitly selected, with no change to the assembly service.
+ * TWO engines exist: the deterministic mock (the DEFAULT, and the only
+ * one automated verification ever selects) and the real Remotion
+ * adapter, which is strictly OPT-IN through RENDER_DRIVER=REMOTION.
+ * Both satisfy the same RenderEngine interface, and the assembly
+ * service cannot tell them apart — except through `isMock`, which the
+ * production guard below refuses on.
  */
 
 let overrideEngine: RenderEngine | null = null
 let defaultEngine: RenderEngine | null = null
 
+/**
+ * EXPLICIT SELECTION ONLY. An unknown driver string never reaches the
+ * default branch — RENDER_DRIVER is a validated enum, so a typo stops
+ * the process at configuration time in EVERY environment — and if a
+ * value is ever added to the enum without being handled here, this
+ * throws rather than quietly returning the mock. "It silently rendered
+ * with the mock" is the failure this shape exists to prevent.
+ */
 export function getRenderEngine(): RenderEngine {
   if (overrideEngine) return overrideEngine
-  defaultEngine ??= createMockRenderEngine()
+  if (defaultEngine) return defaultEngine
+  switch (env.RENDER_DRIVER) {
+    case 'MOCK':
+      defaultEngine = createMockRenderEngine()
+      break
+    case 'REMOTION':
+      defaultEngine = createRemotionRenderEngine()
+      break
+    default:
+      throw new RenderEngineError(
+        'render_driver_unknown',
+        'RENDER_DRIVER names no implemented engine; the mock is never a substitute.',
+        false,
+      )
+  }
   return defaultEngine
+}
+
+/** Drops the memoized engine so a configuration change (or a test that
+ * varies the driver) is observed rather than cached forever. */
+export function resetRenderEngineDefaultForTests(): void {
+  defaultEngine = null
 }
 
 /**

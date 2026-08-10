@@ -1,4 +1,7 @@
+import { env } from '@/lib/env'
+import { createDisabledTtsProvider } from './disabled'
 import { createMockTtsProvider } from './mock'
+import { TtsProviderError } from './types'
 import type { TtsProvider } from './types'
 
 /**
@@ -10,18 +13,49 @@ import type { TtsProvider } from './types'
  * registry payments uses for several simultaneously-enabled checkout
  * options).
  *
- * Only the mock exists at this stage; a future real adapter plugs in
- * here behind the SAME TtsProvider interface with no change to the
- * executor service.
+ * TWO configurations exist, selected by TTS_DRIVER: the deterministic
+ * MOCK (development and test only — refused in production) and
+ * DISABLED, the honest production statement that no external speech
+ * vendor has been approved. A real adapter plugs in here behind the
+ * SAME TtsProvider interface with no change to the executor service,
+ * once one is chosen — and choosing one is a decision for people, not
+ * for this file.
  */
 
 let overrideProvider: TtsProvider | null = null
 let defaultProvider: TtsProvider | null = null
 
+/**
+ * EXPLICIT SELECTION ONLY. The driver is a validated enum, so an
+ * unknown value stops the process at configuration time in EVERY
+ * environment; the default branch below throws rather than falling back
+ * to the mock, so a value added to the enum and forgotten here cannot
+ * silently start speaking approved prayer in a synthetic voice.
+ */
 export function getTtsProvider(): TtsProvider {
   if (overrideProvider) return overrideProvider
-  defaultProvider ??= createMockTtsProvider()
+  if (defaultProvider) return defaultProvider
+  switch (env.TTS_DRIVER) {
+    case 'MOCK':
+      defaultProvider = createMockTtsProvider()
+      break
+    case 'DISABLED':
+      defaultProvider = createDisabledTtsProvider()
+      break
+    default:
+      throw new TtsProviderError(
+        'tts_driver_unknown',
+        'TTS_DRIVER names no implemented adapter; the mock is never a substitute.',
+        false,
+      )
+  }
   return defaultProvider
+}
+
+/** Drops the memoized provider so a configuration change (or a test
+ * that varies the driver) is observed rather than cached forever. */
+export function resetTtsDefaultForTests(): void {
+  defaultProvider = null
 }
 
 /**

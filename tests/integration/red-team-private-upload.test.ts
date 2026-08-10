@@ -1464,7 +1464,12 @@ describe('red-team: Step 17 makes no network call and exposes nothing publicly',
     }
   })
 
-  it('no object-storage SDK is installed at this stage', () => {
+  it('the only object-storage SDK is the S3-compatible one Step 20 landed', () => {
+    // Through Step 19 this asserted that NO storage SDK existed at all,
+    // which was right while the adapter was a documented boundary.
+    // Step 20 is the step that legitimately implements it, so the fence
+    // is not deleted — it is PINNED to exactly the packages that may be
+    // present, so a second, unreviewed storage client still fails here.
     const pkg = JSON.parse(
       readFileSync(join(process.cwd(), 'package.json'), 'utf8'),
     ) as {
@@ -1472,9 +1477,16 @@ describe('red-team: Step 17 makes no network call and exposes nothing publicly',
       devDependencies?: Record<string, string>
     }
     const all = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) }
-    for (const name of Object.keys(all)) {
-      expect(name).not.toMatch(/^(@aws-sdk|aws-sdk|minio)/)
-    }
+    const storageSdks = Object.keys(all)
+      .filter((name) => /^(@aws-sdk|aws-sdk|minio|@google-cloud|@azure)/.test(name))
+      .sort()
+    expect(storageSdks).toEqual([
+      '@aws-sdk/client-s3',
+      '@aws-sdk/s3-request-presigner',
+    ])
+    // One compatible version across the set, exactly as the Remotion
+    // fence requires of its own packages.
+    expect(new Set(storageSdks.map((name) => all[name])).size).toBe(1)
   })
 })
 

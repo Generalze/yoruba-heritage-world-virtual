@@ -91,6 +91,40 @@ export const RENDER_PLAN_SCHEMA_VERSION = 'render-plan-v1'
  * way to shorten it would be to cut approved content. */
 export const MAX_RENDER_MS = 30 * 60 * 1000
 
+/**
+ * How far a REAL renderer's output may sit from the plan it rendered.
+ *
+ * A REAL ENCODER IS NOT SAMPLE-EXACT. Video is a whole number of
+ * frames, so a 12 340 ms plan at 30 fps lands on a frame boundary a few
+ * milliseconds away, before any container rounding. Demanding
+ * millisecond equality of a real compositor would reject correct
+ * renders for a reason that is arithmetic, not a defect.
+ *
+ * THE MOCK KEEPS ITS EXACTNESS. This is an outer envelope for real
+ * media only; a mock engine is still held to the millisecond, so Step
+ * 16's round-trip proof stays a proof rather than quietly becoming a
+ * tolerance test. The real engine independently refuses anything
+ * outside a TIGHTER bound derived from the actual frame rate (see
+ * frameTimingToleranceMs) before it ever returns, so this is an outer
+ * envelope, not the working rule.
+ */
+export const MAX_RENDER_TIMING_TOLERANCE_MS = 250
+
+/** The ONE duration rule, shared by the write and by both later gates.
+ * Three copies that could disagree is how a render passes storage and
+ * then fails verification forever. */
+export function renderedDurationMatchesPlan(input: {
+  actualMs: number
+  plannedMs: number
+  rendererIsMock: boolean
+}): boolean {
+  if (input.rendererIsMock) return input.actualMs === input.plannedMs
+  return (
+    Math.abs(input.actualMs - input.plannedMs) <=
+    MAX_RENDER_TIMING_TOLERANCE_MS
+  )
+}
+
 /** The mock emits exactly one type today; a real engine adds to this
  * allowlist, never bypasses it. */
 const RENDER_MIME_EXTENSIONS: Record<string, string> = {
@@ -984,6 +1018,7 @@ export async function discardRenderArtifact(storageRef: string): Promise<void> {
 async function verifyAndStoreRenderOutput(
   output: { bytes: Uint8Array; mimeType: string; durationMs: number },
   plan: RenderPlan,
+  rendererIsMock: boolean,
 ): Promise<
   | {
       ok: true
@@ -1013,8 +1048,16 @@ async function verifyAndStoreRenderOutput(
   }
   // The rendered length must be the length the plan reconciled to. An
   // engine that returned something shorter would have cut approved
-  // content; something longer would have invented time.
-  if (output.durationMs !== plan.totalDurationMs) {
+  // content; something longer would have invented time. A real
+  // compositor gets the bounded frame/container envelope above and
+  // nothing more; the mock is still held to the millisecond.
+  if (
+    !renderedDurationMatchesPlan({
+      actualMs: output.durationMs,
+      plannedMs: plan.totalDurationMs,
+      rendererIsMock,
+    })
+  ) {
     return { ok: false, reasonCode: 'artifact_duration_mismatch' }
   }
   const fileSha256 = computeFileSha256(output.bytes)
@@ -1395,7 +1438,16 @@ export async function verifyCompletedRender(
       detail: artifact.reasonCode,
     }
   }
-  if (result.artifactDurationMs !== loadedPlan.plan.totalDurationMs) {
+  if (
+    result.artifactDurationMs == null ||
+    !renderedDurationMatchesPlan({
+      actualMs: result.artifactDurationMs,
+      plannedMs: loadedPlan.plan.totalDurationMs,
+      // The renderer that ACTUALLY produced this artifact, read from
+      // the row — never the engine that happens to be active now.
+      rendererIsMock: result.rendererIsMock === 1,
+    })
+  ) {
     return {
       ok: false,
       errorCode: 'RENDER_ARTIFACT_INVALID',
@@ -1668,7 +1720,11 @@ export async function runRenderOnce(
       // The render may have taken longer than the lease window.
       if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
 
-      const stored = await verifyAndStoreRenderOutput(output, built.plan)
+      const stored = await verifyAndStoreRenderOutput(
+        output,
+        built.plan,
+        engine.isMock,
+      )
       if (!stored.ok) {
         // Same fence as the throw path above: a rejected result from a
         // worker that no longer owns the job is not a verdict anyone

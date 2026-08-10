@@ -1183,6 +1183,134 @@ user books
   and any queue broker remain out of scope at this stage.
 
 ---
+
+## 10.13 Amendment — Production Runtime Foundation (Phase One, Step 20)
+
+Step 20 makes the Step 19 pipeline DEPLOYABLE without enabling any
+external vendor nobody has approved. It adds no table and no migration.
+
+**ONE STARTUP GATE, SHARED.** `checkProductionPreflight()` is called by
+the web server before it binds a port and by the generation worker
+before it claims a job. The two processes cannot disagree about whether
+a deployment is fit to run — a worker that started anyway would claim
+somebody's paid appointment and then fail it on configuration, spending
+its bounded retry budget on a fault that has nothing to do with the
+booking. Production requires an HTTPS `APP_BASE_URL`, a non-empty
+database password, an EXPLICIT `TRUST_PROXY` (absence is the failure:
+off collapses every client IP to the proxy's, on without a header-
+overwriting proxy lets anyone forge one), real object storage, a real
+renderer, and a non-mock setting for both unapproved adapters. It
+reports bounded CODES plus the ENVIRONMENT VARIABLE NAMES an operator
+must set — never a value, never a secret, never a host or bucket.
+
+**EVERY DRIVER IS AN EXPLICIT ENUM, AND UNKNOWN FAILS CLOSED.**
+`OBJECT_STORAGE_DRIVER`, `RENDER_DRIVER`, `VISUAL_GENERATION_DRIVER` and
+`TTS_DRIVER` are validated in EVERY environment, so a typo stops the
+process instead of silently selecting the local/mock adapter. Each
+registry additionally throws on an unhandled value rather than
+defaulting. A variable that is present but EMPTY counts as unset, so
+"not configured" means the same thing whether the process was started by
+Compose, a shell or a test.
+
+**PRODUCTION TOPOLOGY IS THREE CONTAINERS.** `app`, `worker` and `db`,
+where `app` and `worker` run the SAME image at the SAME revision and
+differ only in command — two independently-built images are two
+independently-drifting versions of the pipeline. The runtime image now
+ships the whole of `src/` (the worker runs from source), the migrations
+and `tsconfig.json`; it keeps `USER bun`, a frozen lockfile and no baked
+secret. **The database publishes no port**; the convenient local
+mapping lives in a development-only override bound to loopback. One
+shared volume carries approved and intermediate media, because the app
+writes it and the worker reads it. Both processes drain on `SIGTERM`,
+the worker with a longer grace period because a render is long-running.
+
+**PRIVATE OBJECT STORAGE IS REAL AND STILL PRIVATE.** The S3-compatible
+adapter sends NO ACL under any spelling, constructs no public URL,
+manages no bucket policy and assumes no CDN. Writes are CONDITIONAL
+CREATES (`IfNoneMatch: '*'`), so the storage service performs the
+exclusion atomically and an existing canonical object maps to the SAME
+already-exists code the local adapter throws; a blind overwrite is
+impossible. An ETag is opaque bookkeeping and is NEVER accepted as a
+SHA-256 — integrity comes from a service-computed SHA-256 or from the
+bytes themselves, and fails closed when neither is available. Signed
+reads are PRIVATE GETs bounded by the fifteen-minute ceiling. Canonical
+objects are never deleted by the application. Errors keep a bounded code
+and drop the SDK's message, which quotes endpoints and request ids.
+Credentials live only inside the client and appear in no row, log or
+descriptor. The client is injectable, and automated verification uses a
+deterministic double — ZERO network calls.
+
+**RENDERING MEASURES INSTEAD OF TRUSTING.** The real engine is opt-in
+behind `RENDER_DRIVER=REMOTION`; the mock remains the default and stays
+impossible in production. The adapter re-hashes every source against the
+plan, PROBES the actual media with ffprobe, and refuses when it cannot
+measure. Database duration metadata is never authority over a file:
+approved audio that is really longer than the slot its plan gave it
+FAILS the render — it is not trimmed, stretched, sped, slowed, looped,
+rewritten or replaced. Output is probed, not echoed: the container and
+video stream are verified and the duration is read from the encoded
+media, with a tolerance derived from the ACTUAL frame rate. The
+service-level duration rule is shared by the render write and both later
+gates, and gives a real compositor a bounded frame/container envelope
+while holding the mock to the millisecond. The composition contains only
+what the plan named — no text, title, caption, watermark, music, ambient
+audio or effect of any kind. Remotion is never invoked by automated
+verification (it drives a browser it must download); the compositor is
+the one injected seam, and everything around it is exercised with tiny
+deterministic non-sacred fixtures. Step 14's mock artifacts are left
+untouched and are never fed to a real compositor.
+
+**THE TWO UNAPPROVED ADAPTERS ARE NAMED, NOT INVENTED.** No external
+visual-generation or speech vendor has been chosen, and this codebase
+does not choose one. Production therefore has two honest settings:
+`MOCK` — refused outright — and `DISABLED`, under which a job that
+REQUIRES that work fails closed as a recorded task failure and is NEVER
+silently skipped. The refusal happens BEFORE the approved sacred body is
+read, preserving the Step 15 rule that the body is retrieved only when
+synthesis is currently authorized. A manifest needing neither —
+approved media for every scene, approved human recordings for every
+voice — runs normally, and startup logs the reduced capability.
+
+**LIVENESS IS NOT READINESS.** `/api/health` says the process is alive;
+a container that is alive but misconfigured must be left for an operator
+rather than restart-looped into the same fault. `/api/ready` answers 503
+unless the preflight passes AND the database is reachable, and it is
+what the container healthcheck and any proxy use. Both payloads are
+CLOSED schemas carrying no credential, host, bucket, endpoint, object
+key, path, personal detail or sacred text; readiness reports issue CODES
+only, while the variable NAMES stay in the process log.
+
+**HTTP POSTURE.** One place sets CSP (`default-src 'self'`,
+`frame-ancestors 'none'`, `object-src 'none'`, `base-uri`/`form-action`
+`'self'`, `media-src 'self'`), `nosniff`, `X-Frame-Options`,
+`Referrer-Policy`, a deny-by-default `Permissions-Policy`, and HSTS ONLY
+in production over HTTPS. Headers never overwrite what a handler chose
+deliberately — the Prayer Room's private media keeps its own caching and
+framing, which are part of an authorization decision. Unhandled errors
+log their stack and return a bare 500: an error page that quotes an
+exception is a reconnaissance tool. Session cookies stay HttpOnly,
+SameSite and Secure in production, and still need NO signing secret —
+they are 256-bit random bearer tokens stored hashed. Payment webhooks
+keep raw-body verification, and `TRUST_PROXY` stays explicit.
+
+**OPERATIONS.** Migrations are NEVER applied automatically — not at
+boot, not at request time. `docs/OPERATIONS.md` carries the migration,
+backup, restore and start/stop runbook; `scripts/backup-db.sh` and
+`scripts/restore-db.sh` print no credential, pass the password through
+the environment rather than a visible argument, refuse to write inside
+the repository, verify a SHA-256 sidecar before restoring, refuse to
+restore while the app or worker is running, and require an explicit
+confirmation. A restore is verified into a throwaway database. No Redis,
+no broker, no Kubernetes, no public bucket, no CDN.
+
+**STILL OUTSTANDING, STATED RATHER THAN ASSUMED:** the visual-generation
+vendor; the speech-synthesis vendor; Remotion browser provisioning and
+image size; CSP `script-src` still requiring `'unsafe-inline'` for the
+framework's inline bootstrap and serialized router state; and the
+production media-delivery choice between signed redirects and full
+server-side proxying.
+
+---
 # 11. Visual Canon Database
 
 Each visual asset should be classified and approved.
