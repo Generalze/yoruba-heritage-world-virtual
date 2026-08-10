@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { closeDb } from '@/db'
 import {
   recoverExpiredGenerationLeases,
+  runAudioGenerationOnce,
   runGenerationPreparationOnce,
   runVisualGenerationOnce,
   systemGenerationClock,
@@ -12,7 +13,7 @@ import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 /**
  * DB-backed prayer generation worker (Phase One, Step 12).
  *
- * Polls the prayer_generation_jobs queue and FAIRLY alternates three
+ * Polls the prayer_generation_jobs queue and FAIRLY alternates four
  * stages so none starves the others:
  *   - preparation  (Step 12: recipe build + validate → snapshot →
  *     STORYBOARDING)
@@ -21,11 +22,15 @@ import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
  *   - visual generation (Step 14: async submit/poll of every
  *     GENERATION_REQUIRED manifest task via the mock provider only →
  *     GENERATING_AUDIO)
+ *   - audio generation (Step 15: approved human recordings re-verified
+ *     in place, plus async submit/poll of every TTS_PENDING requirement
+ *     via the mock speech provider only → RENDERING)
  * It also recovers expired leases, sleeps when every queue is idle and
  * shuts down gracefully on SIGTERM/SIGINT. It performs NO real
- * provider/paid API calls of any kind (Step 14 uses the deterministic
- * mock exclusively) and is NOT required for the web server to boot —
- * run it separately:
+ * provider/paid API calls of any kind (Steps 14 and 15 use their
+ * deterministic mocks exclusively), renders nothing (no Remotion, no
+ * FFmpeg) and is NOT required for the web server to boot — run it
+ * separately:
  *
  *   bun run worker:generation
  */
@@ -100,10 +105,24 @@ async function main(): Promise<void> {
           `[${WORKER_ID}] visual generation job ${'jobId' in visuals ? visuals.jobId : '?'} → ${visuals.status}`,
         )
       }
+      // Same discipline as the visual stage: dependencies default to
+      // the real (mock-provider-backed) submitSpeech/pollSpeech from
+      // src/services/audio-generation.ts, resolved lazily inside
+      // runAudioGenerationOnce.
+      const audio = await runAudioGenerationOnce(
+        WORKER_ID,
+        systemGenerationClock,
+      )
+      if (audio.status !== 'IDLE') {
+        console.log(
+          `[${WORKER_ID}] audio generation job ${'jobId' in audio ? audio.jobId : '?'} → ${audio.status}`,
+        )
+      }
       if (
         preparation.status === 'IDLE' &&
         storyboard.status === 'IDLE' &&
-        visuals.status === 'IDLE'
+        visuals.status === 'IDLE' &&
+        audio.status === 'IDLE'
       ) {
         await sleep(IDLE_SLEEP_MS)
       }

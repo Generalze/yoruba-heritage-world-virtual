@@ -291,7 +291,11 @@ const SCOPE_PREFERENCE: Array<ContentScopeType> = [
   'PLATFORM',
 ]
 
-function isScopeApplicable(
+/** Exported so later stages re-apply the IDENTICAL context rule when
+ * they revalidate a selection (Step 15 re-proves an approved human
+ * recording is still applicable to this exact Service/House) — a second
+ * private copy of this rule would be a second thing to drift. */
+export function isScopeApplicable(
   media: {
     scopeType: ContentScopeType
     serviceId: number | null
@@ -306,7 +310,8 @@ function isScopeApplicable(
   return media.sacredHouseId === context.sacredHouseId
 }
 
-function isLanguageCompatible(
+/** Exported for the same reason as isScopeApplicable above. */
+export function isLanguageCompatible(
   mediaLanguage: string | null,
   language: string,
 ): boolean {

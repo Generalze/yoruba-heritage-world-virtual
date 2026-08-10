@@ -1,0 +1,2402 @@
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { and, eq, inArray, like } from 'drizzle-orm'
+import { migrate } from 'drizzle-orm/mysql2/migrator'
+
+import { closeDb, getDb, getPool } from '@/db'
+import {
+  appointmentGuidanceAssignments,
+  appointmentGuidanceSets,
+  appointments,
+  auditLogs,
+  mediaAssetVersions,
+  mediaAssets,
+  prayerGenerationAudioTasks,
+  prayerGenerationJobEvents,
+  prayerGenerationJobs,
+  prayerGenerationManifestSnapshots,
+  prayerGenerationRecipeSnapshots,
+  prayerGenerationStoryboardSnapshots,
+  prayerGenerationVisualTasks,
+  prayerSessionTemplateSlots,
+  prayerSessionTemplateVersions,
+  prayerSessionTemplates,
+  prayerTemplateForbiddenPairs,
+  prayerTemplateSlotPins,
+  prayerTemplateSlotScopes,
+  sacredContentMediaLinks,
+  sacredContentVersionProfiles,
+  sacredHouseAvailability,
+  sacredHouseBookingSettings,
+  sacredHouses,
+  services,
+  spiritualContentItems,
+  spiritualContentVersions,
+  users,
+} from '@/db/schema'
+import { seedRbac } from '@/db/seed'
+import { seedDomain } from '@/db/seed-domain'
+import { assignRoleToUser } from '@/auth/rbac'
+import { registerUser } from '@/auth/service'
+import { acceptRequiredConsents, savePersonalDetails } from '@/services/profile'
+import {
+  addAvailabilityWindow,
+  getOrCreateBookingSettings,
+  updateBookingSettings,
+} from '@/services/scheduling'
+import { confirmReservation, createReservation } from '@/services/appointments'
+import {
+  approveVersion,
+  publishVersion,
+  submitVersionForReview,
+} from '@/services/spiritual-content'
+import {
+  createSacredContentItem,
+  createSacredVersion,
+  setSacredRightsStatus,
+  setSacredRuntimeEnabled,
+} from '@/services/sacred-content'
+import {
+  approveTemplateVersion,
+  createPrayerTemplate,
+  createTemplateVersion,
+  publishTemplateVersion,
+  submitTemplateVersion,
+} from '@/services/prayer-templates'
+import {
+  LocalMediaStorageProvider,
+  computeFileSha256,
+  resetMediaStorageForTests,
+  setMediaStorageForTests,
+} from '@/providers/media/storage'
+import {
+  approveMediaVersion,
+  createMediaAsset,
+  createMediaVersion,
+  createSacredMediaLink,
+  publishMediaVersion,
+  removeSacredMediaLink,
+  setMediaRightsStatus,
+  setMediaRuntimeEnabled,
+  submitMediaVersion,
+} from '@/services/media-assets'
+import {
+  AUDIO_TASK_POLL_DELAY_MS,
+  DEFAULT_LEASE_MS,
+  GENERATION_TRANSITIONS,
+  claimNextAudioGenerationJob,
+  isLegalTransition,
+  recoverExpiredGenerationLeases,
+  runAudioGenerationOnce,
+  runGenerationPreparationOnce,
+  runVisualGenerationOnce,
+} from '@/services/generation-jobs'
+import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
+import {
+  compileSpeechSynthesisRequest,
+  computeAudioTaskIdempotencyKey,
+  pollSpeech,
+  submitSpeech,
+  verifyExistingHumanAudio,
+} from '@/services/audio-generation'
+import {
+  resetTtsProviderForTests,
+  setTtsProviderForTests,
+} from '@/providers/tts/registry'
+import {
+  addDays,
+  currentLocalDate,
+  localToUtcMs,
+  utcMsToSql,
+} from '@/lib/schedule-time'
+import type {
+  AudioGenerationDependencies,
+  AudioTaskPollResult,
+  GenerationClock,
+} from '@/services/generation-jobs'
+import type {
+  GenerationManifest,
+  ManifestAudioRequirement,
+} from '@/services/generation-storyboards'
+import type {
+  SpeechPollResult,
+  SpeechSynthesisRequest,
+  SpeechSynthesisSubmission,
+  TtsProvider,
+} from '@/providers/tts/types'
+import type { SacredProfileInput } from '@/services/sacred-content'
+import type { SlotInput } from '@/services/prayer-templates'
+
+/**
+ * ============================================================================
+ * RED TEAM — Phase One, Step 15 (approved speech synthesis / audio
+ * generation), verified against landed source: src/db/schema/
+ * audio-generation.ts, src/services/audio-generation.ts,
+ * src/providers/tts/{types,mock,registry}.ts and the Step-15 section of
+ * src/services/generation-jobs.ts.
+ *
+ * The two properties this suite exists to defend, above all others:
+ *   1. an approved HUMAN recording of sacred text is NEVER synthesized,
+ *      never regenerated, and never sent to any provider; and
+ *   2. machine speech happens ONLY where the CURRENT authoritative voice
+ *      policy still says APPROVED_TTS_ALLOWED, using the EXACT approved
+ *      body, which never reaches a database row, an event or a log.
+ *
+ * Everything else (lease/CAS/orphan/identity discipline) is the Step 14
+ * machinery re-proved for this stage, because a shared pattern that
+ * silently regressed in one stage is not actually shared.
+ *
+ * File-local prefix RTA_ so this file's fixtures never collide with the
+ * RTV_/RTW_ visual suites.
+ * ============================================================================
+ */
+
+const ctx = { ipAddress: null, userAgent: 'bun-test' }
+const PASSPHRASE = `redteam audio test passphrase ${crypto.randomUUID()}`
+const createdUserIds: Array<number> = []
+const createdItemIds: Array<number> = []
+const createdAssetIds: Array<number> = []
+const createdTemplateIds: Array<number> = []
+const HOUSE_TZ = 'Africa/Lagos'
+
+let adminId: number
+let cmId: number
+let houseId: number
+let storageRoot: string
+let storage: LocalMediaStorageProvider
+let servicePool: Array<number> = []
+let serviceCursor = 0
+
+const RUN_KEY = crypto.randomUUID().slice(0, 4).toUpperCase().replace(/-/g, 'X')
+const CODE_PREFIX = `RTA_${RUN_KEY}`
+let codeCounter = 0
+function nextCode(prefix = 'X'): string {
+  codeCounter += 1
+  return `${CODE_PREFIX}_${prefix}_${codeCounter}`
+}
+function nextService(): number {
+  const id = servicePool.at(serviceCursor)
+  serviceCursor += 1
+  if (id == null) throw new Error('service pool exhausted — enlarge fixture')
+  return id
+}
+
+const today = currentLocalDate(HOUSE_TZ, Date.now())
+let slotCursor = 0
+function nextSlot(): string {
+  const hours = ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00']
+  const index = slotCursor++
+  const date = addDays(today, 2 + Math.floor(index / hours.length))
+  return utcMsToSql(localToUtcMs(HOUSE_TZ, date, hours[index % hours.length]))
+}
+
+function makeFakeClock(startMs: number): GenerationClock & {
+  advance: (ms: number) => void
+} {
+  let t = startMs
+  return {
+    now: () => new Date(t),
+    advance: (ms: number) => {
+      t += ms
+    },
+  }
+}
+
+function syntheticBytes(marker: string = crypto.randomUUID()): Uint8Array {
+  return new TextEncoder().encode(`redteam-audio-bytes ${marker}`)
+}
+
+async function makeUser(role?: 'ADMIN' | 'CONTENT_MANAGER'): Promise<number> {
+  const result = await registerUser(
+    {
+      email: `rta-${crypto.randomUUID()}@test.local`,
+      preferredName: 'RTA Fixture',
+      password: PASSPHRASE,
+    },
+    ctx,
+  )
+  if (!result.ok) throw new Error(`fixture failed: ${result.error}`)
+  createdUserIds.push(result.user.id)
+  if (role) await assignRoleToUser(result.user.id, role)
+  return result.user.id
+}
+
+async function makeEligibleUser(): Promise<number> {
+  const id = await makeUser()
+  await savePersonalDetails(
+    id,
+    {
+      fullName: 'Adéwálé Olúṣọlá Adébáyọ̀',
+      preferredName: 'Adéwálé',
+      phone: '+2348012345678',
+      countryCode: 'NG',
+      timezone: 'Africa/Lagos',
+      preferredLanguage: 'en',
+      dateOfBirth: '1990-03-21',
+    },
+    ctx,
+  )
+  await acceptRequiredConsents(id, ctx)
+  return id
+}
+
+function sacredProfile(
+  overrides: Partial<SacredProfileInput> = {},
+): SacredProfileInput {
+  return {
+    variantKind: 'ORIGINAL',
+    provenanceType: 'ORIGINAL_AUTHORED',
+    sourceCommunity: null,
+    sourcePlace: null,
+    sourceReference: null,
+    publicAttributionText: null,
+    internalProvenanceNote: null,
+    digitalStorageAuthorized: true,
+    themeCode: null,
+    durationHintSeconds: 10,
+    repeatable: false,
+    voicePolicy: 'TEXT_ONLY',
+    externalAiPolicy: 'METADATA_ONLY',
+    accessPolicy: 'PRAYER_ROOM_PRIVATE',
+    ...overrides,
+  }
+}
+
+const SACRED_BODY_MARKER = 'Red-team-audio sacred block body'
+
+async function makeEligibleSacred(options: {
+  themeCode: string
+  contentType?: 'PRAYER' | 'CHANT' | 'BLESSING'
+  voicePolicy?: 'TEXT_ONLY' | 'APPROVED_TTS_ALLOWED' | 'HUMAN_RECORDED_REQUIRED'
+  durationHintSeconds?: number
+}): Promise<{ itemId: number; versionId: number; bodyMarker: string }> {
+  const bodyMarker = `${SACRED_BODY_MARKER} ${crypto.randomUUID()}`
+  const item = await createSacredContentItem(cmId, ctx, {
+    code: nextCode('SC'),
+    contentType: options.contentType ?? 'PRAYER',
+    scopeType: 'PLATFORM',
+    sacredHouseId: null,
+    serviceId: null,
+    sortOrder: 0,
+  })
+  createdItemIds.push(item.id)
+  const version = await createSacredVersion(
+    cmId,
+    ctx,
+    item.id,
+    {
+      language: 'en',
+      title: 'Red-team audio sacred block',
+      body: bodyMarker,
+    },
+    sacredProfile({
+      themeCode: options.themeCode,
+      voicePolicy: options.voicePolicy ?? 'APPROVED_TTS_ALLOWED',
+      durationHintSeconds: options.durationHintSeconds ?? 10,
+    }),
+  )
+  await submitVersionForReview(cmId, ctx, version.id)
+  await approveVersion(adminId, ctx, version.id)
+  await publishVersion(adminId, ctx, version.id)
+  await setSacredRightsStatus(adminId, ctx, version.id, 'PENDING_REVIEW')
+  await setSacredRightsStatus(adminId, ctx, version.id, 'CLEARED')
+  await setSacredRuntimeEnabled(adminId, ctx, version.id, true)
+  return { itemId: item.id, versionId: version.id, bodyMarker }
+}
+
+const MIME_BY_KIND = {
+  AUDIO: 'audio/mpeg',
+  IMAGE: 'image/png',
+  VIDEO: 'video/mp4',
+} as const
+
+async function makeEligibleMedia(options: {
+  assetKind?: 'AUDIO' | 'IMAGE' | 'VIDEO'
+  contentType?: 'PRAYER' | 'CHANT' | 'BLESSING' | null
+  themeCode?: string | null
+  sourceType?: 'IN_HOUSE' | 'HUMAN_RECORDED' | 'LICENSED'
+  language?: 'en' | 'yo' | null
+}): Promise<{ assetId: number; versionId: number; fileSha256: string }> {
+  const assetKind = options.assetKind ?? 'IMAGE'
+  const asset = await createMediaAsset(cmId, ctx, {
+    code: nextCode('MA'),
+    assetKind,
+    scopeType: 'PLATFORM',
+    sacredHouseId: null,
+    serviceId: null,
+    contentType: options.contentType ?? null,
+    themeCode: options.themeCode ?? null,
+  })
+  createdAssetIds.push(asset.id)
+  const version = await createMediaVersion(
+    cmId,
+    ctx,
+    asset.id,
+    syntheticBytes(),
+    MIME_BY_KIND[assetKind],
+    {
+      sourceType: options.sourceType ?? 'IN_HOUSE',
+      language: options.language ?? null,
+      durationSeconds: assetKind === 'AUDIO' ? 10 : null,
+      width: null,
+      height: null,
+      containsIdentifiablePerson: false,
+      consentStatus: 'NOT_APPLICABLE',
+      consentReference: null,
+      externalAiPolicy: 'NO_EXTERNAL_AI',
+      // NEVER authorized: Step 15 performs no voice or likeness cloning.
+      voiceCloneAuthorized: false,
+    },
+  )
+  await submitMediaVersion(cmId, ctx, version.id)
+  await approveMediaVersion(adminId, ctx, version.id)
+  await publishMediaVersion(adminId, ctx, version.id)
+  await setMediaRightsStatus(adminId, ctx, version.id, 'PENDING_REVIEW')
+  await setMediaRightsStatus(adminId, ctx, version.id, 'CLEARED')
+  await setMediaRuntimeEnabled(adminId, ctx, version.id, true)
+  const row = (
+    await getDb()
+      .select({ fileSha256: mediaAssetVersions.fileSha256 })
+      .from(mediaAssetVersions)
+      .where(eq(mediaAssetVersions.id, version.id))
+      .limit(1)
+  ).at(0)!
+  return { assetId: asset.id, versionId: version.id, fileSha256: row.fileSha256 }
+}
+
+function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
+  return {
+    slotKey: 'MAIN_PRAYER',
+    position: 1,
+    slotKind: 'CONTENT',
+    minSelect: 1,
+    maxSelect: 1,
+    contentType: 'PRAYER',
+    selectorMode: 'ELIGIBLE_FILTER',
+    themeCode: null,
+    variantKind: null,
+    silenceDurationSeconds: null,
+    allowedScopes: ['PLATFORM'],
+    pinnedContentVersionIds: [],
+    ...overrides,
+  }
+}
+
+async function makeServiceTemplate(
+  serviceId: number,
+  slots: Array<SlotInput>,
+): Promise<number> {
+  const template = await createPrayerTemplate(cmId, ctx, {
+    code: nextCode('TPL'),
+    scopeType: 'SERVICE',
+    sacredHouseId: null,
+    serviceId,
+  })
+  createdTemplateIds.push(template.id)
+  const version = await createTemplateVersion(cmId, ctx, template.id, {
+    language: 'en',
+    priority: 0,
+    selectionWeight: 1,
+    targetMinSeconds: 5,
+    targetMaxSeconds: 3600,
+    slots,
+    forbiddenPairs: [],
+  })
+  await submitTemplateVersion(cmId, ctx, version.id)
+  await approveTemplateVersion(adminId, ctx, version.id)
+  await publishTemplateVersion(adminId, ctx, version.id)
+  return template.id
+}
+
+async function jobForAppointment(appointmentId: number) {
+  return (
+    await getDb()
+      .select()
+      .from(prayerGenerationJobs)
+      .where(eq(prayerGenerationJobs.appointmentId, appointmentId))
+  ).at(0)
+}
+
+async function jobRow(jobId: number) {
+  return (
+    await getDb()
+      .select()
+      .from(prayerGenerationJobs)
+      .where(eq(prayerGenerationJobs.id, jobId))
+      .limit(1)
+  ).at(0)!
+}
+
+async function audioTaskRows(jobId: number) {
+  return getDb()
+    .select()
+    .from(prayerGenerationAudioTasks)
+    .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+}
+
+async function jobEventRows(jobId: number) {
+  return getDb()
+    .select()
+    .from(prayerGenerationJobEvents)
+    .where(eq(prayerGenerationJobEvents.generationJobId, jobId))
+}
+
+/**
+ * Cancels every OTHER non-terminal job in the table, not just this
+ * house's. The audio claim queue is a GLOBAL FIFO ordered by id, and
+ * GENERATING_AUDIO is where every earlier suite's finished jobs come to
+ * rest — so a house-scoped quiesce (enough for the earlier stages)
+ * would leave foreign jobs that always win the race and make these
+ * tests assert against somebody else's job.
+ */
+async function quiesceOtherJobs(exceptJobId: number): Promise<void> {
+  await getDb()
+    .update(prayerGenerationJobs)
+    .set({ status: 'CANCELLED', leaseToken: null, leaseExpiresAt: null })
+    .where(
+      and(
+        inArray(prayerGenerationJobs.status, [
+          'QUEUED',
+          'RETRYING',
+          'STORYBOARDING',
+          'GENERATING_VISUALS',
+          'GENERATING_AUDIO',
+        ]),
+      ),
+    )
+  await getDb()
+    .update(prayerGenerationJobs)
+    .set({ status: 'QUEUED' })
+    .where(eq(prayerGenerationJobs.id, exceptJobId))
+}
+
+async function latestManifest(jobId: number): Promise<GenerationManifest> {
+  const row = (
+    await getDb()
+      .select()
+      .from(prayerGenerationManifestSnapshots)
+      .where(eq(prayerGenerationManifestSnapshots.generationJobId, jobId))
+  ).at(-1)!
+  return JSON.parse(row.manifestJsonText) as GenerationManifest
+}
+
+/**
+ * Drives one appointment all the way to GENERATING_AUDIO. Every fixture
+ * below pairs its sacred block with an APPROVED_MEDIA library image, so
+ * the Step 14 visual stage has ZERO tasks and completes in a single
+ * cycle — this suite is about audio, and a real visual round-trip would
+ * only add unrelated ways to fail.
+ */
+async function driveToGeneratingAudio(
+  serviceId: number,
+): Promise<{ jobId: number; appointmentId: number }> {
+  const userId = await makeEligibleUser()
+  const reservation = await createReservation(userId, ctx, {
+    serviceId,
+    startsAtUtc: nextSlot(),
+  })
+  await confirmReservation(reservation.appointmentId, ctx)
+  const job = (await jobForAppointment(reservation.appointmentId))!
+  await quiesceOtherJobs(job.id)
+  const clock = { now: () => new Date() }
+  expect((await runGenerationPreparationOnce('rta-prep', clock)).status).toBe(
+    'PREPARED',
+  )
+  expect((await runStoryboardPlanningOnce('rta-plan', clock)).status).toBe(
+    'PLANNED',
+  )
+  // Zero visual tasks ⇒ the visual cycle finalizes immediately.
+  expect((await runVisualGenerationOnce('rta-visual', clock)).status).toBe(
+    'COMPLETE',
+  )
+  const row = (await jobForAppointment(reservation.appointmentId))!
+  expect(row.status).toBe('GENERATING_AUDIO')
+  return { jobId: job.id, appointmentId: reservation.appointmentId }
+}
+
+/** A job whose single audio requirement is TTS_PENDING (voice policy
+ * APPROVED_TTS_ALLOWED, no linked human recording available). */
+async function makeTtsJob(): Promise<{
+  jobId: number
+  manifest: GenerationManifest
+  requirement: ManifestAudioRequirement
+  bodyMarker: string
+  contentVersionId: number
+}> {
+  const serviceId = nextService()
+  const theme = `${CODE_PREFIX}_TTS_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  const sacred = await makeEligibleSacred({
+    themeCode: theme,
+    contentType: 'PRAYER',
+    voicePolicy: 'APPROVED_TTS_ALLOWED',
+  })
+  await makeEligibleMedia({
+    assetKind: 'IMAGE',
+    contentType: 'PRAYER',
+    themeCode: theme,
+  })
+  await makeServiceTemplate(serviceId, [
+    filterSlot({ themeCode: theme, contentType: 'PRAYER' }),
+  ])
+  const { jobId } = await driveToGeneratingAudio(serviceId)
+  const manifest = await latestManifest(jobId)
+  const requirement = manifest.audioRequirements[0]
+  expect(manifest.audioRequirements.length).toBe(1)
+  expect(requirement.mode).toBe('TTS_PENDING')
+  return {
+    jobId,
+    manifest,
+    requirement,
+    bodyMarker: sacred.bodyMarker,
+    contentVersionId: sacred.versionId,
+  }
+}
+
+/** A job whose single audio requirement is an approved HUMAN recording
+ * (voice policy HUMAN_RECORDED_REQUIRED + a linked PRIMARY_AUDIO). */
+async function makeHumanAudioJob(): Promise<{
+  jobId: number
+  manifest: GenerationManifest
+  requirement: ManifestAudioRequirement
+  contentVersionId: number
+  audioVersionId: number
+  linkId: number
+}> {
+  const serviceId = nextService()
+  const theme = `${CODE_PREFIX}_HUM_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  const sacred = await makeEligibleSacred({
+    themeCode: theme,
+    contentType: 'PRAYER',
+    voicePolicy: 'HUMAN_RECORDED_REQUIRED',
+  })
+  const audio = await makeEligibleMedia({
+    assetKind: 'AUDIO',
+    contentType: 'PRAYER',
+    themeCode: theme,
+    sourceType: 'HUMAN_RECORDED',
+    language: 'en',
+  })
+  const link = await createSacredMediaLink(adminId, ctx, {
+    contentVersionId: sacred.versionId,
+    mediaAssetVersionId: audio.versionId,
+    role: 'PRIMARY_AUDIO',
+  })
+  await makeEligibleMedia({
+    assetKind: 'IMAGE',
+    contentType: 'PRAYER',
+    themeCode: theme,
+  })
+  await makeServiceTemplate(serviceId, [
+    filterSlot({ themeCode: theme, contentType: 'PRAYER' }),
+  ])
+  const { jobId } = await driveToGeneratingAudio(serviceId)
+  const manifest = await latestManifest(jobId)
+  const requirement = manifest.audioRequirements[0]
+  expect(manifest.audioRequirements.length).toBe(1)
+  expect(requirement.mode).toBe('EXISTING_HUMAN_AUDIO')
+  return {
+    jobId,
+    manifest,
+    requirement,
+    contentVersionId: sacred.versionId,
+    audioVersionId: audio.versionId,
+    linkId: link.id,
+  }
+}
+
+/** A job with NO audio at all (TEXT_ONLY sacred content). */
+async function makeTextOnlyJob(): Promise<{
+  jobId: number
+  manifest: GenerationManifest
+}> {
+  const serviceId = nextService()
+  const theme = `${CODE_PREFIX}_TXT_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  await makeEligibleSacred({
+    themeCode: theme,
+    contentType: 'PRAYER',
+    voicePolicy: 'TEXT_ONLY',
+  })
+  await makeEligibleMedia({
+    assetKind: 'IMAGE',
+    contentType: 'PRAYER',
+    themeCode: theme,
+  })
+  await makeServiceTemplate(serviceId, [
+    filterSlot({ themeCode: theme, contentType: 'PRAYER' }),
+  ])
+  const { jobId } = await driveToGeneratingAudio(serviceId)
+  const manifest = await latestManifest(jobId)
+  expect(manifest.audioRequirements.length).toBe(0)
+  return { jobId, manifest }
+}
+
+/** The manifest-derived identity every provider action is keyed on.
+ * Tests pass this rather than inventing a key: the executor recomputes
+ * the authoritative one and refuses anything that disagrees, so a
+ * hand-made key would only ever prove the refusal path (which has its
+ * own dedicated tests below). */
+function identity(jobId: number, manifest: GenerationManifest) {
+  return { generationJobId: jobId, manifestSha256: manifest.manifestSha256 }
+}
+
+/** Real executor wiring — the same functions the worker uses. */
+const realDependencies: AudioGenerationDependencies = {
+  submitSpeech,
+  pollSpeech,
+}
+
+const submitOnlyDeps: AudioGenerationDependencies = {
+  submitSpeech: async () => ({
+    status: 'SUBMITTED',
+    providerCode: 'MOCK_TTS',
+    providerOperationId: `op-${crypto.randomUUID()}`,
+  }),
+  pollSpeech: async () => ({ status: 'PROCESSING' }),
+}
+
+function neverCalledDeps(spy: {
+  submitCalls: number
+  pollCalls: number
+}): AudioGenerationDependencies {
+  return {
+    submitSpeech: async () => {
+      spy.submitCalls += 1
+      throw new Error('provider must not be called in this test')
+    },
+    pollSpeech: async () => {
+      spy.pollCalls += 1
+      throw new Error('provider must not be called in this test')
+    },
+  }
+}
+
+type SucceededPoll = Extract<AudioTaskPollResult, { status: 'SUCCEEDED' }>
+
+/** Stores REAL bytes and returns the exact SUCCEEDED shape a genuine
+ * poll produces — finalization re-reads the object and recomputes its
+ * hash, so a fabricated reference models a MISSING artifact, not a
+ * successful synthesis. */
+async function storeRealArtifact(durationMs: number): Promise<SucceededPoll> {
+  const bytes = new TextEncoder().encode(
+    `rta-speech-artifact-${crypto.randomUUID()}`,
+  )
+  const { storageKey } = await storage.put(bytes, 'mp3')
+  return {
+    status: 'SUCCEEDED',
+    artifactSha256: computeFileSha256(bytes),
+    artifactMimeType: 'audio/mpeg',
+    artifactDurationMs: durationMs,
+    artifactStorageRef: storageKey,
+  }
+}
+
+beforeAll(async () => {
+  storageRoot = mkdtempSync(join(tmpdir(), 'yhw-redteam-audio-test-'))
+  storage = new LocalMediaStorageProvider(storageRoot)
+  setMediaStorageForTests(storage)
+
+  await migrate(getDb(), { migrationsFolder: './migrations' })
+  await seedRbac()
+  await seedDomain()
+  const db = getDb()
+  await db
+    .update(spiritualContentItems)
+    .set({ active: false })
+    .where(like(spiritualContentItems.code, 'RTA\\_%'))
+  await db
+    .update(prayerSessionTemplates)
+    .set({ active: false })
+    .where(like(prayerSessionTemplates.code, 'RTA\\_%'))
+  await db
+    .update(mediaAssets)
+    .set({ active: false })
+    .where(like(mediaAssets.code, 'RTA\\_%'))
+
+  adminId = await makeUser('ADMIN')
+  cmId = await makeUser('CONTENT_MANAGER')
+
+  const key = crypto.randomUUID().slice(0, 6).replace(/-/g, 'x')
+  const houseInsert = await db.insert(sacredHouses).values({
+    code: `RTAH_${key}`.toUpperCase(),
+    name: `RTA House ${key}`,
+    slug: `rtah-${key}`,
+    status: 'PUBLISHED',
+  })
+  houseId = houseInsert[0].insertId
+  servicePool = []
+  for (let i = 0; i < 48; i += 1) {
+    const inserted = await db.insert(services).values({
+      sacredHouseId: houseId,
+      code: `RTAS${i}_${key}`.toUpperCase(),
+      name: `RTA Service ${i} ${key}`,
+      slug: `rtas${i}-${key}`,
+      serviceStatus: 'PUBLISHED',
+      durationMinutes: 60,
+      priceMinor: 500_000,
+      currency: 'NGN',
+    })
+    servicePool.push(inserted[0].insertId)
+  }
+
+  await getOrCreateBookingSettings(houseId)
+  await updateBookingSettings(adminId, ctx, houseId, {
+    schedulingTimezone: HOUSE_TZ,
+    bookingEnabled: true,
+    slotIncrementMinutes: 30,
+    minimumLeadMinutes: 1440,
+    maximumAdvanceDays: 90,
+    reservationHoldMinutes: 15,
+    cancellationCutoffMinutes: 1440,
+    rescheduleCutoffMinutes: 1440,
+  })
+  for (let day = 1; day <= 7; day++) {
+    await addAvailabilityWindow(adminId, ctx, houseId, {
+      dayOfWeek: day,
+      startLocalTime: '09:00',
+      endLocalTime: '17:00',
+    })
+  }
+})
+
+afterAll(async () => {
+  const db = getDb()
+  if (houseId) {
+    const apptRows = await db
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(eq(appointments.sacredHouseId, houseId))
+    const apptIds = apptRows.map((row) => row.id)
+    if (apptIds.length > 0) {
+      const jobs = await db
+        .select({ id: prayerGenerationJobs.id })
+        .from(prayerGenerationJobs)
+        .where(inArray(prayerGenerationJobs.appointmentId, apptIds))
+      const jobIds = jobs.map((row) => row.id)
+      if (jobIds.length > 0) {
+        await db
+          .delete(prayerGenerationAudioTasks)
+          .where(inArray(prayerGenerationAudioTasks.generationJobId, jobIds))
+        await db
+          .delete(prayerGenerationVisualTasks)
+          .where(inArray(prayerGenerationVisualTasks.generationJobId, jobIds))
+        await db
+          .delete(prayerGenerationManifestSnapshots)
+          .where(
+            inArray(prayerGenerationManifestSnapshots.generationJobId, jobIds),
+          )
+        await db
+          .delete(prayerGenerationStoryboardSnapshots)
+          .where(
+            inArray(prayerGenerationStoryboardSnapshots.generationJobId, jobIds),
+          )
+        await db
+          .delete(prayerGenerationJobEvents)
+          .where(inArray(prayerGenerationJobEvents.generationJobId, jobIds))
+        await db
+          .delete(prayerGenerationRecipeSnapshots)
+          .where(
+            inArray(prayerGenerationRecipeSnapshots.generationJobId, jobIds),
+          )
+        await db
+          .delete(prayerGenerationJobs)
+          .where(inArray(prayerGenerationJobs.id, jobIds))
+      }
+      await db
+        .delete(appointmentGuidanceAssignments)
+        .where(inArray(appointmentGuidanceAssignments.appointmentId, apptIds))
+      await db
+        .delete(appointmentGuidanceSets)
+        .where(inArray(appointmentGuidanceSets.appointmentId, apptIds))
+      await db.delete(appointments).where(inArray(appointments.id, apptIds))
+    }
+    if (createdTemplateIds.length > 0) {
+      const versionRows = await db
+        .select({ id: prayerSessionTemplateVersions.id })
+        .from(prayerSessionTemplateVersions)
+        .where(
+          inArray(prayerSessionTemplateVersions.templateId, createdTemplateIds),
+        )
+      const versionIds = versionRows.map((row) => row.id)
+      if (versionIds.length > 0) {
+        const slotRows = await db
+          .select({ id: prayerSessionTemplateSlots.id })
+          .from(prayerSessionTemplateSlots)
+          .where(
+            inArray(prayerSessionTemplateSlots.templateVersionId, versionIds),
+          )
+        const slotIds = slotRows.map((row) => row.id)
+        if (slotIds.length > 0) {
+          await db
+            .delete(prayerTemplateSlotPins)
+            .where(inArray(prayerTemplateSlotPins.slotId, slotIds))
+          await db
+            .delete(prayerTemplateSlotScopes)
+            .where(inArray(prayerTemplateSlotScopes.slotId, slotIds))
+          await db
+            .delete(prayerSessionTemplateSlots)
+            .where(inArray(prayerSessionTemplateSlots.id, slotIds))
+        }
+        await db
+          .delete(prayerTemplateForbiddenPairs)
+          .where(
+            inArray(prayerTemplateForbiddenPairs.templateVersionId, versionIds),
+          )
+        await db
+          .delete(prayerSessionTemplateVersions)
+          .where(inArray(prayerSessionTemplateVersions.id, versionIds))
+      }
+      await db
+        .delete(prayerSessionTemplates)
+        .where(inArray(prayerSessionTemplates.id, createdTemplateIds))
+    }
+    if (createdItemIds.length > 0) {
+      const sacredVersions = await db
+        .select({ id: spiritualContentVersions.id })
+        .from(spiritualContentVersions)
+        .where(inArray(spiritualContentVersions.contentItemId, createdItemIds))
+      const sacredVersionIds = sacredVersions.map((row) => row.id)
+      if (sacredVersionIds.length > 0) {
+        await db
+          .delete(sacredContentMediaLinks)
+          .where(
+            inArray(sacredContentMediaLinks.contentVersionId, sacredVersionIds),
+          )
+      }
+    }
+    if (createdAssetIds.length > 0) {
+      const versionRows = await db
+        .select({ id: mediaAssetVersions.id })
+        .from(mediaAssetVersions)
+        .where(inArray(mediaAssetVersions.assetId, createdAssetIds))
+      const versionIds = versionRows.map((row) => row.id)
+      if (versionIds.length > 0) {
+        await db
+          .delete(mediaAssetVersions)
+          .where(inArray(mediaAssetVersions.id, versionIds))
+      }
+      await db
+        .delete(mediaAssets)
+        .where(inArray(mediaAssets.id, createdAssetIds))
+    }
+    if (createdItemIds.length > 0) {
+      await db
+        .delete(sacredContentVersionProfiles)
+        .where(
+          inArray(sacredContentVersionProfiles.contentItemId, createdItemIds),
+        )
+      await db
+        .delete(spiritualContentVersions)
+        .where(inArray(spiritualContentVersions.contentItemId, createdItemIds))
+      await db
+        .delete(spiritualContentItems)
+        .where(inArray(spiritualContentItems.id, createdItemIds))
+    }
+    await db
+      .delete(sacredHouseAvailability)
+      .where(eq(sacredHouseAvailability.sacredHouseId, houseId))
+    await db
+      .delete(sacredHouseBookingSettings)
+      .where(eq(sacredHouseBookingSettings.sacredHouseId, houseId))
+    await db.delete(services).where(eq(services.sacredHouseId, houseId))
+    await db.delete(sacredHouses).where(eq(sacredHouses.id, houseId))
+  }
+  if (createdUserIds.length > 0) {
+    await db
+      .delete(auditLogs)
+      .where(inArray(auditLogs.actorUserId, createdUserIds))
+    await db.delete(users).where(inArray(users.id, createdUserIds))
+  }
+  resetMediaStorageForTests()
+  resetTtsProviderForTests()
+  try {
+    rmSync(storageRoot, { recursive: true, force: true })
+  } catch {
+    // best-effort temp cleanup
+  }
+  await closeDb()
+})
+
+// ----------------------------------------------------------------------------
+// Item 1: an approved HUMAN recording is NEVER synthesized
+// ----------------------------------------------------------------------------
+
+describe('red-team: approved human audio is never synthesized', () => {
+  it('an EXISTING_HUMAN_AUDIO requirement creates ZERO tasks, calls NO provider, and still advances', async () => {
+    const { jobId, requirement } = await makeHumanAudioJob()
+    expect(requirement.mediaAssetVersionId).not.toBeNull()
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    const outcome = await runAudioGenerationOnce(
+      'rta-human',
+      { now: () => new Date() },
+      neverCalledDeps(spy),
+    )
+    // TEETH: a human recording is used exactly as approved — there is
+    // no synthesis to attempt, so the provider is never reached and no
+    // durable task row is ever created for it.
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect((await audioTaskRows(jobId)).length).toBe(0)
+    expect(outcome.status).toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).toBe('RENDERING')
+  }, 240_000)
+
+  it('compileSpeechSynthesisRequest refuses a human-audio requirement outright', async () => {
+    const { jobId, manifest, requirement } = await makeHumanAudioJob()
+    const compiled = await compileSpeechSynthesisRequest(requirement, identity(jobId, manifest))
+    expect(compiled.status).toBe('FAILED')
+    if (compiled.status === 'FAILED') {
+      expect(compiled.reasonCode).toBe('not_a_tts_requirement')
+    }
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 2: TTS only where the CURRENT authoritative policy permits it
+// ----------------------------------------------------------------------------
+
+describe('red-team: a forbidding voice policy is never synthesized', () => {
+  it('HUMAN_RECORDED_REQUIRED content fails closed even if a TTS requirement claims otherwise', async () => {
+    const { jobId, manifest, requirement, contentVersionId } =
+      await makeHumanAudioJob()
+    // A tampered/forged requirement that CLAIMS TTS for content whose
+    // authoritative policy demands a human voice.
+    const forged: ManifestAudioRequirement = {
+      ...requirement,
+      mode: 'TTS_PENDING',
+      voicePolicy: 'APPROVED_TTS_ALLOWED',
+    }
+    expect(forged.contentVersionId).toBe(contentVersionId)
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const compiled = await compileSpeechSynthesisRequest(forged, identity(jobId, manifest))
+      // TEETH: the AUTHORITATIVE profile policy decides, not the
+      // manifest's copy of it.
+      expect(compiled.status).toBe('FAILED')
+      if (compiled.status === 'FAILED') {
+        expect(compiled.reasonCode).toBe('voice_policy_forbids_tts')
+      }
+      const submitted = await submitSpeech({
+        requirement: forged,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('FAILED')
+      // TEETH: refused before any provider call — a human-voice-only
+      // text is never sent to a synthesizer, not even to be rejected
+      // there.
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a requirement whose snapshotted policy is not APPROVED_TTS_ALLOWED is refused without touching the database', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const forged: ManifestAudioRequirement = {
+      ...requirement,
+      voicePolicy: 'TEXT_ONLY',
+    }
+    const compiled = await compileSpeechSynthesisRequest(forged, identity(jobId, manifest))
+    expect(compiled.status).toBe('FAILED')
+    if (compiled.status === 'FAILED') {
+      expect(compiled.reasonCode).toBe('voice_policy_forbids_tts')
+    }
+  }, 240_000)
+
+  it('a voice policy downgraded AFTER planning stops the cycle before ANY synthesis', async () => {
+    const { jobId, contentVersionId } = await makeTtsJob()
+    // The house changes its mind: this text now requires a human voice.
+    await getDb()
+      .update(sacredContentVersionProfiles)
+      .set({ voicePolicy: 'HUMAN_RECORDED_REQUIRED' })
+      .where(eq(sacredContentVersionProfiles.contentVersionId, contentVersionId))
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    let outcome
+    try {
+      outcome = await runAudioGenerationOnce(
+        'rta-policy-withdrawn',
+        { now: () => new Date() },
+        neverCalledDeps(spy),
+      )
+    } finally {
+      await getDb()
+        .update(sacredContentVersionProfiles)
+        .set({ voicePolicy: 'APPROVED_TTS_ALLOWED' })
+        .where(
+          eq(sacredContentVersionProfiles.contentVersionId, contentVersionId),
+        )
+    }
+    // TEETH: the frozen plan does not survive a policy change. The
+    // whole-manifest revalidation at the TOP of the cycle catches it
+    // before the task loop is even entered, so nothing is submitted, no
+    // durable task row is created, and the job never reaches RENDERING.
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('RENDERING')
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect((await audioTaskRows(jobId)).length).toBe(0)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 3 & 4: exact approved body, never persisted or logged
+// ----------------------------------------------------------------------------
+
+/** Records every request it is handed so a test can prove exactly what
+ * crossed the provider boundary. */
+function capturingProvider(
+  captured: Array<SpeechSynthesisRequest>,
+  code = 'MOCK_TTS',
+): TtsProvider {
+  return {
+    code,
+    displayName: 'Red-team capturing TTS provider',
+    isEnabled: () => true,
+    submitSpeech: async (
+      request: SpeechSynthesisRequest,
+    ): Promise<SpeechSynthesisSubmission> => {
+      captured.push(request)
+      return { providerJobId: `cap-${request.idempotencyKey}`, status: 'PENDING' }
+    },
+    pollSpeech: async (): Promise<SpeechPollResult> => ({
+      status: 'COMPLETED',
+      artifact: {
+        bytes: new TextEncoder().encode('captured provider speech bytes'),
+        mimeType: 'audio/mpeg',
+        durationMs: 10_000,
+      },
+      failureCode: null,
+    }),
+  }
+}
+
+describe('red-team: the approved body is spoken exactly and never persisted', () => {
+  it('the provider receives the EXACT approved text and nothing else', async () => {
+    const { jobId, manifest, requirement, bodyMarker } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('SUBMITTED')
+      expect(captured.length).toBe(1)
+      // TEETH: the key the provider was handed is the AUTHORITATIVE one,
+      // derived from manifest authority — not something a caller chose.
+      expect(captured[0].idempotencyKey).toBe(
+        computeAudioTaskIdempotencyKey({
+          generationJobId: jobId,
+          manifestSha256: manifest.manifestSha256,
+          requirementId: requirement.requirementId!,
+        }),
+      )
+      // TEETH: byte-for-byte the approved body — not rewritten, not
+      // translated, not summarized, not extended with an invented
+      // prayer or a synthesized introduction.
+      expect(captured[0].approvedText).toBe(bodyMarker)
+      expect(captured[0].language).toBe('en')
+      expect(captured[0].voicePolicy).toBe('APPROVED_TTS_ALLOWED')
+      // TEETH: the contract carries NO likeness input at all — there is
+      // nothing on this request a provider could clone a voice from.
+      expect(Object.keys(captured[0]).sort()).toEqual([
+        'approvedText',
+        'idempotencyKey',
+        'language',
+        'requirementId',
+        'sceneId',
+        'targetDurationMs',
+        'voicePolicy',
+      ])
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a full successful cycle never writes the body into any row or event', async () => {
+    const { jobId, bodyMarker } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('rta-priv-1', clock, realDependencies))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    expect(
+      (await runAudioGenerationOnce('rta-priv-2', clock, realDependencies))
+        .status,
+    ).toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).toBe('RENDERING')
+
+    const rows = await audioTaskRows(jobId)
+    const events = await jobEventRows(jobId)
+    const payload = JSON.stringify({ rows, events, job: await jobRow(jobId) })
+    // TEETH: nothing about the spoken text survives anywhere in
+    // persisted state — not the body, not a fragment of it.
+    expect(payload).not.toContain(bodyMarker)
+    expect(payload).not.toContain(SACRED_BODY_MARKER)
+    // Nor does it leak through the artifact bytes: the mock derives
+    // them from identity fields only, never from the text.
+    const artifactBytes = readFileSync(
+      join(storageRoot, rows[0].artifactStorageRef!),
+    ).toString('utf8')
+    expect(artifactBytes).not.toContain(bodyMarker)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 5: authority withdrawal before submit / before poll
+// ----------------------------------------------------------------------------
+
+describe('red-team: authority withdrawal fails closed before spending anything', () => {
+  it('runtime disabled before the first cycle blocks the whole cycle, provider untouched', async () => {
+    const { jobId, contentVersionId } = await makeTtsJob()
+    await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, false)
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    let outcome
+    try {
+      outcome = await runAudioGenerationOnce(
+        'rta-withdraw-submit',
+        { now: () => new Date() },
+        neverCalledDeps(spy),
+      )
+    } finally {
+      await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, true)
+    }
+    // TEETH: authority is checked BEFORE spending anything, not after a
+    // failed call — the whole-manifest revalidation refuses the cycle
+    // and no task row is created at all.
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('RENDERING')
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect((await audioTaskRows(jobId)).length).toBe(0)
+  }, 240_000)
+
+  it('the executor itself re-verifies authority at SUBMIT time, independently of the job loop', async () => {
+    const { jobId, manifest, requirement, contentVersionId } =
+      await makeTtsJob()
+    await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, false)
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      // TEETH: submitScene's own re-verification is not a duplicate of
+      // the loop's — it is what protects any other caller, and it fails
+      // closed WITHOUT reaching the provider.
+      expect(submitted.status).toBe('FAILED')
+      if (submitted.status === 'FAILED') {
+        expect(submitted.errorCode).toBe('sacred_content_ineligible')
+      }
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+      await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, true)
+    }
+  }, 240_000)
+
+  it('authority withdrawn while a synthesis is IN FLIGHT stops the result being accepted', async () => {
+    const { jobId, manifest, requirement, contentVersionId } =
+      await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      // Submitted while fully authorized …
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('SUBMITTED')
+      if (submitted.status !== 'SUBMITTED') return
+      // … then the rights are pulled while the provider is working.
+      await setSacredRightsStatus(
+        adminId,
+        ctx,
+        contentVersionId,
+        'RESTRICTED',
+        'red-team: rights pulled mid-synthesis',
+      )
+      const polled = await pollSpeech({
+        providerCode: submitted.providerCode,
+        providerOperationId: submitted.providerOperationId,
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      // TEETH: polling re-verifies authority BEFORE accepting a result
+      // — a completed synthesis whose governing rights vanished
+      // mid-flight is never returned as a success, and its bytes never
+      // reach storage.
+      expect(polled.status).toBe('FAILED')
+      if (polled.status === 'FAILED') {
+        expect(polled.errorCode).toBe('sacred_content_ineligible')
+      }
+      expect(counters.polls).toBe(0)
+    } finally {
+      // No rights restore: RESTRICTED is deliberately terminal for
+      // CLEARED (the Step 8 transition map forbids un-restricting), and
+      // this fixture is per-test anyway.
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('an approved human recording whose link is removed blocks RENDERING', async () => {
+    const { jobId, linkId } = await makeHumanAudioJob()
+    await removeSacredMediaLink(adminId, ctx, linkId)
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    const outcome = await runAudioGenerationOnce(
+      'rta-human-unlinked',
+      { now: () => new Date() },
+      neverCalledDeps(spy),
+    )
+    // TEETH: removing the governing link invalidates the recording
+    // immediately — and the answer is NEVER "synthesize it instead".
+    expect(spy.submitCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('RENDERING')
+    // The whole-manifest revalidation names the exact reason; the
+    // finalization gate re-proves the same thing independently (see
+    // verifyExistingHumanAudio, asserted directly below).
+    expect((await jobRow(jobId)).lastErrorMessage).toContain(
+      'audio_no_longer_linked',
+    )
+    expect((await audioTaskRows(jobId)).length).toBe(0)
+  }, 240_000)
+
+  it('an approved human recording whose stored bytes were tampered with blocks RENDERING', async () => {
+    const { jobId, requirement, audioVersionId } = await makeHumanAudioJob()
+    const version = (
+      await getDb()
+        .select({ storageKey: mediaAssetVersions.storageKey })
+        .from(mediaAssetVersions)
+        .where(eq(mediaAssetVersions.id, audioVersionId))
+        .limit(1)
+    ).at(0)!
+    const absolute = join(storageRoot, version.storageKey)
+    const original = readFileSync(absolute)
+    writeFileSync(absolute, Buffer.from('tampered-human-recording-bytes'))
+    let outcome
+    try {
+      outcome = await runAudioGenerationOnce(
+        'rta-human-tampered',
+        { now: () => new Date() },
+        neverCalledDeps({ submitCalls: 0, pollCalls: 0 }),
+      )
+      // Also provable directly, with the exact frozen hash.
+      const verified = await verifyExistingHumanAudio(requirement, {
+        serviceId: (await jobRow(jobId)).serviceIdSnapshot,
+        sacredHouseId: (await jobRow(jobId)).sacredHouseIdSnapshot,
+        language: 'en',
+      })
+      expect(verified.ok).toBe(false)
+    } finally {
+      writeFileSync(absolute, original)
+    }
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('RENDERING')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 6: duplicate / idempotent submission
+// ----------------------------------------------------------------------------
+
+describe('red-team: duplicate submission is structurally impossible', () => {
+  it('two racing cycles never both claim the same GENERATING_AUDIO job', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock: GenerationClock = { now: () => new Date() }
+    const [claimA, claimB] = await Promise.all([
+      claimNextAudioGenerationJob('rta-race-A', clock),
+      claimNextAudioGenerationJob('rta-race-B', clock),
+    ])
+    const claims = [claimA, claimB].filter(
+      (claim) => claim != null && claim.job.id === jobId,
+    )
+    expect(claims.length).toBe(1)
+  }, 240_000)
+
+  it('two full cycles never submit the same requirement twice, and the key is deterministic', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    let submitCalls = 0
+    const seenKeys = new Set<string>()
+    const countingDeps = (): AudioGenerationDependencies => ({
+      submitSpeech: async (input) => {
+        submitCalls += 1
+        // The loop always supplies the key it wrote on the row; the
+        // executor would recompute and reject a wrong one.
+        expect(input.idempotencyKey).toBeDefined()
+        seenKeys.add(input.idempotencyKey!)
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: `op-${input.idempotencyKey!}`,
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('rta-dup-1', clock, countingDeps())).status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    await runAudioGenerationOnce('rta-dup-2', clock, countingDeps())
+    // TEETH: exactly ONE submission for this requirement, ever — the
+    // second cycle polls the row it already owns rather than paying for
+    // a second synthesis.
+    expect(submitCalls).toBe(1)
+    const rows = await audioTaskRows(jobId)
+    expect(rows.length).toBe(1)
+    // TEETH: the key is derived from manifest authority alone, so it is
+    // reproducible from outside the executor.
+    expect([...seenKeys][0]).toBe(
+      computeAudioTaskIdempotencyKey({
+        generationJobId: jobId,
+        manifestSha256: manifest.manifestSha256,
+        requirementId: requirement.requirementId!,
+      }),
+    )
+    expect(rows[0].idempotencyKey).toBe([...seenKeys][0])
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 7: provider identity binding
+// ----------------------------------------------------------------------------
+
+function countingProvider(
+  code: string,
+  counters: { submits: number; polls: number },
+): TtsProvider {
+  return {
+    code,
+    displayName: `Red-team counting TTS provider ${code}`,
+    isEnabled: () => true,
+    submitSpeech: async (
+      request: SpeechSynthesisRequest,
+    ): Promise<SpeechSynthesisSubmission> => {
+      counters.submits += 1
+      return { providerJobId: `${code}-${request.idempotencyKey}`, status: 'PENDING' }
+    },
+    pollSpeech: async (): Promise<SpeechPollResult> => {
+      counters.polls += 1
+      return {
+        status: 'COMPLETED',
+        artifact: {
+          bytes: new TextEncoder().encode('foreign provider speech bytes'),
+          mimeType: 'audio/mpeg',
+          durationMs: 10_000,
+        },
+        failureCode: null,
+      }
+    },
+  }
+}
+
+describe('red-team: a poll is bound to the provider that issued the operation', () => {
+  it('a persisted provider code that no longer matches the active provider fails closed WITHOUT polling', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('OTHER_TTS', counters))
+    try {
+      const result = await pollSpeech({
+        providerCode: 'MOCK_TTS',
+        providerOperationId: 'operation-issued-by-a-different-provider',
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      // TEETH: refused on identity alone — a foreign recording is never
+      // accepted as the voice of approved sacred text.
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('provider_code_mismatch')
+      }
+      expect(counters.polls).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('the SAME poll succeeds once the persisted code names the active provider (control)', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('OTHER_TTS', counters))
+    try {
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('SUBMITTED')
+      if (submitted.status !== 'SUBMITTED') return
+      expect(submitted.providerCode).toBe('OTHER_TTS')
+      const result = await pollSpeech({
+        providerCode: submitted.providerCode,
+        providerOperationId: submitted.providerOperationId,
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(result.status).toBe('SUCCEEDED')
+      expect(counters.polls).toBe(1)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 8 & 9: stale worker, CAS, orphan cleanup
+// ----------------------------------------------------------------------------
+
+describe('red-team: a stale worker never wins and never litters', () => {
+  it('a losing SUCCEEDED poll removes the artifact it just stored and keeps the winner intact', async () => {
+    const { jobId, requirement } = await makeTtsJob()
+    const windowMs = requirement.endMs - requirement.startMs
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('rta-orphan-seed', clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    const winner = await storeRealArtifact(windowMs)
+    const loser = await storeRealArtifact(windowMs)
+    expect(loser.artifactStorageRef).not.toBe(winner.artifactStorageRef)
+
+    const outcome = await runAudioGenerationOnce('rta-orphan', clock, {
+      submitSpeech: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollSpeech: async () => {
+        // WHILE our poll is in flight, another worker resolves the row.
+        // Our lease is untouched — a purely lost row-status CAS.
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({
+            status: 'SUCCEEDED',
+            artifactSha256: winner.artifactSha256,
+            artifactMimeType: winner.artifactMimeType,
+            artifactDurationMs: winner.artifactDurationMs,
+            artifactStorageRef: winner.artifactStorageRef,
+            nextPollAt: null,
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+        return loser
+      },
+    })
+
+    expect(outcome.status).toBe('WAITING')
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.artifactSha256).toBe(winner.artifactSha256)
+    expect(row.artifactStorageRef).toBe(winner.artifactStorageRef)
+    // TEETH: our unreferenced speech artifact is GONE, the referenced
+    // one is untouched.
+    expect(await storage.exists(loser.artifactStorageRef)).toBe(false)
+    expect(await storage.exists(winner.artifactStorageRef)).toBe(true)
+  }, 240_000)
+
+  it('a late poll FAILED cannot clobber a newer SUCCEEDED row', async () => {
+    const { jobId, requirement } = await makeTtsJob()
+    const windowMs = requirement.endMs - requirement.startMs
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('rta-late-seed', clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    const winner = await storeRealArtifact(windowMs)
+
+    const outcome = await runAudioGenerationOnce('rta-late', clock, {
+      submitSpeech: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollSpeech: async () => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({
+            status: 'SUCCEEDED',
+            artifactSha256: winner.artifactSha256,
+            artifactMimeType: winner.artifactMimeType,
+            artifactDurationMs: winner.artifactDurationMs,
+            artifactStorageRef: winner.artifactStorageRef,
+            nextPollAt: null,
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+        return {
+          status: 'FAILED',
+          errorCode: 'stale_late_poll_failure',
+          errorMessage: 'a verdict from a cycle that no longer owns this row',
+        }
+      },
+    })
+
+    const row = (await audioTaskRows(jobId))[0]
+    // TEETH: the genuine result survives in EVERY field.
+    expect(row.status).toBe('SUCCEEDED')
+    expect(row.artifactSha256).toBe(winner.artifactSha256)
+    expect(row.lastErrorCode).toBeNull()
+    expect(outcome.status).not.toBe('FAILED')
+  }, 240_000)
+
+  it('losing the lease mid-cycle discards the poll, its artifact, and every further provider action', async () => {
+    const { jobId, requirement } = await makeTtsJob()
+    const windowMs = requirement.endMs - requirement.startMs
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('rta-fence-seed', clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    const stranded = await storeRealArtifact(windowMs)
+    let pollCalls = 0
+
+    const outcome = await runAudioGenerationOnce('rta-fence', clock, {
+      submitSpeech: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollSpeech: async () => {
+        pollCalls += 1
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        return stranded
+      },
+    })
+
+    expect(outcome.status).toBe('LEASE_LOST')
+    expect(pollCalls).toBe(1)
+    const row = (await audioTaskRows(jobId))[0]
+    // TEETH: nothing accepted on a lease we no longer hold …
+    expect(row.status).toBe('SUBMITTED')
+    expect(row.artifactSha256).toBeNull()
+    // … and the bytes that result had already written are gone.
+    expect(await storage.exists(stranded.artifactStorageRef)).toBe(false)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 10: waiting consumes no retry budget
+// ----------------------------------------------------------------------------
+
+describe('red-team: an outstanding synthesis never consumes retry budget', () => {
+  it('WAITING releases the lease and reschedules WITHOUT incrementing attemptCount', async () => {
+    const { jobId } = await makeTtsJob()
+    const before = await jobRow(jobId)
+    const t0 = new Date()
+    const outcome = await runAudioGenerationOnce(
+      'rta-wait',
+      { now: () => t0 },
+      submitOnlyDeps,
+    )
+    expect(outcome.status).toBe('WAITING')
+    const after = await jobRow(jobId)
+    // TEETH: attemptCount UNCHANGED — a legitimate async wait is never
+    // an attempt.
+    expect(after.attemptCount).toBe(before.attemptCount)
+    expect(after.status).toBe('GENERATING_AUDIO')
+    expect(after.leaseToken).toBeNull()
+    expect(after.nextAttemptAt).not.toBeNull()
+    expect(
+      Math.abs(
+        new Date(after.nextAttemptAt!).getTime() -
+          (t0.getTime() + AUDIO_TASK_POLL_DELAY_MS),
+      ),
+    ).toBeLessThanOrEqual(1_000)
+  }, 240_000)
+
+  it('an expired GENERATING_AUDIO lease (worker crash) DOES consume budget', async () => {
+    const { jobId } = await makeTtsJob()
+    const before = await jobRow(jobId)
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runAudioGenerationOnce('rta-hang', clock, {
+      submitSpeech: async () => {
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-hung',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('LEASE_LOST')
+    expect(await recoverExpiredGenerationLeases(clock)).toBeGreaterThanOrEqual(1)
+    const after = await jobRow(jobId)
+    expect(after.attemptCount).toBe(before.attemptCount + 1)
+    expect(after.status).toBe('RETRYING')
+    expect(after.resumeStatus).toBe('GENERATING_AUDIO')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Items 11–13: the finalization gate
+// ----------------------------------------------------------------------------
+
+/** Seeds ONE job whose single TTS row is SUCCEEDED with `claim`, then
+ * runs the finalize-only cycle (provider provably untouched). */
+async function runFinalizeOnlyCycle(
+  label: string,
+  buildClaim: (windowMs: number) => Promise<{
+    artifactSha256: string | null
+    artifactMimeType: string | null
+    artifactDurationMs: number | null
+    artifactStorageRef: string | null
+  }>,
+  mutate?: (jobId: number) => Promise<void>,
+) {
+  const { jobId, requirement } = await makeTtsJob()
+  const windowMs = requirement.endMs - requirement.startMs
+  const clock = makeFakeClock(Date.now())
+  expect(
+    (await runAudioGenerationOnce(`${label}-seed`, clock, submitOnlyDeps))
+      .status,
+  ).toBe('WAITING')
+  const claim = await buildClaim(windowMs)
+  await getDb()
+    .update(prayerGenerationAudioTasks)
+    .set({
+      status: 'SUCCEEDED',
+      artifactSha256: claim.artifactSha256,
+      artifactMimeType: claim.artifactMimeType,
+      artifactDurationMs: claim.artifactDurationMs,
+      artifactStorageRef: claim.artifactStorageRef,
+      nextPollAt: null,
+      completedAt: new Date(),
+    })
+    .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+  if (mutate) await mutate(jobId)
+  clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+  const spy = { submitCalls: 0, pollCalls: 0 }
+  const outcome = await runAudioGenerationOnce(
+    `${label}-final`,
+    clock,
+    neverCalledDeps(spy),
+  )
+  expect(spy.submitCalls).toBe(0)
+  expect(spy.pollCalls).toBe(0)
+  return { jobId, outcome, job: await jobRow(jobId) }
+}
+
+describe('red-team: finalization verifies speech artifacts against private storage', () => {
+  it('a truthful stored artifact DOES finalize to RENDERING (control)', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-ok',
+      async (windowMs) => await storeRealArtifact(windowMs),
+    )
+    expect(outcome.status).toBe('COMPLETE')
+    expect(job.status).toBe('RENDERING')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose stored object is GONE never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-missing',
+      async (windowMs) => {
+        const artifact = await storeRealArtifact(windowMs)
+        await storage.remove(artifact.artifactStorageRef)
+        return artifact
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+    expect(job.lastErrorCode).toBe('AUDIO_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('artifact_missing_from_storage')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose stored BYTES were tampered with never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-tamper',
+      async (windowMs) => {
+        const artifact = await storeRealArtifact(windowMs)
+        writeFileSync(
+          join(storageRoot, artifact.artifactStorageRef),
+          Buffer.from('tampered-speech-bytes-not-the-synthesized-ones'),
+        )
+        return artifact
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+    expect(job.lastErrorMessage).toBe('artifact_hash_mismatch')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose stored bytes are EMPTY never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-empty',
+      async (windowMs) => {
+        const artifact = await storeRealArtifact(windowMs)
+        writeFileSync(
+          join(storageRoot, artifact.artifactStorageRef),
+          Buffer.alloc(0),
+        )
+        return artifact
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorMessage).toBe('artifact_missing_from_storage')
+  }, 240_000)
+
+  it('a SUCCEEDED row with a non-audio MIME type never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-mime',
+      async (windowMs) => ({
+        ...(await storeRealArtifact(windowMs)),
+        artifactMimeType: 'video/mp4',
+      }),
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorMessage).toBe('artifact_mime_invalid')
+  }, 240_000)
+
+  it('a SUCCEEDED row with no storage reference never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-noref',
+      async (windowMs) => ({
+        ...(await storeRealArtifact(windowMs)),
+        artifactStorageRef: null,
+      }),
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorMessage).toBe('artifact_storage_ref_invalid')
+  }, 240_000)
+})
+
+describe('red-team: finalization requires the task rows to BE the manifest requirements', () => {
+  it('an EXTRA task row blocks finalization', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-extra',
+      async (windowMs) => await storeRealArtifact(windowMs),
+      async (jobId) => {
+        const existing = (await audioTaskRows(jobId))[0]
+        await getDb()
+          .insert(prayerGenerationAudioTasks)
+          .values({
+            generationJobId: jobId,
+            manifestSnapshotId: existing.manifestSnapshotId,
+            requirementId: `${existing.requirementId}-EXTRA`,
+            sceneId: existing.sceneId,
+            idempotencyKey: crypto.randomUUID().replace(/-/g, '').repeat(2),
+            status: 'SUCCEEDED',
+            artifactSha256: existing.artifactSha256,
+            artifactMimeType: existing.artifactMimeType,
+            artifactDurationMs: existing.artifactDurationMs,
+            artifactStorageRef: existing.artifactStorageRef,
+          })
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorMessage).toBe('task_count_mismatch')
+  }, 240_000)
+
+  it('a task row re-pointed at a different scene blocks finalization', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-scene',
+      async (windowMs) => await storeRealArtifact(windowMs),
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ sceneId: 'NOT-A-MANIFEST-SCENE' })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorMessage).toBe('task_scene_mismatch')
+  }, 240_000)
+
+  it('a task row carrying a forged idempotency key blocks finalization', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rta-fin-idem',
+      async (windowMs) => await storeRealArtifact(windowMs),
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({
+            idempotencyKey: crypto.randomUUID().replace(/-/g, '').repeat(2),
+          })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.lastErrorMessage).toBe('task_idempotency_mismatch')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 12b: malformed provider output is rejected at storage time
+// ----------------------------------------------------------------------------
+
+describe('red-team: malformed provider output is never persisted as success', () => {
+  async function expectRejected(
+    poll: () => Promise<SpeechPollResult>,
+    expectedReasonCode: string,
+  ) {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    setTtsProviderForTests({
+      code: 'BAD_TTS',
+      displayName: 'Red-team malformed-output TTS provider',
+      isEnabled: () => true,
+      submitSpeech: async (request) => ({
+        providerJobId: `bad-${request.idempotencyKey}`,
+        status: 'PENDING',
+      }),
+      pollSpeech: poll,
+    })
+    try {
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('SUBMITTED')
+      if (submitted.status !== 'SUBMITTED') return
+      const polled = await pollSpeech({
+        providerCode: submitted.providerCode,
+        providerOperationId: submitted.providerOperationId,
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(polled.status).toBe('FAILED')
+      if (polled.status === 'FAILED') {
+        expect(polled.errorCode).toBe(expectedReasonCode)
+      }
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }
+
+  it('empty bytes are rejected (artifact_empty)', async () => {
+    await expectRejected(
+      async () => ({
+        status: 'COMPLETED',
+        artifact: {
+          bytes: new Uint8Array(0),
+          mimeType: 'audio/mpeg',
+          durationMs: 10_000,
+        },
+        failureCode: null,
+      }),
+      'artifact_empty',
+    )
+  }, 240_000)
+
+  it('a non-audio mime type is rejected (artifact_mime_invalid)', async () => {
+    await expectRejected(
+      async () => ({
+        status: 'COMPLETED',
+        artifact: {
+          bytes: new TextEncoder().encode('not actually speech'),
+          mimeType: 'video/mp4',
+          durationMs: 10_000,
+        },
+        failureCode: null,
+      }),
+      'artifact_mime_invalid',
+    )
+  }, 240_000)
+
+  it('an unbounded duration is rejected (artifact_duration_bound)', async () => {
+    await expectRejected(
+      async () => ({
+        status: 'COMPLETED',
+        artifact: {
+          bytes: new TextEncoder().encode('some bytes that sound like speech'),
+          mimeType: 'audio/mpeg',
+          durationMs: 99_999_999,
+        },
+        failureCode: null,
+      }),
+      'artifact_duration_bound',
+    )
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 14: the zero-audio path
+// ----------------------------------------------------------------------------
+
+describe('red-team: a manifest with no audio advances only after full validation', () => {
+  it('a TEXT_ONLY manifest reaches RENDERING with zero tasks and zero provider calls', async () => {
+    const { jobId, manifest } = await makeTextOnlyJob()
+    expect(manifest.audioRequirements.length).toBe(0)
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    const outcome = await runAudioGenerationOnce(
+      'rta-zero',
+      { now: () => new Date() },
+      neverCalledDeps(spy),
+    )
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).toBe('COMPLETE')
+    expect((await audioTaskRows(jobId)).length).toBe(0)
+    expect((await jobRow(jobId)).status).toBe('RENDERING')
+  }, 240_000)
+
+  it('a zero-audio manifest that fails CURRENT authority does NOT advance', async () => {
+    const { jobId } = await makeTextOnlyJob()
+    const job = await jobRow(jobId)
+    // Break the manifest's own authority: the storyboard snapshot is
+    // what the revalidation rebuilds against.
+    await getDb()
+      .update(prayerGenerationManifestSnapshots)
+      .set({ manifestSha256: 'f'.repeat(64) })
+      .where(eq(prayerGenerationManifestSnapshots.generationJobId, jobId))
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    const outcome = await runAudioGenerationOnce(
+      'rta-zero-invalid',
+      { now: () => new Date() },
+      neverCalledDeps(spy),
+    )
+    // TEETH: zero audio is NOT a free pass — full validation still
+    // applies and must block this advance.
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(spy.submitCalls).toBe(0)
+    expect((await jobRow(jobId)).status).not.toBe('RENDERING')
+    void job
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 15: no premature RENDERING
+// ----------------------------------------------------------------------------
+
+describe('red-team: RENDERING is reachable only through the central transition map', () => {
+  it('no earlier stage may jump straight to RENDERING', () => {
+    expect(isLegalTransition('GENERATING_AUDIO', 'RENDERING')).toBe(true)
+    // TEETH: every earlier stage must go through the audio stage first.
+    expect(isLegalTransition('QUEUED', 'RENDERING')).toBe(false)
+    expect(isLegalTransition('PREPARING', 'RENDERING')).toBe(false)
+    expect(isLegalTransition('STORYBOARDING', 'RENDERING')).toBe(false)
+    expect(isLegalTransition('GENERATING_VISUALS', 'RENDERING')).toBe(false)
+    // And Step 15 still cannot produce a deliverable.
+    expect(isLegalTransition('GENERATING_AUDIO', 'UPLOADING')).toBe(false)
+    expect(isLegalTransition('GENERATING_AUDIO', 'READY')).toBe(false)
+  })
+
+  it('removing the edge from the central map stops the finalize step at runtime', async () => {
+    const { jobId, requirement } = await makeTtsJob()
+    const windowMs = requirement.endMs - requirement.startMs
+    const clock = makeFakeClock(Date.now())
+    const artifact = await storeRealArtifact(windowMs)
+    expect(
+      (await runAudioGenerationOnce('rta-bypass-seed', clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+
+    const original = [...GENERATION_TRANSITIONS.GENERATING_AUDIO]
+    GENERATION_TRANSITIONS.GENERATING_AUDIO = original.filter(
+      (status) => status !== 'RENDERING',
+    )
+    let outcome
+    try {
+      outcome = await runAudioGenerationOnce('rta-bypass', clock, {
+        submitSpeech: async () => {
+          throw new Error('no submit expected in this cycle')
+        },
+        pollSpeech: async () => artifact,
+      })
+    } finally {
+      GENERATION_TRANSITIONS.GENERATING_AUDIO = original
+    }
+    // TEETH: with the edge removed from the CENTRAL map, finalization
+    // must refuse — proving it consults the map at runtime rather than
+    // hardcoding the transition.
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('RENDERING')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Item 16: no paid/network calls anywhere in the Step 15 provider layer
+// ----------------------------------------------------------------------------
+
+/** Strips block and line comments before pattern-matching, so a doc
+ * comment that NAMES a forbidden pattern (to explain why the code
+ * avoids it) is never mistaken for the pattern being used. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+}
+
+describe('red-team: no real provider/network calls anywhere in the Step 15 layer', () => {
+  it('the audio executor and every TTS provider file never touch a real endpoint', () => {
+    const files = [
+      'src/services/audio-generation.ts',
+      'src/providers/tts/types.ts',
+      'src/providers/tts/mock.ts',
+      'src/providers/tts/registry.ts',
+    ]
+    for (const file of files) {
+      const source = stripComments(
+        readFileSync(join(process.cwd(), file), 'utf8'),
+      )
+      expect(source).not.toMatch(/\bfetch\s*\(/)
+      expect(source).not.toMatch(
+        /https?:\/\/[^'"\s]*(elevenlabs|openai|azure|polly|playht)/i,
+      )
+      expect(source).not.toMatch(
+        /(from\s+['"]|require\()['"]?(ioredis|redis|bullmq|amqplib|kafkajs)/i,
+      )
+      expect(source).not.toMatch(/import[^\n]*(remotion|ffmpeg)/i)
+      expect(source).not.toMatch(/Math\.random\s*\(/)
+      expect(source).not.toMatch(/Date\.now\s*\(/)
+    }
+  })
+
+  it('Step 15 renders nothing: no compositing dependency anywhere in the stage', () => {
+    for (const file of [
+      'src/services/audio-generation.ts',
+      'src/services/generation-jobs.ts',
+      'src/workers/prayer-generation-worker.ts',
+    ]) {
+      const source = stripComments(
+        readFileSync(join(process.cwd(), file), 'utf8'),
+      )
+      expect(source).not.toMatch(/(from\s+['"]|require\()['"]?@?remotion/i)
+      expect(source).not.toMatch(
+        /(from\s+['"]|require\()['"]?(fluent-)?ffmpeg/i,
+      )
+    }
+  })
+})
+
+// ----------------------------------------------------------------------------
+// Step 15 hardening item 1: the sacred body is never READ unless synthesis is
+// currently authorized
+// ----------------------------------------------------------------------------
+
+/**
+ * Counts how many times the sacred BODY column is actually selected, by
+ * spying on the shared db client's query path. Nothing subtler will do:
+ * "the body was fetched and then not used" is exactly the failure this
+ * suite exists to rule out, and only observing the read itself can rule
+ * it out.
+ */
+async function countBodyReads<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; bodyReads: number }> {
+  const pool = getPool() as unknown as Record<
+    string,
+    (...args: Array<unknown>) => unknown
+  >
+  const originalQuery = pool.query.bind(pool)
+  const originalExecute = pool.execute.bind(pool)
+  let bodyReads = 0
+  const inspect = (args: Array<unknown>) => {
+    const first = args[0]
+    const sql =
+      typeof first === 'string'
+        ? first
+        : String((first as { sql?: string } | undefined)?.sql ?? '')
+    if (sql.includes('spiritual_content_versions') && /`body`/.test(sql)) {
+      bodyReads += 1
+    }
+  }
+  pool.query = (...args: Array<unknown>) => {
+    inspect(args)
+    return originalQuery(...args)
+  }
+  pool.execute = (...args: Array<unknown>) => {
+    inspect(args)
+    return originalExecute(...args)
+  }
+  try {
+    return { result: await run(), bodyReads }
+  } finally {
+    pool.query = originalQuery
+    pool.execute = originalExecute
+  }
+}
+
+describe('red-team: a forbidden requirement never reaches the sacred body', () => {
+  it('a CURRENT voice policy that forbids TTS causes ZERO body reads and ZERO provider calls', async () => {
+    const { jobId, manifest, requirement, contentVersionId } = await makeTtsJob()
+    // The policy is withdrawn after planning: the manifest still says
+    // APPROVED_TTS_ALLOWED, the authoritative profile no longer does.
+    await getDb()
+      .update(sacredContentVersionProfiles)
+      .set({ voicePolicy: 'HUMAN_RECORDED_REQUIRED' })
+      .where(eq(sacredContentVersionProfiles.contentVersionId, contentVersionId))
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await submitSpeech({ requirement, ...identity(jobId, manifest) }),
+      )
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('voice_policy_forbids_tts')
+      }
+      // TEETH: the body was never even SELECTed. Authorization is
+      // proved on metadata alone, and only an authorized synthesis is
+      // allowed to read the approved text at all.
+      expect(bodyReads).toBe(0)
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+      await getDb()
+        .update(sacredContentVersionProfiles)
+        .set({ voicePolicy: 'APPROVED_TTS_ALLOWED' })
+        .where(
+          eq(sacredContentVersionProfiles.contentVersionId, contentVersionId),
+        )
+    }
+  }, 240_000)
+
+  it('a withdrawn runtime flag causes ZERO body reads on the submission path', async () => {
+    const { jobId, manifest, requirement, contentVersionId } = await makeTtsJob()
+    await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, false)
+    try {
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await submitSpeech({ requirement, ...identity(jobId, manifest) }),
+      )
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('sacred_content_ineligible')
+      }
+      expect(bodyReads).toBe(0)
+    } finally {
+      await setSacredRuntimeEnabled(adminId, ctx, contentVersionId, true)
+    }
+  }, 240_000)
+
+  it('an AUTHORIZED submission does read the body exactly once (control)', async () => {
+    const { jobId, manifest, requirement, bodyMarker } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await submitSpeech({ requirement, ...identity(jobId, manifest) }),
+      )
+      expect(result.status).toBe('SUBMITTED')
+      // TEETH: the zero-read assertions above are about ORDER, not about
+      // the body being unreachable — an authorized synthesis still reads
+      // it, once, and speaks it verbatim.
+      expect(bodyReads).toBe(1)
+      expect(captured[0].approvedText).toBe(bodyMarker)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('POLLING never reads the body and never recompiles a request', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const submitted = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(submitted.status).toBe('SUBMITTED')
+      if (submitted.status !== 'SUBMITTED') return
+      const submissionCount = captured.length
+      const { result, bodyReads } = await countBodyReads(
+        async () =>
+          await pollSpeech({
+            providerCode: submitted.providerCode,
+            providerOperationId: submitted.providerOperationId,
+            requirement,
+            ...identity(jobId, manifest),
+          }),
+      )
+      expect(result.status).toBe('SUCCEEDED')
+      // TEETH: a poll CONTINUES an operation. It re-proves current
+      // authority (metadata only) but never re-reads the approved text
+      // and never hands a provider a second request — there is nothing
+      // to rewrite, resend or re-translate on this path.
+      expect(bodyReads).toBe(0)
+      expect(captured.length).toBe(submissionCount)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 15 hardening item 2: the idempotency key is authority, not input
+// ----------------------------------------------------------------------------
+
+describe('red-team: a caller-supplied idempotency key is never trusted', () => {
+  it('a well-formed but WRONG key fails closed before any provider call, on submit', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const result = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+        // 64 hex characters, structurally indistinguishable from the
+        // real thing — and for a DIFFERENT task.
+        idempotencyKey: 'a'.repeat(64),
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('idempotency_key_mismatch')
+      }
+      // TEETH: an accepted wrong key would mint a brand-new provider job
+      // for speech that may already have been synthesized and paid for.
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a wrong key fails closed on poll too, without contacting the provider', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const result = await pollSpeech({
+        providerCode: 'MOCK_TTS',
+        providerOperationId: 'op-whatever',
+        requirement,
+        ...identity(jobId, manifest),
+        idempotencyKey: 'b'.repeat(64),
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('idempotency_key_mismatch')
+      }
+      expect(counters.polls).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a key for the RIGHT requirement but the WRONG job is still refused', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const counters = { submits: 0, polls: 0 }
+    setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+    try {
+      const result = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+        // Correctly DERIVED — just derived for somebody else's job.
+        idempotencyKey: computeAudioTaskIdempotencyKey({
+          generationJobId: jobId + 1,
+          manifestSha256: manifest.manifestSha256,
+          requirementId: requirement.requirementId!,
+        }),
+      })
+      expect(result.status).toBe('FAILED')
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('the executor computes the authoritative key when none is supplied (control)', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      const result = await submitSpeech({
+        requirement,
+        ...identity(jobId, manifest),
+      })
+      expect(result.status).toBe('SUBMITTED')
+      expect(captured[0].idempotencyKey).toBe(
+        computeAudioTaskIdempotencyKey({
+          generationJobId: jobId,
+          manifestSha256: manifest.manifestSha256,
+          requirementId: requirement.requirementId!,
+        }),
+      )
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 15 hardening item 3: task row identity is proved BEFORE provider spend
+// ----------------------------------------------------------------------------
+
+describe('red-team: a tampered task row never reaches a provider', () => {
+  /** Seeds the task row through one real cycle, tampers with it, then
+   * runs a second cycle whose dependencies must never be called. */
+  async function runAfterTamper(
+    label: string,
+    tamper: (jobId: number) => Promise<void>,
+  ) {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce(`${label}-seed`, clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    await tamper(jobId)
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    const spy = { submitCalls: 0, pollCalls: 0 }
+    const outcome = await runAudioGenerationOnce(
+      `${label}-run`,
+      clock,
+      neverCalledDeps(spy),
+    )
+    return { jobId, outcome, spy, job: await jobRow(jobId) }
+  }
+
+  it('a tampered sceneId blocks BEFORE the provider call', async () => {
+    const { outcome, spy, job } = await runAfterTamper(
+      'rta-ident-scene',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ sceneId: 'NOT-THIS-SCENE' })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    // TEETH: refused at the identity gate — no submit, no poll, no
+    // spend — rather than discovered at finalization after the provider
+    // had already been paid.
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+    expect(job.lastErrorCode).toBe('AUDIO_TASK_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('task_scene_mismatch')
+  }, 240_000)
+
+  it('a tampered idempotencyKey blocks BEFORE the provider call', async () => {
+    const { outcome, spy, job } = await runAfterTamper(
+      'rta-ident-key',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ idempotencyKey: 'c'.repeat(64) })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+    expect(job.lastErrorCode).toBe('AUDIO_TASK_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('task_idempotency_mismatch')
+  }, 240_000)
+
+  it('a tampered requirementId blocks BEFORE the provider call', async () => {
+    const { outcome, spy, job } = await runAfterTamper(
+      'rta-ident-req',
+      async (jobId) => {
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({ requirementId: 'not-a-manifest-requirement' })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+      },
+    )
+    // A re-pointed requirement id is not found by the row lookup, so a
+    // FRESH row is inserted for the real requirement — and that insert
+    // collides with the tampered row's still-unique idempotency key.
+    // Either way the outcome is the same one that matters: nothing was
+    // submitted and the job did not advance.
+    expect(spy.submitCalls).toBe(0)
+    expect(spy.pollCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('RENDERING')
+  }, 240_000)
+})
