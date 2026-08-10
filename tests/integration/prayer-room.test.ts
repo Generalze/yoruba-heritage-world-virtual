@@ -559,7 +559,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 32; i += 1) {
+  for (let i = 0; i < 56; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTPS${i}_${key}`.toUpperCase(),
@@ -1617,8 +1617,11 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
     expect(code).not.toMatch(/\bshare\b/i)
     expect(code).not.toContain('objectKey')
     expect(code).not.toContain('privateRequestNote')
-    // And it carries the existing spiritual-service framing.
-    expect(page).toContain('spiritual service')
+    // And it carries the existing spiritual-service framing — now by
+    // rendering the SHARED notice rather than repeating its words, so
+    // the page and the consent page can never drift apart.
+    expect(code).toContain('SPIRITUAL_SERVICE_NOTICE_BODY')
+    expect(code).toContain("from '@/lib/spiritual-service-notice'")
   })
 
   it('adds no table: the schema is still the Step 17 shape', async () => {
@@ -1630,4 +1633,355 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
     // upload state already say everything a Prayer Room needs.
     expect(count).toBe(55)
   }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 18 hardening item 1: the bytes SERVED are re-proved, not just the
+// object that verified a moment earlier
+// ----------------------------------------------------------------------------
+
+describe('prayer room: no tampered byte is ever served', () => {
+  it('a SAME-LENGTH substitution between verification and read is refused', async () => {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    const key = await canonicalKeyFor(jobId)
+    const real = (await objectStorage.getPrivateObject(key.objectKey))!
+
+    // A provider that VERIFIES honestly and then hands back different
+    // bytes of exactly the same length. A size check alone waves this
+    // through; only re-hashing what is about to be written catches it.
+    let reads = 0
+    setObjectStorageForTests({
+      code: objectStorage.code,
+      isLocal: objectStorage.isLocal,
+      isEnabled: () => objectStorage.isEnabled(),
+      putPrivateObject: (input) => objectStorage.putPrivateObject(input),
+      headPrivateObject: (k) => objectStorage.headPrivateObject(k),
+      removePrivateObject: (k) => objectStorage.removePrivateObject(k),
+      verifyPrivateObjectIntegrity: (input) =>
+        objectStorage.verifyPrivateObjectIntegrity(input),
+      createSignedReadUrl: (input) => objectStorage.createSignedReadUrl(input),
+      getPrivateObject: async (k) => {
+        reads += 1
+        const bytes = await objectStorage.getPrivateObject(k)
+        if (!bytes) return bytes
+        const swapped = new Uint8Array(bytes)
+        // One flipped byte, identical length.
+        swapped[0] = swapped[0] ^ 0xff
+        return swapped
+      },
+    })
+    let response: Response
+    try {
+      response = await servePrayerRoomMedia({
+        userId: ownerId,
+        publicId,
+        request: mediaRequest(),
+        now,
+      })
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    // TEETH: the verification passed (it read the real object), the read
+    // returned a same-length impostor, and NOTHING was served.
+    expect(reads).toBeGreaterThan(0)
+    expect(response.status).toBe(404)
+    expect((await response.arrayBuffer()).byteLength).toBe(0)
+
+    // The genuine object is untouched and still plays.
+    expect(
+      computeFileSha256((await objectStorage.getPrivateObject(key.objectKey))!),
+    ).toBe(computeFileSha256(real))
+    const good = await servePrayerRoomMedia({
+      userId: ownerId,
+      publicId,
+      request: mediaRequest(),
+      now,
+    })
+    expect(good.status).toBe(200)
+  }, 240_000)
+
+  it('a truncated read is refused too', async () => {
+    const { appointmentId, publicId, ownerId } = await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    setObjectStorageForTests({
+      code: objectStorage.code,
+      isLocal: objectStorage.isLocal,
+      isEnabled: () => objectStorage.isEnabled(),
+      putPrivateObject: (input) => objectStorage.putPrivateObject(input),
+      headPrivateObject: (k) => objectStorage.headPrivateObject(k),
+      removePrivateObject: (k) => objectStorage.removePrivateObject(k),
+      verifyPrivateObjectIntegrity: (input) =>
+        objectStorage.verifyPrivateObjectIntegrity(input),
+      createSignedReadUrl: (input) => objectStorage.createSignedReadUrl(input),
+      getPrivateObject: async (k) => {
+        const bytes = await objectStorage.getPrivateObject(k)
+        return bytes ? bytes.subarray(0, bytes.length - 1) : bytes
+      },
+    })
+    let response: Response
+    try {
+      response = await servePrayerRoomMedia({
+        userId: ownerId,
+        publicId,
+        request: mediaRequest(),
+        now,
+      })
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    expect(response.status).toBe(404)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 18 hardening item 2: the signed capability is validated, not assumed
+// ----------------------------------------------------------------------------
+
+describe('prayer room: a signed read capability is checked before it is handed out', () => {
+  /** A remote provider whose signed-URL result the test controls
+   * exactly, so each way an adapter can misbehave gets its own case. */
+  function remoteWith(
+    build: (input: { objectKey: string; ttlSeconds: number; now: Date }) => {
+      url: string
+      expiresAt: Date
+    },
+    calls: Array<number>,
+  ) {
+    return {
+      code: 'REMOTE_SIGNED_TEST',
+      isLocal: false,
+      isEnabled: () => true,
+      putPrivateObject: (input: Parameters<typeof objectStorage.putPrivateObject>[0]) =>
+        objectStorage.putPrivateObject(input),
+      headPrivateObject: (k: string) => objectStorage.headPrivateObject(k),
+      getPrivateObject: (k: string) => objectStorage.getPrivateObject(k),
+      removePrivateObject: (k: string) => objectStorage.removePrivateObject(k),
+      verifyPrivateObjectIntegrity: (
+        input: Parameters<typeof objectStorage.verifyPrivateObjectIntegrity>[0],
+      ) => objectStorage.verifyPrivateObjectIntegrity(input),
+      createSignedReadUrl: async (input: {
+        objectKey: string
+        ttlSeconds: number
+        now: Date
+      }) => {
+        calls.push(input.ttlSeconds)
+        return build(input)
+      },
+    }
+  }
+
+  async function serveWithRemote(
+    build: (input: { objectKey: string; ttlSeconds: number; now: Date }) => {
+      url: string
+      expiresAt: Date
+    },
+  ) {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    const calls: Array<number> = []
+    const provider = remoteWith(build, calls)
+    setObjectStorageForTests(provider)
+    await getDb()
+      .update(prayerGenerationUploads)
+      .set({ providerCode: provider.code, providerIsLocal: 0 })
+      .where(eq(prayerGenerationUploads.generationJobId, jobId))
+    let response: Response
+    try {
+      response = await servePrayerRoomMedia({
+        userId: ownerId,
+        publicId,
+        request: mediaRequest(),
+        now,
+      })
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    return { response, calls, now, jobId }
+  }
+
+  it('a normal five-minute HTTPS capability redirects', async () => {
+    const { response, calls, now } = await serveWithRemote((input) => ({
+      url: `https://private.example.invalid/${input.objectKey}?sig=ok`,
+      expiresAt: new Date(input.now.getTime() + input.ttlSeconds * 1000),
+    }))
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toContain('https://')
+    expect(calls).toEqual([PRAYER_ROOM_SIGNED_URL_TTL_SECONDS])
+    expect(PRAYER_ROOM_SIGNED_URL_TTL_SECONDS).toBeLessThanOrEqual(
+      MAX_SIGNED_URL_TTL_SECONDS,
+    )
+    void now
+  }, 240_000)
+
+  it('an OVERLONG expiry is refused, whatever TTL we asked for', async () => {
+    const { response } = await serveWithRemote((input) => ({
+      url: `https://private.example.invalid/${input.objectKey}?sig=long`,
+      // Ignores the requested TTL and issues a day-long capability.
+      expiresAt: new Date(input.now.getTime() + 24 * 60 * 60_000),
+    }))
+    // TEETH: the bound we requested is not evidence — the bound we were
+    // GIVEN is what would actually govern the capability.
+    expect(response.status).toBe(404)
+    expect(response.headers.get('location')).toBeNull()
+  }, 240_000)
+
+  it('an ALREADY-EXPIRED capability is refused', async () => {
+    const { response } = await serveWithRemote((input) => ({
+      url: `https://private.example.invalid/${input.objectKey}?sig=dead`,
+      expiresAt: new Date(input.now.getTime() - 1_000),
+    }))
+    expect(response.status).toBe(404)
+    expect(response.headers.get('location')).toBeNull()
+  }, 240_000)
+
+  it('an INSECURE http capability is refused', async () => {
+    const { response } = await serveWithRemote((input) => ({
+      url: `http://private.example.invalid/${input.objectKey}?sig=plain`,
+      expiresAt: new Date(input.now.getTime() + 60_000),
+    }))
+    // TEETH: a private recording is never fetched over a channel that
+    // can be read in transit.
+    expect(response.status).toBe(404)
+    expect(response.headers.get('location')).toBeNull()
+  }, 240_000)
+
+  it('a malformed capability is refused', async () => {
+    const { response } = await serveWithRemote((input) => ({
+      url: 'not-a-url',
+      expiresAt: new Date(input.now.getTime() + 60_000),
+    }))
+    expect(response.status).toBe(404)
+  }, 240_000)
+
+  it('an invalid expiry date is refused', async () => {
+    const { response } = await serveWithRemote((input) => ({
+      url: `https://private.example.invalid/${input.objectKey}?sig=nan`,
+      expiresAt: new Date(Number.NaN),
+    }))
+    expect(response.status).toBe(404)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 18 hardening item 3: historical snapshots and the existing notice
+// ----------------------------------------------------------------------------
+
+describe('prayer room: what the owner sees is the appointment they booked', () => {
+  it('a Sacred House RENAME does not rewrite the appointment snapshot', async () => {
+    const { appointmentId, publicId, ownerId } = await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    const before = await getPrayerRoomStatus(ownerId, publicId, now)
+    expect(before?.houseName).toBeTruthy()
+
+    const renamed = `Renamed House ${crypto.randomUUID().slice(0, 8)}`
+    await getDb()
+      .update(sacredHouses)
+      .set({ name: renamed })
+      .where(eq(sacredHouses.id, houseId))
+    const after = await getPrayerRoomStatus(ownerId, publicId, now)
+    // TEETH: the historical snapshot stands. A House renaming itself
+    // must not silently rewrite what somebody was shown when they
+    // booked.
+    expect(after?.houseName).toBe(before!.houseName)
+    expect(after?.houseName).not.toBe(renamed)
+  }, 240_000)
+
+  it('the Prayer Room shows the EXISTING Spiritual Service Notice, shared with consent', () => {
+    const notice = readFileSync(
+      join(process.cwd(), 'src/lib/spiritual-service-notice.ts'),
+      'utf8',
+    )
+    // The wording is the consent page's, verbatim — no new legal or
+    // spiritual text was invented for the Prayer Room.
+    expect(notice).toContain('do not')
+    expect(notice).toContain('guarantee outcomes')
+    expect(notice).toContain('not substitutes for medical care')
+    expect(notice).toContain('psychiatric or mental-health care')
+    expect(notice).toContain('emergency service')
+
+    // BOTH pages render it from that one source.
+    for (const page of [
+      'src/routes/prayer-room.$publicId.tsx',
+      'src/routes/profile.consents.tsx',
+    ]) {
+      const source = readFileSync(join(process.cwd(), page), 'utf8')
+      expect(source).toContain('SPIRITUAL_SERVICE_NOTICE_BODY')
+      expect(source).toContain("from '@/lib/spiritual-service-notice'")
+      // And neither carries a hand-written paraphrase of it.
+      expect(source).not.toContain('substitute for professional medical')
+    }
+  })
+})
+
+// ----------------------------------------------------------------------------
+// Step 18 hardening item 4: the four states are true
+// ----------------------------------------------------------------------------
+
+describe('prayer room: state precedence reflects what is actually true', () => {
+  it('a FUTURE appointment whose job is not READY reports PREPARING, not LOCKED', async () => {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    // Both conditions hold at once: the room has not opened AND there is
+    // no finished recording.
+    await setAppointmentStart(appointmentId, now.getTime() + 60 * 60_000)
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ status: 'RENDERING' })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    // TEETH: readiness wins. Telling an owner their room is merely
+    // "locked" when nothing has been made would be the wrong thing to
+    // say.
+    expect((await getPrayerRoomStatus(ownerId, publicId, now))?.state).toBe(
+      'PREPARING',
+    )
+    expect(
+      (
+        await servePrayerRoomMedia({
+          userId: ownerId,
+          publicId,
+          request: mediaRequest(),
+          now,
+        })
+      ).status,
+    ).toBe(404)
+  }, 240_000)
+
+  it('a non-playable status outranks everything else', async () => {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() + 60 * 60_000)
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ status: 'RENDERING' })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    await setAppointmentStatus(appointmentId, 'CANCELLED')
+    // TEETH: cancelled is cancelled — not "preparing", not "locked".
+    expect((await getPrayerRoomStatus(ownerId, publicId, now))?.state).toBe(
+      'UNAVAILABLE',
+    )
+  }, 240_000)
+
+  it('the appointment page never claims a room is open from the clock alone', () => {
+    const page = readFileSync(
+      join(process.cwd(), 'src/routes/appointments.$publicId.tsx'),
+      'utf8',
+    )
+    // TEETH: availability depends on the job being READY and its upload
+    // still verifying, neither of which this page knows — so it makes no
+    // such claim, and it does not duplicate the verifier to find out.
+    expect(page).not.toContain('Prayer Room is open')
+    expect(page).not.toContain('Enter Prayer Room')
+    expect(page).toContain('View Prayer Room status')
+    expect(page).not.toContain('verifyCompletedUpload')
+    expect(page).not.toContain('getPrayerRoomStatus')
+  })
 })

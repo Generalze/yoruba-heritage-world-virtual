@@ -1044,7 +1044,8 @@ authenticated appointment OWNER
   expiry period: nothing takes away a recording the owner is entitled
   to. PENDING_PAYMENT, CANCELLED, NO_SHOW and EXPIRED never reach a
   recording at all.
-- EVERY REQUEST RE-PROVES EVERYTHING. Playback runs the shared
+- EVERY APPLICATION REQUEST RE-PROVES EVERYTHING. Playback runs the
+  shared
   `verifyCompletedUpload()` — the same function Step 17’s own final
   gate uses — on every media request, not once at page load: current
   Step 16 authority, upload identity, canonical object identity,
@@ -1055,18 +1056,30 @@ authenticated appointment OWNER
 - THE MEDIA ENDPOINT IS AUTHENTICATED AND OPAQUE. Media is identified
   by appointment publicId only — there is no parameter for an object
   key, provider, upload or job, so a caller has nothing to aim at. For
-  local/test storage the verified bytes are proxied server-side with
+  local/test storage the verified bytes are re-hashed against the
+  authoritative SHA-256 immediately before they are written to the
+  response, then proxied server-side with
   full byte-range support (200, 206 with Content-Range, 416 for an
   unsatisfiable range, Accept-Ranges, correct Content-Type and
   Content-Length, `Cache-Control: private, no-store`,
   `X-Content-Type-Options: nosniff`). No filesystem path, object key or
   provider identity ever appears in a response.
-- A REMOTE PROVIDER GETS A SIGNED PRIVATE GET, AFTER THE SAME PROOF.
-  Only once authorization has fully passed is a short-lived PRIVATE
-  signed GET created and redirected to, bounded by Step 17’s
-  fifteen-minute ceiling and shorter in practice. The URL lives in
-  that response alone: never in a database row, never in an event,
-  never in a log.
+- A REMOTE PROVIDER GETS A SIGNED PRIVATE GET, AFTER THE SAME PROOF —
+  AND IT IS A BEARER CAPABILITY. Only once authorization has fully
+  passed is a short-lived PRIVATE signed GET created and redirected
+  to. What the provider RETURNS is then validated, not assumed: a
+  well-formed HTTPS URL with a finite expiry that is in the future and
+  no later than the Prayer Room TTL (and therefore inside Step 17’s
+  fifteen-minute ceiling). Anything else is refused with no redirect.
+  Be precise about what such a link is: once issued, subsequent range
+  requests go straight to the provider and do NOT re-run the
+  application proof — the expiry is what bounds the capability. That
+  is why the TTL is short and the returned value is checked. The URL
+  lives in that response alone: never in a database row, never in an
+  event, never in a log. No real remote adapter exists yet, so the
+  production choice between signed redirects and full server-side
+  proxying — and whatever revocation that implies — is left open for a
+  later approved stage.
 - NO PUBLIC SURFACE. There is no share link, no download control, no
   public route and no direct object URL in page data. Playback is a
   plain HTML video element pointed at the authenticated endpoint.

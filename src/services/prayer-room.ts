@@ -1,8 +1,9 @@
 import { and, eq } from 'drizzle-orm'
 
 import { getDb } from '@/db'
-import { appointments, prayerGenerationJobs, sacredHouses } from '@/db/schema'
+import { appointments, prayerGenerationJobs } from '@/db/schema'
 import { MAX_SIGNED_URL_TTL_SECONDS } from '@/providers/object-storage/types'
+import { computeFileSha256 } from '@/providers/media/storage'
 import { verifyCompletedUpload } from './render-upload'
 import { buildPrivateMediaResponse } from '@/lib/media-range'
 import type { RenderContext } from './render-assembly'
@@ -107,7 +108,11 @@ async function loadOwnedAppointment(
         startsAtUtc: appointments.startsAtUtc,
         userTimezone: appointments.userTimezone,
         serviceNameSnapshot: appointments.serviceNameSnapshot,
-        houseName: sacredHouses.name,
+        // The HISTORICAL snapshot taken when the appointment was
+        // created, never the current catalogue name: a Sacred House
+        // renaming itself must not silently rewrite what somebody
+        // was shown when they booked.
+        houseName: appointments.houseNameSnapshot,
         serviceId: appointments.serviceId,
         sacredHouseId: appointments.sacredHouseId,
         jobId: prayerGenerationJobs.id,
@@ -115,7 +120,6 @@ async function loadOwnedAppointment(
         languageSnapshot: prayerGenerationJobs.languageSnapshot,
       })
       .from(appointments)
-      .innerJoin(sacredHouses, eq(sacredHouses.id, appointments.sacredHouseId))
       .leftJoin(
         prayerGenerationJobs,
         eq(prayerGenerationJobs.appointmentId, appointments.id),
@@ -158,15 +162,19 @@ async function proveAccess(
   if (!PLAYABLE_APPOINTMENT_STATUSES.includes(appointment.status)) {
     return { ok: false, state: 'UNAVAILABLE' }
   }
-  // THE TIME GATE. Read from the appointment's CURRENT start, so a
+  // READINESS FIRST, THEN THE CLOCK. A recording that does not exist
+  // yet is PREPARING whether or not the appointment has started —
+  // telling an owner their room is merely "locked" when nothing has
+  // been made would be the wrong thing to say.
+  if (appointment.jobId == null || appointment.jobStatus !== 'READY') {
+    return { ok: false, state: 'PREPARING' }
+  }
+  // THE TIME GATE. Read from the appointment’s CURRENT start, so a
   // reschedule moves the room with it and no separate stored gate can
   // drift out of step. There is deliberately no closing time: nothing
   // here expires a recording the owner is entitled to.
   if (now.getTime() < utcSqlToMs(appointment.startsAtUtc)) {
     return { ok: false, state: 'LOCKED' }
-  }
-  if (appointment.jobId == null || appointment.jobStatus !== 'READY') {
-    return { ok: false, state: 'PREPARING' }
   }
   return {
     ok: true,
@@ -218,6 +226,10 @@ export type PrayerRoomMediaAccess =
       objectKey: string
       byteSize: number
       mimeType: string
+      /** The AUTHORITATIVE Step 16 hash. Carried through so the bytes
+       * actually served can be re-proved against it, not merely the
+       * object that was verified a moment earlier. */
+      sha256: string
       provider: VerifiedProvider
     }
   | { ok: false; state: PrayerRoomState }
@@ -250,6 +262,7 @@ export async function authorizePrayerRoomMedia(
     objectKey: verified.verified.objectKey,
     byteSize: verified.verified.byteSize,
     mimeType: verified.verified.mimeType,
+    sha256: verified.verified.sha256,
     provider: verified.verified.provider,
   }
 }
@@ -272,11 +285,21 @@ export const PRAYER_ROOM_SIGNED_URL_TTL_SECONDS = Math.min(
  * proof before a single byte moves.
  *
  * LOCAL storage is proxied server-side: the bytes are read through the
- * verified provider and streamed back with range support, so no
- * filesystem path or object key is ever visible to a client. A future
- * remote provider instead gets a short-lived PRIVATE signed GET and a
- * redirect — issued only AFTER this same authorization, held in the
- * response alone, and never persisted or logged.
+ * verified provider, re-hashed, and streamed back with range support,
+ * so every range request passes through this proof and no filesystem
+ * path or object key is ever visible to a client.
+ *
+ * A remote provider instead gets a short-lived PRIVATE signed GET and
+ * a redirect, issued only AFTER this same authorization and held in
+ * that response alone — never persisted, never logged. BE PRECISE
+ * ABOUT WHAT THAT MEANS: a signed URL is a bounded BEARER CAPABILITY.
+ * Once issued, subsequent range requests go straight to the provider
+ * and do NOT re-run this application proof; the expiry is what bounds
+ * it. That is why the returned capability is validated below rather
+ * than trusted, and why the TTL is short. No real remote adapter
+ * exists yet, so the production choice between signed redirects and
+ * full server-side proxying (with whatever revocation that implies)
+ * is deliberately left open for a later approved stage.
  */
 export async function servePrayerRoomMedia(input: {
   userId: number | null
@@ -299,11 +322,18 @@ export async function servePrayerRoomMedia(input: {
     // Remote provider: a short-lived PRIVATE signed GET, created only
     // now that authorization has passed, returned in the redirect and
     // nowhere else. It is never written to a row, an event or a log.
+    const issuedAt = input.now ?? new Date()
     const signed = await access.provider.createSignedReadUrl({
       objectKey: access.objectKey,
       ttlSeconds: PRAYER_ROOM_SIGNED_URL_TTL_SECONDS,
-      now: input.now ?? new Date(),
+      now: issuedAt,
     })
+    // WHAT THE PROVIDER RETURNED, not what we asked for. An adapter
+    // that ignores the requested TTL, hands back an already-dead link,
+    // or answers over plain HTTP is refused here rather than
+    // redirected to — the request we made is not evidence about the
+    // capability we were given.
+    if (!isAcceptableSignedRead(signed, issuedAt)) return notAvailable()
     return new Response(null, {
       status: 302,
       headers: {
@@ -316,9 +346,16 @@ export async function servePrayerRoomMedia(input: {
   }
 
   const bytes = await access.provider.getPrivateObject(access.objectKey)
-  if (!bytes || bytes.length !== access.byteSize) {
-    // Verified a moment ago and gone now: refuse rather than serve
-    // something that no longer matches what was proved.
+  // THE BYTES ACTUALLY ABOUT TO BE SERVED are re-proved here, not just
+  // the object that verified a moment ago. Verification and reading are
+  // two separate reads of the same key, and only this check covers what
+  // happens between them — including a same-length substitution, which
+  // a size check alone would wave through.
+  if (
+    !bytes ||
+    bytes.length !== access.byteSize ||
+    computeFileSha256(bytes) !== access.sha256
+  ) {
     return notAvailable()
   }
   return buildPrivateMediaResponse(
@@ -328,6 +365,42 @@ export async function servePrayerRoomMedia(input: {
   )
 }
 
+/**
+ * Proves a signed read capability is safe to hand out.
+ *
+ * A signed URL is a BEARER CAPABILITY: once issued, anyone holding it
+ * can read the object directly from the provider until it expires,
+ * WITHOUT passing back through this application. That is precisely why
+ * its shape is checked rather than assumed — the bound we asked for is
+ * only a request, and the expiry we were handed is the thing that will
+ * actually govern the capability.
+ */
+function isAcceptableSignedRead(
+  signed: { url: string; expiresAt: Date },
+  now: Date,
+): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(signed.url)
+  } catch {
+    return false
+  }
+  // A private recording is never fetched over a channel that can be
+  // read in transit.
+  if (parsed.protocol !== 'https:') return false
+  const expiresMs = signed.expiresAt.getTime()
+  if (!Number.isFinite(expiresMs)) return false
+  // Already dead, or longer-lived than the ceiling this stage promises
+  // (and therefore than Step 17's own maximum).
+  if (expiresMs <= now.getTime()) return false
+  if (
+    expiresMs >
+    now.getTime() + PRAYER_ROOM_SIGNED_URL_TTL_SECONDS * 1000
+  ) {
+    return false
+  }
+  return true
+}
 /** The one refusal shape. No body, no code, no hint. */
 function notAvailable(): Response {
   return new Response(null, {

@@ -3,6 +3,11 @@ import { Link, createFileRoute, redirect } from '@tanstack/react-router'
 import { getCurrentUserFn } from '@/auth/actions'
 import { getPrayerRoomStatusFn } from '@/services/prayer-room-actions'
 import { formatUtcSqlInTimezone } from '@/lib/display-time'
+import {
+  SPIRITUAL_SERVICE_NOTICE_BODY,
+  SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER,
+  SPIRITUAL_SERVICE_NOTICE_TITLE,
+} from '@/lib/spiritual-service-notice'
 
 /**
  * Recorded Prayer Room (Phase One, Step 18).
@@ -71,11 +76,17 @@ function PrayerRoomPage() {
         <PrayerRoomBody state={status.state} publicId={publicId} />
       </section>
 
-      <p className="mt-6 text-xs leading-relaxed text-stone-500">
-        This recording is part of a spiritual service and is provided for
-        your personal use. It is private to your appointment and is not a
-        substitute for professional medical, legal or financial advice.
-      </p>
+      {/* The EXISTING Spiritual Service Notice, shared verbatim with
+          the consent page rather than paraphrased here. */}
+      <div className="mt-8 rounded-md border border-stone-800 bg-stone-900 p-4 text-xs leading-relaxed text-stone-400">
+        <p className="font-medium text-stone-300">
+          {SPIRITUAL_SERVICE_NOTICE_TITLE}
+        </p>
+        <p className="mt-2">{SPIRITUAL_SERVICE_NOTICE_BODY}</p>
+        <p className="mt-2 text-stone-500">
+          {SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER}
+        </p>
+      </div>
     </Shell>
   )
 }

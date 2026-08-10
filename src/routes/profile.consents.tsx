@@ -6,6 +6,11 @@ import {
   useRouter,
 } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
+import {
+  SPIRITUAL_SERVICE_NOTICE_BODY,
+  SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER,
+  SPIRITUAL_SERVICE_NOTICE_TITLE,
+} from '@/lib/spiritual-service-notice'
 
 import { getCurrentUserFn } from '@/auth/actions'
 import { AdminError } from '@/components/admin'
@@ -89,18 +94,11 @@ function ConsentsPage() {
 
           <div className="mt-5 rounded-md border border-stone-700 bg-stone-950 p-4 text-xs leading-relaxed text-stone-400">
             <p className="font-medium text-stone-300">
-              Spiritual Service Notice
+              {SPIRITUAL_SERVICE_NOTICE_TITLE}
             </p>
-            <p className="mt-2">
-              Spiritual and cultural services offered on this platform do not
-              guarantee outcomes and are not substitutes for medical care, legal
-              advice, financial advice, psychiatric or mental-health care, or
-              emergency services. If you need urgent help, contact the
-              appropriate professional or emergency service.
-            </p>
+            <p className="mt-2">{SPIRITUAL_SERVICE_NOTICE_BODY}</p>
             <p className="mt-2 text-stone-500">
-              Development placeholder notice text (v1) — final legal wording and
-              versions are provided before production.
+              {SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER}
             </p>
           </div>
 
