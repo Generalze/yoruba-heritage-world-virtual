@@ -2047,6 +2047,7 @@ describe('red-team: no real provider/network calls anywhere in the Step 15 layer
     for (const file of [
       'src/services/audio-generation.ts',
       'src/services/generation-jobs.ts',
+      'src/services/generation-pipeline.ts',
       'src/workers/prayer-generation-worker.ts',
     ]) {
       const source = stripComments(

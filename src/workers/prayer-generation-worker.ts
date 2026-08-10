@@ -3,36 +3,51 @@ import { randomUUID } from 'node:crypto'
 import { closeDb } from '@/db'
 import {
   recoverExpiredGenerationLeases,
-  runAudioGenerationOnce,
-  runGenerationPreparationOnce,
-  runVisualGenerationOnce,
   systemGenerationClock,
 } from '@/services/generation-jobs'
-import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
-import { runRenderOnce } from '@/services/render-assembly'
-import { runUploadOnce } from '@/services/render-upload'
+import { runGenerationPipelinePass } from '@/services/generation-pipeline'
 
 /**
- * DB-backed prayer generation worker (Phase One, Step 12).
+ * DB-backed prayer generation worker (Phase One, Step 12; autonomous
+ * end-to-end since Step 19).
  *
- * Polls the prayer_generation_jobs queue and FAIRLY alternates four
- * stages so none starves the others:
- *   - preparation  (Step 12: recipe build + validate → snapshot →
- *     STORYBOARDING)
+ * A separate process from the web server, with one job: keep calling
+ * runGenerationPipelinePass() until told to stop. Everything about WHAT
+ * a pass does — which stages exist, in what order, and who may change a
+ * job's status — lives in src/services/generation-pipeline.ts, which is
+ * the SAME orchestration the end-to-end tests drive. This file owns
+ * only the lifecycle around it: identity, the lease sweep, idle
+ * sleeping, error backoff and graceful shutdown.
+ *
+ * A pass runs one cycle of EACH of the SIX stages, in canonical order,
+ * so no stage can starve another:
+ *   - preparation        (Step 12: recipe build + validate → snapshot)
  *   - storyboard planning (Step 13: storyboard + provider-neutral
- *     manifest → GENERATING_VISUALS)
- *   - visual generation (Step 14: async submit/poll of every
- *     GENERATION_REQUIRED manifest task via the mock provider only →
- *     GENERATING_AUDIO)
- *   - audio generation (Step 15: approved human recordings re-verified
+ *     manifest)
+ *   - visual generation  (Step 14: async submit/poll of every
+ *     GENERATION_REQUIRED manifest task via the mock provider only)
+ *   - audio generation   (Step 15: approved human recordings re-verified
  *     in place, plus async submit/poll of every TTS_PENDING requirement
- *     via the mock speech provider only → RENDERING)
- * It also recovers expired leases, sleeps when every queue is idle and
- * shuts down gracefully on SIGTERM/SIGINT. It performs NO real
- * provider/paid API calls of any kind (Steps 14 and 15 use their
- * deterministic mocks exclusively), renders nothing (no Remotion, no
- * FFmpeg) and is NOT required for the web server to boot — run it
- * separately:
+ *     via the mock speech provider only)
+ *   - render assembly    (Step 16: an immutable render plan rendered
+ *     through the engine-neutral RenderEngine boundary — deterministic
+ *     mock engine only at this stage — into a verified LOCAL artifact)
+ *   - private upload     (Step 17: that artifact placed at its canonical
+ *     key in PRIVATE object storage — deterministic local adapter only
+ *     at this stage — re-proved remotely, then READY)
+ *
+ * From a confirmed, paid appointment to a READY private recording there
+ * is NO human step: no approval, no queue to review, no operator
+ * action. Human authority is spent UPSTREAM, on the content, media,
+ * templates and rights this pipeline is allowed to draw from; the
+ * runtime only assembles what was already approved, and every stage
+ * re-proves that authority still holds before it spends anything.
+ *
+ * It performs NO real provider/paid API calls of any kind — Steps 14
+ * through 17 use their deterministic mocks and the local private-object
+ * adapter exclusively, and production is fail-closed against every one
+ * of those (see each provider registry). It is NOT required for the web
+ * server to boot — run it separately:
  *
  *   bun run worker:generation
  */
@@ -65,6 +80,11 @@ async function main(): Promise<void> {
     // candidate row's lock is held (see recoverExpiredGenerationLeases).
     // Drawn from the same clock as everything else in this worker —
     // one time source, not a second one via the global Date.
+    //
+    // This stays in the WORKER, not in the pass: recovering another
+    // worker's abandoned lease is a lifecycle duty of a long-running
+    // process, on its own slow cadence, not part of doing one unit of
+    // pipeline work.
     const nowMs = systemGenerationClock.now().getTime()
     if (nowMs - lastSweep >= LEASE_SWEEP_INTERVAL_MS) {
       lastSweep = nowMs
@@ -76,78 +96,17 @@ async function main(): Promise<void> {
       }
     }
     try {
-      // Fair alternation: run one cycle of EACH stage per pass, so a
-      // continuous stream of work in one stage can never permanently
-      // starve the others.
-      const preparation = await runGenerationPreparationOnce(
+      const pass = await runGenerationPipelinePass(
         WORKER_ID,
         systemGenerationClock,
       )
-      if (preparation.status !== 'IDLE') {
+      for (const stage of pass.stages) {
+        if (stage.status === 'IDLE') continue
         console.log(
-          `[${WORKER_ID}] prepare job ${'jobId' in preparation ? preparation.jobId : '?'} → ${preparation.status}`,
+          `[${WORKER_ID}] ${stage.stage.toLowerCase()} job ${stage.jobId ?? '?'} → ${stage.status}`,
         )
       }
-      const storyboard = await runStoryboardPlanningOnce(
-        WORKER_ID,
-        systemGenerationClock,
-      )
-      if (storyboard.status !== 'IDLE') {
-        console.log(
-          `[${WORKER_ID}] storyboard job ${'jobId' in storyboard ? storyboard.jobId : '?'} → ${storyboard.status}`,
-        )
-      }
-      // Dependencies default to the real (mock-provider-backed)
-      // submitScene/pollScene from src/services/visual-generation.ts,
-      // resolved lazily inside runVisualGenerationOnce — this worker
-      // never references that module directly.
-      const visuals = await runVisualGenerationOnce(WORKER_ID, systemGenerationClock)
-      if (visuals.status !== 'IDLE') {
-        console.log(
-          `[${WORKER_ID}] visual generation job ${'jobId' in visuals ? visuals.jobId : '?'} → ${visuals.status}`,
-        )
-      }
-      // Same discipline as the visual stage: dependencies default to
-      // the real (mock-provider-backed) submitSpeech/pollSpeech from
-      // src/services/audio-generation.ts, resolved lazily inside
-      // runAudioGenerationOnce.
-      const audio = await runAudioGenerationOnce(
-        WORKER_ID,
-        systemGenerationClock,
-      )
-      if (audio.status !== 'IDLE') {
-        console.log(
-          `[${WORKER_ID}] audio generation job ${'jobId' in audio ? audio.jobId : '?'} → ${audio.status}`,
-        )
-      }
-      // Step 16: assembles a verified LOCAL artifact through the
-      // engine-neutral RenderEngine boundary (deterministic mock only
-      // at this stage). Uploads nothing.
-      const render = await runRenderOnce(WORKER_ID, systemGenerationClock)
-      if (render.status !== 'IDLE') {
-        console.log(
-          `[${WORKER_ID}] render job ${'jobId' in render ? render.jobId : '?'} → ${render.status}`,
-        )
-      }
-      // Step 17: uploads the verified local artifact to PRIVATE object
-      // storage (deterministic local adapter only at this stage) and
-      // re-proves it remotely before READY.
-      const upload = await runUploadOnce(WORKER_ID, systemGenerationClock)
-      if (upload.status !== 'IDLE') {
-        console.log(
-          `[${WORKER_ID}] upload job ${'jobId' in upload ? upload.jobId : '?'} → ${upload.status}`,
-        )
-      }
-      if (
-        preparation.status === 'IDLE' &&
-        storyboard.status === 'IDLE' &&
-        visuals.status === 'IDLE' &&
-        audio.status === 'IDLE' &&
-        render.status === 'IDLE' &&
-        upload.status === 'IDLE'
-      ) {
-        await sleep(IDLE_SLEEP_MS)
-      }
+      if (!pass.workOccurred) await sleep(IDLE_SLEEP_MS)
     } catch (error) {
       console.error(
         `[${WORKER_ID}] cycle error: ${error instanceof Error ? error.message : String(error)}`,

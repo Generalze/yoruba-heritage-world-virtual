@@ -7,6 +7,7 @@ import { migrate } from 'drizzle-orm/mysql2/migrator'
 
 import { closeDb, getDb } from '@/db'
 import {
+  GENERATION_JOB_STATUSES,
   appointmentGuidanceAssignments,
   appointmentGuidanceSets,
   appointments,
@@ -116,11 +117,13 @@ import {
   utcMsToSql,
 } from '@/lib/schedule-time'
 import type { GenerationClock } from '@/services/generation-jobs'
+import type { GenerationJobStatus } from '@/db/schema'
 import type { GenerationManifest } from '@/services/generation-storyboards'
 import type { SacredProfileInput } from '@/services/sacred-content'
 import type { SlotInput } from '@/services/prayer-templates'
 import { createSession, validateSessionToken } from '@/auth/session'
 import {
+  PRAYER_ROOM_IN_FLIGHT_GENERATION_STATUSES,
   PRAYER_ROOM_SIGNED_URL_TTL_SECONDS,
   getPrayerRoomStatus,
   servePrayerRoomMedia,
@@ -559,7 +562,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 56; i += 1) {
+  for (let i = 0; i < 64; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTPS${i}_${key}`.toUpperCase(),
@@ -822,6 +825,19 @@ async function setAppointmentStatus(
     .update(appointments)
     .set({ status })
     .where(eq(appointments.id, appointmentId))
+}
+
+/** Places this appointment's generation job in a given state. Used only
+ * to test how the Prayer Room READS a job — the pipeline's own tests
+ * prove how a job legitimately arrives in each of these. */
+async function setJobStatus(
+  jobId: number,
+  status: GenerationJobStatus,
+): Promise<void> {
+  await getDb()
+    .update(prayerGenerationJobs)
+    .set({ status })
+    .where(eq(prayerGenerationJobs.id, jobId))
 }
 
 function mediaRequest(rangeHeader?: string): Request {
@@ -1983,5 +1999,128 @@ describe('prayer room: state precedence reflects what is actually true', () => {
     expect(page).toContain('View Prayer Room status')
     expect(page).not.toContain('verifyCompletedUpload')
     expect(page).not.toContain('getPrayerRoomStatus')
+  })
+})
+
+// ----------------------------------------------------------------------------
+// Step 19 hardening: a generation that ENDED is not a generation that is
+// still coming
+// ----------------------------------------------------------------------------
+
+/**
+ * "Not READY" was one condition too few.
+ *
+ * Every non-READY job used to be reported as PREPARING, so an owner
+ * whose generation had terminally FAILED or been CANCELLED was told
+ * their recording was being prepared and asked to check back later —
+ * advice they could follow forever. Terminal is now UNAVAILABLE, which
+ * is the same neutral answer every other refusal gives: no error code,
+ * no stage, no hint about the pipeline.
+ */
+describe('terminal generation state', () => {
+  it('a FAILED generation is UNAVAILABLE, not PREPARING, and serves nothing', async () => {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    // It really does play first, so the change below is what closes it.
+    expect((await getPrayerRoomStatus(ownerId, publicId, now))?.state).toBe(
+      'AVAILABLE',
+    )
+    await setJobStatus(jobId, 'FAILED')
+    const status = await getPrayerRoomStatus(ownerId, publicId, now)
+    expect(status?.state).toBe('UNAVAILABLE')
+    // Nothing about the pipeline reaches the owner.
+    const serialized = JSON.stringify(status)
+    expect(serialized).not.toContain('FAILED')
+    expect(serialized).not.toMatch(/error|reason|stage|attempt/i)
+    const response = await servePrayerRoomMedia({
+      userId: ownerId,
+      publicId,
+      request: mediaRequest(),
+      now,
+    })
+    expect(response.status).toBe(404)
+    expect((await response.arrayBuffer()).byteLength).toBe(0)
+  }, 240_000)
+
+  it('a CANCELLED generation is UNAVAILABLE and serves nothing', async () => {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    await setJobStatus(jobId, 'CANCELLED')
+    expect((await getPrayerRoomStatus(ownerId, publicId, now))?.state).toBe(
+      'UNAVAILABLE',
+    )
+    expect(
+      (
+        await servePrayerRoomMedia({
+          userId: ownerId,
+          publicId,
+          request: mediaRequest(),
+          now,
+        })
+      ).status,
+    ).toBe(404)
+  }, 240_000)
+
+  it('RETRYING is still PREPARING — a bounded retry is not a verdict', async () => {
+    const { jobId, appointmentId, publicId, ownerId } =
+      await makeReadyAppointment()
+    const now = new Date()
+    await setAppointmentStart(appointmentId, now.getTime() - 60_000)
+    await setJobStatus(jobId, 'RETRYING')
+    // TEETH: RETRYING sits next to FAILED in the same enum and is the
+    // easy one to lump in with it. A job that is going to try again is
+    // still on its way.
+    expect((await getPrayerRoomStatus(ownerId, publicId, now))?.state).toBe(
+      'PREPARING',
+    )
+    expect(
+      (
+        await servePrayerRoomMedia({
+          userId: ownerId,
+          publicId,
+          request: mediaRequest(),
+          now,
+        })
+      ).status,
+    ).toBe(404)
+  }, 240_000)
+
+  it('an ordinary active stage is still PREPARING', async () => {
+    // Not set by hand: this job is genuinely mid-pipeline, parked at
+    // UPLOADING by the real upstream stages.
+    const { jobId } = await makeUploadableJob()
+    expect((await jobRow(jobId)).status).toBe('UPLOADING')
+    const job = await jobRow(jobId)
+    const appointment = (
+      await getDb()
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, job.appointmentId))
+        .limit(1)
+    ).at(0)!
+    const now = new Date()
+    await setAppointmentStart(appointment.id, now.getTime() - 60_000)
+    expect(
+      (await getPrayerRoomStatus(appointment.userId, appointment.publicId, now))
+        ?.state,
+    ).toBe('PREPARING')
+  }, 240_000)
+
+  it('every generation status is classified deliberately', () => {
+    // TEETH: the in-flight list is what separates "still coming" from
+    // "never coming", and the fail-closed default means a NEW status
+    // nobody thought about would silently read UNAVAILABLE. Pinning the
+    // partition here forces that decision to be made on purpose.
+    const terminalOrReady = ['READY', 'FAILED', 'CANCELLED']
+    expect(
+      [...PRAYER_ROOM_IN_FLIGHT_GENERATION_STATUSES, ...terminalOrReady].sort(),
+    ).toEqual([...GENERATION_JOB_STATUSES].sort())
+    for (const status of terminalOrReady) {
+      expect(PRAYER_ROOM_IN_FLIGHT_GENERATION_STATUSES).not.toContain(status)
+    }
   })
 })
