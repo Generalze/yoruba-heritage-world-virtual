@@ -1037,6 +1037,26 @@ authenticated appointment OWNER
   never probe for other people's appointments, and an owner is never
   shown a hash, provider code, object key, job or upload id, pipeline
   error or private request note.
+- "NOT READY" IS TWO CONDITIONS, NOT ONE. For a playable appointment
+  the owner-facing state is:
+  - no generation job yet, or one still in flight — QUEUED, PREPARING,
+    STORYBOARDING, GENERATING_VISUALS, GENERATING_AUDIO, RENDERING,
+    UPLOADING or RETRYING (a bounded retry is not a verdict) —
+    **PREPARING**;
+  - a generation job in terminal FAILED or CANCELLED — **UNAVAILABLE**.
+    A generation that has ended is never described as still being
+    prepared: telling that owner to check back later would be an
+    untruth they could act on indefinitely;
+  - READY before the current appointment start — **LOCKED**;
+  - READY at or after it, with the upload still verifying —
+    **AVAILABLE**;
+  - READY but authority or upload verification fails — **UNAVAILABLE**.
+
+  UNAVAILABLE carries no error code, no stage and no hint about the
+  pipeline, and media stays a neutral 404. Any generation status not
+  explicitly classified as in-flight is treated as terminal — the
+  fail-closed direction — and a test pins that partition against the
+  schema enum so a new status must be classified deliberately.
 - THE TIME GATE IS THE CURRENT APPOINTMENT START. A recorded Prayer
   Room opens exactly at `appointments.startsAtUtc` as it stands now,
   so rescheduling moves the gate automatically and no stored copy can
@@ -1142,8 +1162,9 @@ user books
   governance cannot satisfy fails closed under the EXISTING bounded
   rules (a structural impossibility fails without storming the retry
   budget) and does not delay any other queued appointment. Nothing is
-  invented to make a failed job look successful, and its Prayer Room
-  says PREPARING — never AVAILABLE.
+  invented to make a failed job look successful: its Prayer Room reads
+  UNAVAILABLE — never AVAILABLE, and never PREPARING either, because
+  that generation is over (§10.11).
 - IDEMPOTENT AT BOTH ENDS. Replaying a provider webhook cannot produce
   a second settlement or a second generation job (the webhook event key
   and the UNIQUE appointment_id see to that), and further pipeline

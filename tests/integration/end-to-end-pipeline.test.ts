@@ -1345,14 +1345,25 @@ describe('failure isolation', () => {
     expect(await storyboardSnapshotRows(doomedJob)).toHaveLength(0)
     expect(await renderResultRows(doomedJob)).toHaveLength(0)
     expect(await uploadRows(doomedJob)).toHaveLength(0)
-    // Its Prayer Room says PREPARING, never AVAILABLE — a failure is
-    // never dressed up as a recording.
+    // Its Prayer Room says UNAVAILABLE — not AVAILABLE, and not
+    // PREPARING either. This generation is over; telling its owner to
+    // check back later would be a plain untruth they could act on
+    // indefinitely.
     const room = await getPrayerRoomStatus(
       doomedUser,
       doomed.appointmentPublicId,
       new Date(sqlToUtcMs(doomed.startsAtUtc)),
     )
-    expect(room?.state).toBe('PREPARING')
+    expect(room?.state).toBe('UNAVAILABLE')
+    // And it says nothing about WHY: no error code, no stage, no hint.
+    expect(JSON.stringify(room)).not.toContain('RECIPE_UNAVAILABLE')
+    const media = await servePrayerRoomMedia({
+      userId: doomedUser,
+      publicId: doomed.appointmentPublicId,
+      request: new Request('https://test.local/media'),
+      now: new Date(sqlToUtcMs(doomed.startsAtUtc)),
+    })
+    expect(media.status).toBe(404)
   }, 900_000)
 })
 

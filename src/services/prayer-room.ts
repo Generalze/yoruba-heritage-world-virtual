@@ -42,8 +42,9 @@ export type PrayerRoomState =
   | 'LOCKED'
   /** Open now. */
   | 'AVAILABLE'
-  /** Not available for this appointment (cancelled, expired, unpaid,
-   * or a recording that can no longer be verified). */
+  /** Not available for this appointment: cancelled, expired or unpaid;
+   * a recording that can no longer be verified; or a generation that
+   * ended in terminal failure and will not arrive. */
   | 'UNAVAILABLE'
 
 export interface PrayerRoomStatus {
@@ -66,6 +67,35 @@ const PLAYABLE_APPOINTMENT_STATUSES: ReadonlyArray<string> = [
   'CONFIRMED',
   'COMPLETED',
 ]
+
+/**
+ * Generation statuses from which a recording can STILL arrive.
+ *
+ * "Not READY" is not one condition but two, and they deserve different
+ * answers. A job still moving through the pipeline — including RETRYING,
+ * which is a bounded retry and not a verdict — is genuinely being
+ * prepared. A job in terminal FAILED or CANCELLED is not: telling that
+ * owner their recording is "being prepared" and inviting them to check
+ * back later would be a plain untruth, and one they could keep acting
+ * on forever.
+ *
+ * Anything NOT listed here is treated as terminal, which is the
+ * fail-closed direction: a future status that nobody classified would
+ * show UNAVAILABLE rather than promise a recording that may never come.
+ * A test pins this list against the schema enum, so adding a status
+ * forces a deliberate decision instead of an accidental one.
+ */
+export const PRAYER_ROOM_IN_FLIGHT_GENERATION_STATUSES: ReadonlyArray<string> =
+  [
+    'QUEUED',
+    'PREPARING',
+    'STORYBOARDING',
+    'GENERATING_VISUALS',
+    'GENERATING_AUDIO',
+    'RENDERING',
+    'UPLOADING',
+    'RETRYING',
+  ]
 
 function utcSqlToMs(value: string): number {
   return new Date(`${value.replace(' ', 'T')}Z`).getTime()
@@ -152,7 +182,8 @@ export type PrayerRoomAccess =
  * upload verification.
  *
  * Readiness deliberately precedes the clock — see the comment at that
- * check for why an unmade recording is PREPARING rather than LOCKED.
+ * check for why an unmade recording is PREPARING rather than LOCKED,
+ * and why a terminally failed one is UNAVAILABLE rather than either.
  */
 async function proveAccess(
   userId: number,
@@ -169,8 +200,24 @@ async function proveAccess(
   // yet is PREPARING whether or not the appointment has started —
   // telling an owner their room is merely "locked" when nothing has
   // been made would be the wrong thing to say.
-  if (appointment.jobId == null || appointment.jobStatus !== 'READY') {
-    return { ok: false, state: 'PREPARING' }
+  //
+  // A job that has not been enqueued yet is legitimately PREPARING: the
+  // enqueue happens inside the confirmation transaction, so this is a
+  // momentary gap, not an absence.
+  if (appointment.jobId == null) return { ok: false, state: 'PREPARING' }
+  if (appointment.jobStatus !== 'READY') {
+    // STILL COMING versus NEVER COMING. Only a job that can still
+    // produce a recording is described as being prepared; a terminal
+    // one is UNAVAILABLE — the same neutral answer as every other
+    // refusal, carrying no error code, no stage and no hint about why.
+    return {
+      ok: false,
+      state: PRAYER_ROOM_IN_FLIGHT_GENERATION_STATUSES.includes(
+        appointment.jobStatus ?? '',
+      )
+        ? 'PREPARING'
+        : 'UNAVAILABLE',
+    }
   }
   // THE TIME GATE. Read from the appointment’s CURRENT start, so a
   // reschedule moves the room with it and no separate stored gate can
