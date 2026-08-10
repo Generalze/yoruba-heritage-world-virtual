@@ -641,6 +641,63 @@ Validated Recipe Snapshot
   revalidated before every later generation or render stage, and no
   provider expenditure occurs in Step 13.
 
+## 10.7 Amendment — Visual Generation Executor Foundation (Phase One, Step 14)
+
+```text
+GENERATING_VISUALS
+→ revalidate manifest against CURRENT authority
+→ execute GENERATION_REQUIRED visual tasks (deterministic mock provider)
+→ verify + store generated scene artifacts privately
+→ GENERATING_AUDIO
+→ future audio stage (Step 15+)
+```
+
+- Execution is provider-neutral behind a `VisualGenerationProvider`
+  abstraction (`submitScene` / `pollScene`, statuses PENDING / COMPLETED
+  / FAILED). Only a deterministic mock exists in Phase One: no real
+  provider, no network call, no paid execution of any kind. Idempotency
+  keys are the ones Step 13 already derived — none is invented here — so
+  a repeated submission for the same key is the SAME job, never a
+  duplicate paid execution.
+- Current authority is revalidated before EVERY provider action, on each
+  submit and on each poll, because a task may sit outstanding across
+  many worker cycles while rights, content or the Visual Bible change
+  underneath it. Withdrawal of authority fails closed before the
+  provider is contacted.
+- METADATA_ONLY never retrieves the sacred body at all — the eligibility
+  query structurally omits the body column rather than fetching and
+  ignoring it. APPROVED_TEXT_CONTEXT may retrieve the CURRENT approved
+  body server-side, after validation, solely for the in-memory request.
+  Visual Bible rule text is likewise in-memory only. Nothing invents
+  spiritual actions, objects, clothing, ritual detail or doctrine.
+- Persistence carries SAFE metadata only: provider code, opaque provider
+  operation id, attempts/status, artifact hash/mime/duration, a private
+  internal artifact reference, and bounded sanitized errors and
+  timestamps. Sacred bodies, raw provider requests and responses, raw
+  Visual Bible rule text and credentials are NEVER persisted or logged.
+  Task identity is unique on generation job + manifest snapshot +
+  manifest task, with the Step 13 idempotency key unique in its own
+  right; approved-media scenes create no task at all.
+- Artifacts are validated before they count: allowed mime, non-empty
+  bytes, bounded duration and a SHA-256 recomputed from the actual
+  stored bytes — a provider-reported hash is never trusted. Storage
+  reuses the existing private local media abstraction; no public URL and
+  no object store.
+- Provider work never happens inside a DB transaction. A poll meaning
+  "still processing" releases the lease and becomes due again shortly
+  WITHOUT consuming retry budget; a real execution failure uses bounded
+  retry with resumeStatus=GENERATING_VISUALS; an expired lease still
+  consumes retry budget. Job-level mutations remain lease-gated, and
+  task-row writes are compare-and-set on the exact status observed, so a
+  stale worker can neither finalize a job nor overwrite a newer worker's
+  result.
+- GENERATING_VISUALS → GENERATING_AUDIO occurs only when the current
+  manifest revalidates VALID, every GENERATION_REQUIRED task SUCCEEDED,
+  every stored result passes integrity validation, and approved media
+  remains currently valid. A valid manifest with zero generation tasks
+  may advance, but only after that same validation. Every status change
+  goes through the central generation transition authority.
+
 ---
 
 # 11. Visual Canon Database

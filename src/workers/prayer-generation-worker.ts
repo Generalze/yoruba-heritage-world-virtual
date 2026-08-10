@@ -4,6 +4,7 @@ import { closeDb } from '@/db'
 import {
   recoverExpiredGenerationLeases,
   runGenerationPreparationOnce,
+  runVisualGenerationOnce,
   systemGenerationClock,
 } from '@/services/generation-jobs'
 import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
@@ -11,16 +12,20 @@ import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 /**
  * DB-backed prayer generation worker (Phase One, Step 12).
  *
- * Polls the prayer_generation_jobs queue and FAIRLY alternates two
- * stages so neither starves the other:
+ * Polls the prayer_generation_jobs queue and FAIRLY alternates three
+ * stages so none starves the others:
  *   - preparation  (Step 12: recipe build + validate → snapshot →
  *     STORYBOARDING)
  *   - storyboard planning (Step 13: storyboard + provider-neutral
  *     manifest → GENERATING_VISUALS)
- * It also recovers expired leases, sleeps when both queues are idle
- * and shuts down gracefully on SIGTERM/SIGINT. It performs NO external
- * generation/provider calls of any kind and is NOT required for the
- * web server to boot — run it separately:
+ *   - visual generation (Step 14: async submit/poll of every
+ *     GENERATION_REQUIRED manifest task via the mock provider only →
+ *     GENERATING_AUDIO)
+ * It also recovers expired leases, sleeps when every queue is idle and
+ * shuts down gracefully on SIGTERM/SIGINT. It performs NO real
+ * provider/paid API calls of any kind (Step 14 uses the deterministic
+ * mock exclusively) and is NOT required for the web server to boot —
+ * run it separately:
  *
  *   bun run worker:generation
  */
@@ -65,8 +70,8 @@ async function main(): Promise<void> {
     }
     try {
       // Fair alternation: run one cycle of EACH stage per pass, so a
-      // continuous stream of QUEUED jobs can never permanently starve
-      // STORYBOARDING work (or vice versa).
+      // continuous stream of work in one stage can never permanently
+      // starve the others.
       const preparation = await runGenerationPreparationOnce(
         WORKER_ID,
         systemGenerationClock,
@@ -85,7 +90,21 @@ async function main(): Promise<void> {
           `[${WORKER_ID}] storyboard job ${'jobId' in storyboard ? storyboard.jobId : '?'} → ${storyboard.status}`,
         )
       }
-      if (preparation.status === 'IDLE' && storyboard.status === 'IDLE') {
+      // Dependencies default to the real (mock-provider-backed)
+      // submitScene/pollScene from src/services/visual-generation.ts,
+      // resolved lazily inside runVisualGenerationOnce — this worker
+      // never references that module directly.
+      const visuals = await runVisualGenerationOnce(WORKER_ID, systemGenerationClock)
+      if (visuals.status !== 'IDLE') {
+        console.log(
+          `[${WORKER_ID}] visual generation job ${'jobId' in visuals ? visuals.jobId : '?'} → ${visuals.status}`,
+        )
+      }
+      if (
+        preparation.status === 'IDLE' &&
+        storyboard.status === 'IDLE' &&
+        visuals.status === 'IDLE'
+      ) {
         await sleep(IDLE_SLEEP_MS)
       }
     } catch (error) {

@@ -85,6 +85,13 @@
       "when": 1786297144244,
       "tag": "0011_whole_tiger_shark",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1786318209752,
+      "tag": "0012_visual_generation_tasks",
+      "breakpoints": true
     }
   ]
 }
