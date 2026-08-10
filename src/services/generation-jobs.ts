@@ -12,6 +12,7 @@ import {
   prayerGenerationManifestSnapshots,
   prayerGenerationRecipeSnapshots,
   prayerGenerationStoryboardSnapshots,
+  prayerGenerationVisualTasks,
   sacredHouses,
   services,
 } from '@/db/schema'
@@ -26,6 +27,9 @@ import type { VideoRecipe } from './video-recipes'
 import type { DbClient } from '@/db'
 import type { GenerationJobStatus, GuidanceLanguage } from '@/db/schema'
 import type { RequestContext } from '@/auth/service'
+// Type-only: erased at compile time, so this does NOT create a runtime
+// import cycle (generation-storyboards.ts imports FROM this module).
+import type { ManifestVisualTask } from './generation-storyboards'
 
 /**
  * Appointment-bound prayer generation orchestration (Phase One,
@@ -76,7 +80,20 @@ export const GENERATION_TRANSITIONS: Record<
   ],
   PREPARING: ['STORYBOARDING', 'RETRYING', 'FAILED', 'CANCELLED'],
   STORYBOARDING: ['GENERATING_VISUALS', 'RETRYING', 'FAILED', 'CANCELLED'],
-  GENERATING_VISUALS: ['GENERATING_AUDIO', 'RETRYING', 'FAILED', 'CANCELLED'],
+  // Step 14: the self-loop is a DELIBERATE, explicit edge — it is how a
+  // worker legitimately awaiting an async provider result releases its
+  // lease and becomes due again WITHOUT touching the retry budget. It
+  // is granted through the SAME lease-guarded transitionGenerationJobUnderLease
+  // as every other edge (see runVisualGenerationOnce), so it carries
+  // identical stale-worker protection. It is distinct from RETRYING,
+  // which DOES consume budget for a genuine failure or an expired lease.
+  GENERATING_VISUALS: [
+    'GENERATING_VISUALS',
+    'GENERATING_AUDIO',
+    'RETRYING',
+    'FAILED',
+    'CANCELLED',
+  ],
   GENERATING_AUDIO: ['RENDERING', 'RETRYING', 'FAILED', 'CANCELLED'],
   RENDERING: ['UPLOADING', 'RETRYING', 'FAILED', 'CANCELLED'],
   UPLOADING: ['READY', 'RETRYING', 'FAILED', 'CANCELLED'],
@@ -97,6 +114,14 @@ export function isLegalTransition(
 export const RETRY_SCHEDULE_MINUTES = [1, 5, 15, 60, 60] as const
 
 export const DEFAULT_LEASE_MS = 2 * 60 * 1000
+
+/** Step 14: how soon a GENERATING_VISUALS job becomes due again after
+ * releasing its lease to await an async provider result. Deliberately
+ * SHORT and SECONDS-scale, unlike RETRY_SCHEDULE_MINUTES (which is
+ * MINUTES-scale and governs genuine bounded retries) — the difference
+ * in magnitude is itself part of keeping "waiting" and "failing"
+ * visibly distinct. */
+export const VISUAL_TASK_POLL_DELAY_MS = 5_000
 
 /** Injectable clock: every lease-sensitive check MUST call now() at
  * the moment of the check — a worker's start time is never authority. */
@@ -374,6 +399,28 @@ export async function claimNextStoryboardJob(
     or(
       eq(jobs.status, 'STORYBOARDING'),
       and(eq(jobs.status, 'RETRYING'), eq(jobs.resumeStatus, 'STORYBOARDING')),
+    ),
+  )
+}
+
+/** VISUAL GENERATION stage claim (Step 14): a job parked in
+ * GENERATING_VISUALS (fresh arrival, OR released back to itself by the
+ * wait-without-budget self-loop — see GENERATION_TRANSITIONS), or a
+ * RETRYING job whose resume stage is GENERATING_VISUALS. Claimed from
+ * its own queue so continuous preparation/storyboard work cannot starve
+ * it, matching claimNextGenerationJob / claimNextStoryboardJob exactly. */
+export async function claimNextVisualGenerationJob(
+  workerId: string,
+  clock: GenerationClock,
+  leaseMs: number = DEFAULT_LEASE_MS,
+): Promise<ClaimedJob | null> {
+  return claimDueJob(workerId, clock, leaseMs, (jobs) =>
+    or(
+      eq(jobs.status, 'GENERATING_VISUALS'),
+      and(
+        eq(jobs.status, 'RETRYING'),
+        eq(jobs.resumeStatus, 'GENERATING_VISUALS'),
+      ),
     ),
   )
 }
@@ -1029,6 +1076,701 @@ export async function runGenerationPreparationOnce(
           status: 'RETRY_SCHEDULED',
           jobId: job.id,
           errorCode: 'PREPARATION_ERROR',
+        }
+  } finally {
+    clearInterval(heartbeatTimer)
+  }
+}
+
+// --- Visual generation worker (Step 14 processing) --------------------------
+
+/**
+ * Real shape of Alpha's Step 14 executor service
+ * (`src/services/visual-generation.ts`). Confirmed by direct
+ * cross-check: Alpha's file imports `VisualTaskSubmissionResult` /
+ * `VisualTaskPollResult` FROM this module by these exact names and
+ * exports `submitScene(task)` / `pollScene(input)` against them — this
+ * is a live, converged contract on both sides, not a one-sided
+ * assumption. Alpha's own header comment names THIS module's
+ * `runVisualGenerationOnce` as the sole owner of the task-row lifecycle
+ * (PENDING/SUBMITTED/PROCESSING/SUCCEEDED/FAILED/CANCELLED); Alpha's
+ * functions are pure — no DB row for the task itself is read or written
+ * over there. Both re-verify authority against the CURRENT manifest
+ * task on every call and never receive or return sacred body text, a
+ * raw provider payload, or Visual Bible rule text — only ids, hashes
+ * and bounded codes.
+ */
+export type VisualTaskSubmissionResult =
+  | { status: 'SUBMITTED'; providerCode: string; providerOperationId: string }
+  | {
+      status: 'FAILED'
+      providerCode: string
+      errorCode: string
+      errorMessage: string | null
+    }
+
+export type VisualTaskPollResult =
+  | { status: 'PROCESSING' }
+  | {
+      status: 'SUCCEEDED'
+      artifactSha256: string
+      artifactMimeType: string
+      artifactDurationMs: number
+      artifactStorageRef: string
+    }
+  | { status: 'FAILED'; errorCode: string; errorMessage: string | null }
+
+export interface VisualGenerationDependencies {
+  /** Submits ONE manifest task. Called at most once per PENDING row —
+   * a task that already SUCCEEDED never comes back through here — but
+   * MUST be idempotent regardless, keyed on `task.idempotencyKey`. */
+  submitScene?: (task: ManifestVisualTask) => Promise<VisualTaskSubmissionResult>
+  /** Polls ONE in-flight provider operation. Called with NO open DB
+   * transaction and must not itself hold one — this loop persists the
+   * result in a separate, subsequent write. */
+  pollScene?: (input: {
+    providerCode: string
+    providerOperationId: string
+    task: ManifestVisualTask
+  }) => Promise<VisualTaskPollResult>
+}
+
+/** Structural governance failures (never worth retrying) vs. everything
+ * else (authority may shift; bounded retry). Mirrors Step 13's
+ * STRUCTURAL_FAILURES convention: loadAndValidateGenerationManifest
+ * surfaces an expectedBuild failure as the FIRST (lowercased) reason. */
+const STRUCTURAL_MANIFEST_FAILURES: ReadonlyArray<string> = [
+  'context_mismatch',
+  'governance_impossible',
+  'scene_ceiling_exceeded',
+]
+
+const HEX64 = /^[0-9a-f]{64}$/
+
+function isIntegrityValidResult(
+  row: typeof prayerGenerationVisualTasks.$inferSelect,
+): boolean {
+  return (
+    row.artifactSha256 != null &&
+    HEX64.test(row.artifactSha256) &&
+    row.artifactMimeType != null &&
+    row.artifactMimeType.length > 0 &&
+    row.artifactDurationMs != null &&
+    row.artifactDurationMs > 0
+  )
+}
+
+function isDuplicateVisualTaskError(error: unknown): boolean {
+  return isDuplicateKeyError(error)
+}
+
+/** Ensures exactly ONE row exists for this manifest task, ever. Reuses
+ * the same insert-then-fetch-on-conflict idempotency pattern as
+ * enqueuePrayerGenerationUnderTx: the UNIQUE (job, manifest snapshot,
+ * task id) constraint is the actual anti-duplicate-submission
+ * authority; a conflicting insert just means the row already exists. */
+async function ensureVisualTaskRow(
+  jobId: number,
+  manifestSnapshotId: number,
+  task: ManifestVisualTask,
+): Promise<typeof prayerGenerationVisualTasks.$inferSelect> {
+  const db = getDb()
+  const existing = (
+    await db
+      .select()
+      .from(prayerGenerationVisualTasks)
+      .where(
+        and(
+          eq(prayerGenerationVisualTasks.generationJobId, jobId),
+          eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(prayerGenerationVisualTasks.taskId, task.taskId),
+        ),
+      )
+      .limit(1)
+  ).at(0)
+  if (existing) return existing
+  try {
+    await db.insert(prayerGenerationVisualTasks).values({
+      generationJobId: jobId,
+      manifestSnapshotId,
+      taskId: task.taskId,
+      sceneId: task.sceneId,
+      idempotencyKey: task.idempotencyKey,
+      status: 'PENDING',
+    })
+  } catch (error) {
+    if (!isDuplicateVisualTaskError(error)) throw error
+  }
+  const row = (
+    await db
+      .select()
+      .from(prayerGenerationVisualTasks)
+      .where(
+        and(
+          eq(prayerGenerationVisualTasks.generationJobId, jobId),
+          eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(prayerGenerationVisualTasks.taskId, task.taskId),
+        ),
+      )
+      .limit(1)
+  ).at(0)
+  if (!row) {
+    throw new GenerationJobError('Visual task row vanished after insert.')
+  }
+  return row
+}
+
+export type VisualGenerationOutcome =
+  | { status: 'IDLE' }
+  | { status: 'WAITING'; jobId: number; pendingTasks: number }
+  | { status: 'COMPLETE'; jobId: number }
+  | { status: 'RETRY_SCHEDULED'; jobId: number; errorCode: string }
+  | { status: 'FAILED'; jobId: number; errorCode: string }
+  | { status: 'LEASE_LOST'; jobId: number }
+
+/**
+ * One visual-generation cycle: claim a GENERATING_VISUALS (or resuming
+ * RETRYING) job, revalidate the CURRENT manifest, submit every
+ * not-yet-submitted GENERATION_REQUIRED task and poll every in-flight
+ * one — WITHOUT holding a DB transaction or a provider call open across
+ * the other — then decide ONE of three outcomes:
+ *
+ *   - still work outstanding, nothing failed  → WAIT: release the lease
+ *     via the GENERATING_VISUALS→GENERATING_VISUALS self-loop, due
+ *     again in VISUAL_TASK_POLL_DELAY_MS. Does NOT touch attemptCount —
+ *     awaiting a provider is not a failure.
+ *   - a task failed for real                  → scheduleRetryOrFail
+ *     (bounded RETRYING with resume_status=GENERATING_VISUALS, or
+ *     FAILED once the job's attempt budget is exhausted). DOES consume
+ *     budget, exactly like an expired lease recovered by
+ *     recoverExpiredGenerationLeases (GENERATING_VISUALS is already a
+ *     LEASED_PROCESSING_STATUS, so a crashed worker's lease expiring
+ *     mid-cycle is caught there, unchanged, and also consumes budget).
+ *   - every task SUCCEEDED (or there were none) → re-validate the
+ *     manifest ONE MORE TIME against CURRENT authority (never trust the
+ *     check from earlier in this same cycle), confirm every SUCCEEDED
+ *     result is structurally integrity-valid, then finalize
+ *     GENERATING_VISUALS → GENERATING_AUDIO under the SAME lease-CAS as
+ *     every other transition — a stale worker can never finalize.
+ */
+export async function runVisualGenerationOnce(
+  workerId: string,
+  clock: GenerationClock,
+  dependencies: VisualGenerationDependencies = {},
+): Promise<VisualGenerationOutcome> {
+  const claimed = await claimNextVisualGenerationJob(workerId, clock)
+  if (!claimed) return { status: 'IDLE' }
+  const { job, leaseToken } = claimed
+  const attempt = job.attemptCount + 1
+
+  const heartbeat = async (): Promise<boolean> =>
+    renewGenerationLease(job.id, leaseToken, clock)
+  const heartbeatTimer = setInterval(
+    () => {
+      void renewGenerationLease(job.id, leaseToken, clock).catch(
+        () => undefined,
+      )
+    },
+    Math.max(1_000, Math.floor(DEFAULT_LEASE_MS / 3)),
+  )
+
+  try {
+    if (job.status === 'RETRYING') {
+      const resumed = await transitionGenerationJobUnderLease(
+        job.id,
+        leaseToken,
+        'RETRYING',
+        'GENERATING_VISUALS',
+        clock,
+        {
+          eventCode: 'visual_generation_resumed',
+          attemptNumber: attempt,
+          patch: { resumeStatus: null },
+        },
+      )
+      if (!resumed) return { status: 'LEASE_LOST', jobId: job.id }
+    }
+
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+
+    // Lazy imports: generation-storyboards.ts depends on THIS module
+    // (same reason getGenerationJobDetail imports it lazily), and
+    // visual-generation.ts depends on generation-storyboards.ts — a
+    // static import of either here would create a cycle back to this
+    // module. Dependency defaults are resolved from the SAME lazy
+    // import, never a separate stale reference.
+    const { loadAndValidateGenerationManifest, loadGenerationManifestSnapshot } =
+      await import('./generation-storyboards')
+    const { submitScene, pollScene } = await import('./visual-generation')
+    const doSubmit = dependencies.submitScene ?? submitScene
+    const doPoll = dependencies.pollScene ?? pollScene
+
+    const validated = await loadAndValidateGenerationManifest(job.id)
+    if (validated.status !== 'VALID') {
+      const reason = validated.status === 'INVALID' ? validated.reasons[0] : null
+      const structural =
+        reason != null && STRUCTURAL_MANIFEST_FAILURES.includes(reason)
+      const detail =
+        validated.status === 'INVALID'
+          ? validated.reasons.join(', ').slice(0, 500)
+          : null
+      if (structural) {
+        const ok = await transitionGenerationJobUnderLease(
+          job.id,
+          leaseToken,
+          'GENERATING_VISUALS',
+          'FAILED',
+          clock,
+          {
+            eventCode: 'manifest_impossible',
+            // `structural` is only true when `reason != null` (see its
+            // definition above), so `reason` is provably non-nullish on
+            // every path reaching this block — TS narrows it through
+            // that aliased condition, and the old `?.`/`??` fallbacks
+            // here were dead code, not a real guard.
+            detailCode: reason.slice(0, 100),
+            attemptNumber: attempt,
+            clearLease: true,
+            patch: {
+              attemptCount: attempt,
+              lastErrorCode: reason.toUpperCase(),
+              lastErrorMessage: detail,
+              nextAttemptAt: null,
+              resumeStatus: null,
+            },
+          },
+        )
+        return ok
+          ? {
+              status: 'FAILED',
+              jobId: job.id,
+              errorCode: reason.toUpperCase(),
+            }
+          : { status: 'LEASE_LOST', jobId: job.id }
+      }
+      // Authority may have shifted (or the row itself is unreadable) —
+      // bounded retry, never auto-heal.
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        validated.status === 'INVALID' ? 'MANIFEST_INVALID' : validated.status,
+        detail,
+        'GENERATING_VISUALS',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? { status: 'FAILED', jobId: job.id, errorCode: 'MANIFEST_INVALID' }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_INVALID',
+          }
+    }
+
+    const manifestRow = await loadGenerationManifestSnapshot(job.id)
+    if (manifestRow.status !== 'OK') {
+      // Vanishingly unlikely immediately after a VALID revalidation
+      // above, but never assume — bounded retry, same as any other
+      // authority hiccup.
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'MANIFEST_UNREADABLE',
+        null,
+        'GENERATING_VISUALS',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? { status: 'FAILED', jobId: job.id, errorCode: 'MANIFEST_UNREADABLE' }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_UNREADABLE',
+          }
+    }
+    const manifestSnapshotId = manifestRow.snapshotId
+    const tasks = validated.manifest.visualTasks
+
+    let anyFailed = false
+    let anyOutstanding = false
+    const nowForPoll = clock.now()
+
+    for (const task of tasks) {
+      let row = await ensureVisualTaskRow(job.id, manifestSnapshotId, task)
+
+      // A task that failed on a prior attempt gets one more shot each
+      // time the JOB ITSELF is freshly (re)claimed — the job's own
+      // bounded maxAttempts is what ultimately bounds how many times
+      // this can happen, so no separate per-task budget is needed.
+      if (row.status === 'FAILED') {
+        const reset = await getDb()
+          .update(prayerGenerationVisualTasks)
+          .set({
+            status: 'PENDING',
+            providerCode: null,
+            providerOperationId: null,
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            nextPollAt: null,
+          })
+          .where(
+            and(
+              eq(prayerGenerationVisualTasks.id, row.id),
+              eq(prayerGenerationVisualTasks.status, 'FAILED'),
+            ),
+          )
+        if (reset[0].affectedRows !== 1) {
+          // Another worker already moved this row on since we read it
+          // (reset it, submitted it, or finished it) — it is no longer
+          // ours to redecide. Never assert a verdict for a row we don't
+          // currently own; wait and let a later cycle re-read the truth.
+          anyOutstanding = true
+          continue
+        }
+        row = { ...row, status: 'PENDING' }
+      }
+
+      if (row.status === 'PENDING') {
+        // The exact status this row was in when WE decided to act —
+        // 'PENDING' whether we arrived via the reset above or found it
+        // PENDING outright. Every write below for THIS task is
+        // conditioned on it still being there; captured fresh per
+        // branch, never reused across a status change within the same
+        // iteration (see the SUBMITTED/PROCESSING branch below, which
+        // captures its OWN value separately).
+        const statusAtRead = row.status
+        const submission = await doSubmit(task)
+        const freshNow = clock.now()
+        if (submission.status === 'SUBMITTED') {
+          // Non-terminal either way: even if our own write below loses
+          // the race, the provider call we just made is idempotent on
+          // task.idempotencyKey (Alpha's contract), so it cannot have
+          // created a duplicate paid execution — it simply isn't OUR
+          // record to keep. This task is outstanding for this cycle
+          // regardless of which write wins.
+          await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'SUBMITTED',
+              providerCode: submission.providerCode,
+              providerOperationId: submission.providerOperationId,
+              submittedAt: freshNow,
+              nextPollAt: new Date(
+                freshNow.getTime() + VISUAL_TASK_POLL_DELAY_MS,
+              ),
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, statusAtRead),
+              ),
+            )
+          anyOutstanding = true
+        } else {
+          const updated = await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'FAILED',
+              attemptCount: row.attemptCount + 1,
+              providerCode: submission.providerCode,
+              lastErrorCode: submission.errorCode.slice(0, 60),
+              lastErrorMessage: submission.errorMessage?.slice(0, 500) ?? null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows === 1) {
+            anyFailed = true
+          } else {
+            // Another worker already advanced this row past PENDING
+            // while our submit was in flight — do not assert OUR stale
+            // failure over whatever they already recorded.
+            anyOutstanding = true
+          }
+        }
+        continue
+      }
+
+      if (row.status === 'SUBMITTED' || row.status === 'PROCESSING') {
+        if (row.nextPollAt != null && row.nextPollAt > nowForPoll) {
+          // Not due yet this cycle.
+          anyOutstanding = true
+          continue
+        }
+        // Captured separately from the PENDING branch's statusAtRead —
+        // this row's status at the moment WE decided to poll it, either
+        // 'SUBMITTED' or 'PROCESSING', never a broader IN(...) match
+        // (which could mask a real conflict, e.g. a legitimate
+        // same-worker SUBMITTED→PROCESSING progression from a moment
+        // ago satisfying a CAS meant to catch a DIFFERENT worker).
+        const statusAtRead = row.status
+        if (row.providerCode == null || row.providerOperationId == null) {
+          // Structurally impossible (a SUBMITTED row always carries
+          // provider identity) — treat as a real failure rather than
+          // polling forever against nothing.
+          const updated = await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'FAILED',
+              attemptCount: row.attemptCount + 1,
+              lastErrorCode: 'MISSING_PROVIDER_IDENTITY',
+              completedAt: clock.now(),
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows === 1) {
+            anyFailed = true
+          } else {
+            anyOutstanding = true
+          }
+          continue
+        }
+        const poll = await doPoll({
+          providerCode: row.providerCode,
+          providerOperationId: row.providerOperationId,
+          task,
+        })
+        const freshNow = clock.now()
+        if (poll.status === 'PROCESSING') {
+          // Non-terminal either way — same reasoning as the SUBMITTED
+          // branch above: whichever write wins, this task is still
+          // outstanding from THIS cycle's perspective.
+          await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'PROCESSING',
+              nextPollAt: new Date(
+                freshNow.getTime() + VISUAL_TASK_POLL_DELAY_MS,
+              ),
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, statusAtRead),
+              ),
+            )
+          anyOutstanding = true
+        } else if (poll.status === 'SUCCEEDED') {
+          const updated = await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'SUCCEEDED',
+              artifactSha256: poll.artifactSha256,
+              artifactMimeType: poll.artifactMimeType,
+              artifactDurationMs: poll.artifactDurationMs,
+              artifactStorageRef: poll.artifactStorageRef,
+              nextPollAt: null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows !== 1) {
+            // Someone else already resolved this row — never overwrite
+            // a result we don't own; wait and re-read next cycle.
+            anyOutstanding = true
+          }
+        } else {
+          const updated = await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'FAILED',
+              attemptCount: row.attemptCount + 1,
+              lastErrorCode: poll.errorCode.slice(0, 60),
+              lastErrorMessage: poll.errorMessage?.slice(0, 500) ?? null,
+              nextPollAt: null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, statusAtRead),
+              ),
+            )
+          if (updated[0].affectedRows === 1) {
+            anyFailed = true
+          } else {
+            // Same reasoning throughout: a lost CAS means another
+            // worker already recorded this row's true outcome — our
+            // stale FAILED verdict is discarded, not asserted.
+            anyOutstanding = true
+          }
+        }
+      }
+      // SUCCEEDED / CANCELLED: terminal, nothing to do.
+    }
+
+    // Stale-worker guard: task writes above are idempotent, provider-
+    // truth records safe from any worker — but the JOB-LEVEL decision
+    // below (wait / retry / finalize) must never proceed on a lease
+    // this worker may have already lost.
+    if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
+
+    if (anyFailed) {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'VISUAL_TASK_FAILED',
+        null,
+        'GENERATING_VISUALS',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? { status: 'FAILED', jobId: job.id, errorCode: 'VISUAL_TASK_FAILED' }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'VISUAL_TASK_FAILED',
+          }
+    }
+
+    if (anyOutstanding) {
+      // WAIT: release the lease via the explicit self-loop. Authority
+      // for the next-due instant comes from freshNow inside the patch
+      // factory, taken AFTER the lock — never from clock.now() here.
+      const released = await transitionGenerationJobUnderLease(
+        job.id,
+        leaseToken,
+        'GENERATING_VISUALS',
+        'GENERATING_VISUALS',
+        clock,
+        {
+          eventCode: 'visual_generation_waiting',
+          attemptNumber: attempt,
+          clearLease: true,
+          patch: (freshNow) => ({
+            nextAttemptAt: new Date(
+              freshNow.getTime() + VISUAL_TASK_POLL_DELAY_MS,
+            ),
+          }),
+        },
+      )
+      return released
+        ? {
+            status: 'WAITING',
+            jobId: job.id,
+            pendingTasks: tasks.length,
+          }
+        : { status: 'LEASE_LOST', jobId: job.id }
+    }
+
+    // Every task SUCCEEDED (or there were none). Re-validate against
+    // CURRENT authority ONE MORE TIME — never trust the check from
+    // earlier in this same cycle — and confirm every SUCCEEDED result
+    // is structurally integrity-valid before finalizing.
+    const revalidated = await loadAndValidateGenerationManifest(job.id)
+    if (revalidated.status !== 'VALID') {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'MANIFEST_INVALID_AT_COMPLETION',
+        revalidated.status === 'INVALID'
+          ? revalidated.reasons.join(', ').slice(0, 500)
+          : null,
+        'GENERATING_VISUALS',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? {
+            status: 'FAILED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_INVALID_AT_COMPLETION',
+          }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'MANIFEST_INVALID_AT_COMPLETION',
+          }
+    }
+
+    const finalRows = await getDb()
+      .select()
+      .from(prayerGenerationVisualTasks)
+      .where(
+        and(
+          eq(prayerGenerationVisualTasks.generationJobId, job.id),
+          eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
+        ),
+      )
+    const allIntegrityValid = finalRows.every(
+      (row) => row.status === 'SUCCEEDED' && isIntegrityValidResult(row),
+    )
+    if (!allIntegrityValid) {
+      const outcome = await scheduleRetryOrFail(
+        job,
+        leaseToken,
+        clock,
+        'VISUAL_RESULT_INTEGRITY_FAILURE',
+        null,
+        'GENERATING_VISUALS',
+      )
+      if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+      return outcome === 'FAILED'
+        ? {
+            status: 'FAILED',
+            jobId: job.id,
+            errorCode: 'VISUAL_RESULT_INTEGRITY_FAILURE',
+          }
+        : {
+            status: 'RETRY_SCHEDULED',
+            jobId: job.id,
+            errorCode: 'VISUAL_RESULT_INTEGRITY_FAILURE',
+          }
+    }
+
+    const finalized = await transitionGenerationJobUnderLease(
+      job.id,
+      leaseToken,
+      'GENERATING_VISUALS',
+      'GENERATING_AUDIO',
+      clock,
+      {
+        eventCode: 'visual_generation_complete',
+        attemptNumber: attempt,
+        clearLease: true,
+        patch: {
+          attemptCount: attempt,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          nextAttemptAt: null,
+          resumeStatus: null,
+        },
+      },
+    )
+    return finalized
+      ? { status: 'COMPLETE', jobId: job.id }
+      : { status: 'LEASE_LOST', jobId: job.id }
+  } catch (error) {
+    const outcome = await scheduleRetryOrFail(
+      job,
+      leaseToken,
+      clock,
+      'VISUAL_GENERATION_ERROR',
+      sanitizeErrorMessage(error),
+      'GENERATING_VISUALS',
+    )
+    if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
+    return outcome === 'FAILED'
+      ? { status: 'FAILED', jobId: job.id, errorCode: 'VISUAL_GENERATION_ERROR' }
+      : {
+          status: 'RETRY_SCHEDULED',
+          jobId: job.id,
+          errorCode: 'VISUAL_GENERATION_ERROR',
         }
   } finally {
     clearInterval(heartbeatTimer)
