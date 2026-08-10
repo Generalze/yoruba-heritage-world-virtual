@@ -90,7 +90,11 @@ import {
   publishVisualBibleVersion,
   submitVisualBibleVersion,
 } from '@/services/visual-bibles'
-import { runGenerationPreparationOnce, runVisualGenerationOnce } from '@/services/generation-jobs'
+import {
+  VISUAL_TASK_POLL_DELAY_MS,
+  runGenerationPreparationOnce,
+  runVisualGenerationOnce,
+} from '@/services/generation-jobs'
 import {
   computeManifestSha256,
   runStoryboardPlanningOnce,
@@ -1101,10 +1105,13 @@ describe('red-team: artifact hash tampering is detectable, never trusted blindly
     expect(result.artifactSha256).toBe(computeFileSha256(stored))
 
     // Now tamper the STORED BYTES directly (simulating disk-level
-    // corruption/tampering after the fact — Step 14 has no downstream
-    // consumer yet to re-verify automatically, so this proves the
-    // detection MECHANISM itself is sound: recomputing from the actual
-    // bytes reveals the tamper immediately).
+    // corruption/tampering after the fact). This proves the detection
+    // MECHANISM itself is sound — recomputing from the actual bytes
+    // reveals the tamper immediately — which is exactly what the
+    // finalization gate does before GENERATING_VISUALS -> GENERATING_AUDIO
+    // (see the storage-verification suite in
+    // red-team-visual-generation-submission.test.ts, where the same
+    // tamper is proved to BLOCK the advance).
     const absolutePath = join(storageRoot, result.artifactStorageRef)
     const original = readFileSync(absolutePath)
     writeFileSync(absolutePath, Buffer.from('tampered-artifact-bytes'))
@@ -1254,4 +1261,139 @@ describe('red-team: no real provider/network calls anywhere in the Step 14 provi
       expect(source).not.toMatch(/Date\.now\s*\(/)
     }
   })
+})
+
+// ----------------------------------------------------------------------------
+// Step 14 hardening item 3: provider identity binding
+//
+// A providerOperationId is opaque and belongs to the provider that
+// ISSUED it. Polling it against whichever provider happens to be active
+// later asks the wrong backend about someone else's job — and then
+// believes the answer. The persisted providerCode is therefore binding.
+// ----------------------------------------------------------------------------
+
+describe('red-team: a poll is bound to the provider that issued the operation', () => {
+  function countingProvider(
+    code: string,
+    counters: { submits: number; polls: number },
+  ): VisualGenerationProvider {
+    return {
+      code,
+      displayName: `Red-team counting provider ${code}`,
+      isEnabled: () => true,
+      submitScene: async (
+        request: VisualGenerationRequest,
+      ): Promise<VisualGenerationSubmission> => {
+        counters.submits += 1
+        return { providerJobId: `${code}-${request.idempotencyKey}`, status: 'PENDING' }
+      },
+      pollScene: async (): Promise<VisualGenerationPollResult> => {
+        counters.polls += 1
+        // Deliberately a "success": if identity binding were missing,
+        // this foreign result would be accepted as the artifact for a
+        // scene it was never generated for.
+        return {
+          status: 'COMPLETED',
+          artifact: {
+            bytes: new TextEncoder().encode('foreign provider artifact bytes'),
+            mimeType: 'video/mp4',
+            durationMs: 5_000,
+          },
+          failureCode: null,
+        }
+      },
+    }
+  }
+
+  it('a persisted provider code that no longer matches the active provider fails closed WITHOUT polling', async () => {
+    const { jobId } = await makeGenerationRequiredJob()
+    const manifest = await latestManifest(jobId)
+    const task = manifest.visualTasks[0]
+    const counters = { submits: 0, polls: 0 }
+    // The operation id below was issued by MOCK; the provider active now
+    // is a different one entirely.
+    setVisualGenerationProviderForTests(countingProvider('OTHER', counters))
+    try {
+      const result = await pollScene({
+        providerCode: 'MOCK',
+        providerOperationId: 'mock-operation-issued-by-a-different-provider',
+        task,
+      })
+      // TEETH: refused on identity alone, with a bounded machine code —
+      // and the wrong provider was never asked anything.
+      expect(result.status).toBe('FAILED')
+      if (result.status === 'FAILED') {
+        expect(result.errorCode).toBe('provider_code_mismatch')
+      }
+      expect(counters.polls).toBe(0)
+      expect(counters.submits).toBe(0)
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  }, 240_000)
+
+  it('the SAME poll succeeds once the persisted code names the active provider (control)', async () => {
+    const { jobId } = await makeGenerationRequiredJob()
+    const manifest = await latestManifest(jobId)
+    const task = manifest.visualTasks[0]
+    const counters = { submits: 0, polls: 0 }
+    setVisualGenerationProviderForTests(countingProvider('OTHER', counters))
+    try {
+      const submitted = await submitScene(task)
+      expect(submitted.status).toBe('SUBMITTED')
+      if (submitted.status !== 'SUBMITTED') return
+      // The code persisted at submission is the provider's OWN code —
+      // that is what makes the later poll resolvable.
+      expect(submitted.providerCode).toBe('OTHER')
+      const result = await pollScene({
+        providerCode: submitted.providerCode,
+        providerOperationId: submitted.providerOperationId,
+        task,
+      })
+      // TEETH: the mismatch test above proves refusal, this proves the
+      // refusal is about IDENTITY and not a blanket "never poll".
+      expect(result.status).toBe('SUCCEEDED')
+      expect(counters.polls).toBe(1)
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  }, 240_000)
+
+  it('an in-flight task never reaches a swapped-in provider through the job loop either', async () => {
+    const { jobId } = await makeGenerationRequiredJob()
+    // Cycle 1 submits against MOCK (the real executor, real registry),
+    // persisting providerCode = MOCK on the row.
+    const seeded = await runVisualGenerationOnce(
+      'rtw-bind-seed',
+      { now: () => new Date() },
+      realDependencies,
+    )
+    expect(seeded.status).toBe('WAITING')
+    const submittedRow = (await visualTaskRows(jobId))[0]
+    expect(submittedRow.status).toBe('SUBMITTED')
+    expect(submittedRow.providerCode).toBe('MOCK')
+
+    // A different provider becomes active before the poll cycle.
+    const counters = { submits: 0, polls: 0 }
+    setVisualGenerationProviderForTests(countingProvider('OTHER', counters))
+    let outcome
+    try {
+      outcome = await runVisualGenerationOnce(
+        'rtw-bind-poll',
+        { now: () => new Date(Date.now() + VISUAL_TASK_POLL_DELAY_MS + 60_000) },
+        realDependencies,
+      )
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+    // TEETH: the swapped-in provider was never polled, so its foreign
+    // "success" could never be recorded as this scene's artifact, and
+    // the job certainly never advanced on the strength of it.
+    expect(counters.polls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('GENERATING_AUDIO')
+    const afterRow = (await visualTaskRows(jobId))[0]
+    expect(afterRow.artifactSha256).toBeNull()
+    expect(afterRow.artifactStorageRef).toBeNull()
+  }, 240_000)
 })

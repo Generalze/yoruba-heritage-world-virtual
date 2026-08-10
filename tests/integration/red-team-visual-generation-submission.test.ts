@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { and, eq, inArray, like } from 'drizzle-orm'
@@ -68,6 +68,7 @@ import {
 } from '@/services/prayer-templates'
 import {
   LocalMediaStorageProvider,
+  computeFileSha256,
   resetMediaStorageForTests,
   setMediaStorageForTests,
 } from '@/providers/media/storage'
@@ -98,8 +99,12 @@ import {
 import type {
   GenerationClock,
   VisualGenerationDependencies,
+  VisualTaskPollResult,
 } from '@/services/generation-jobs'
-import type { GenerationManifest } from '@/services/generation-storyboards'
+import type {
+  GenerationManifest,
+  ManifestVisualTask,
+} from '@/services/generation-storyboards'
 import type { SacredProfileInput } from '@/services/sacred-content'
 import type { SlotInput } from '@/services/prayer-templates'
 
@@ -431,11 +436,203 @@ async function makeGeneratingVisualsJob(): Promise<{
   return { jobId: job.id, appointmentId: reservation.appointmentId, manifest }
 }
 
+/** Same fixture with TWO GENERATION_REQUIRED tasks — the only way to
+ * prove "a worker that lost its lease starts NO FURTHER provider
+ * action", which needs a second task the loop must refuse to touch. */
+async function makeTwoTaskGeneratingVisualsJob(): Promise<{
+  jobId: number
+  appointmentId: number
+  manifest: GenerationManifest
+}> {
+  const serviceId = nextService()
+  const themeA = `${CODE_PREFIX}_G2A_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  const themeB = `${CODE_PREFIX}_G2B_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  await makeEligibleSacred({
+    themeCode: themeA,
+    contentType: 'CHANT',
+    externalAiPolicy: 'METADATA_ONLY',
+    durationHintSeconds: 10,
+  })
+  await makeEligibleSacred({
+    themeCode: themeB,
+    contentType: 'PRAYER',
+    externalAiPolicy: 'METADATA_ONLY',
+    durationHintSeconds: 10,
+  })
+  await makeServiceTemplate(serviceId, [
+    filterSlot({
+      slotKey: 'MAIN_PRAYER',
+      position: 1,
+      themeCode: themeA,
+      contentType: 'CHANT',
+    }),
+    filterSlot({
+      slotKey: 'CLOSING_PRAYER',
+      position: 2,
+      themeCode: themeB,
+      contentType: 'PRAYER',
+    }),
+  ])
+  const userId = await makeEligibleUser()
+  const reservation = await createReservation(userId, ctx, {
+    serviceId,
+    startsAtUtc: nextSlot(),
+  })
+  await confirmReservation(reservation.appointmentId, ctx)
+  const job = (await jobForAppointment(reservation.appointmentId))!
+  await quiesceOtherJobs(job.id)
+  expect(
+    (await runGenerationPreparationOnce('rtv-prep2', { now: () => new Date() }))
+      .status,
+  ).toBe('PREPARED')
+  expect(
+    (await runStoryboardPlanningOnce('rtv-plan2', { now: () => new Date() }))
+      .status,
+  ).toBe('PLANNED')
+  const manifestRow = (
+    await getDb()
+      .select()
+      .from(prayerGenerationManifestSnapshots)
+      .where(eq(prayerGenerationManifestSnapshots.generationJobId, job.id))
+  ).at(-1)!
+  const manifest = JSON.parse(manifestRow.manifestJsonText) as GenerationManifest
+  // Loud, not lenient: the whole point of this fixture is >1 task.
+  expect(manifest.visualTasks.length).toBeGreaterThanOrEqual(2)
+  return { jobId: job.id, appointmentId: reservation.appointmentId, manifest }
+}
+
 async function visualTaskRows(jobId: number) {
   return getDb()
     .select()
     .from(prayerGenerationVisualTasks)
     .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+}
+
+async function jobRow(jobId: number) {
+  return (
+    await getDb()
+      .select()
+      .from(prayerGenerationJobs)
+      .where(eq(prayerGenerationJobs.id, jobId))
+      .limit(1)
+  ).at(0)!
+}
+
+type SucceededPoll = Extract<VisualTaskPollResult, { status: 'SUCCEEDED' }>
+
+/**
+ * Stores REAL bytes in this suite's private media root and returns the
+ * exact SUCCEEDED shape a genuine poll produces.
+ *
+ * Finalization re-reads the stored object and recomputes its hash, so a
+ * test double that invents a storage ref no longer models a successful
+ * generation at all — it models a MISSING artifact. Every "this path
+ * succeeds" test therefore stores truthful bytes; the tests that prove
+ * the gate bites deliberately break exactly one of those properties.
+ */
+async function storeRealArtifact(task: ManifestVisualTask): Promise<SucceededPoll> {
+  const bytes = new TextEncoder().encode(
+    `rtv-visual-artifact-${crypto.randomUUID()}`,
+  )
+  const { storageKey } = await storage.put(bytes, 'mp4')
+  return {
+    status: 'SUCCEEDED',
+    artifactSha256: computeFileSha256(bytes),
+    artifactMimeType: 'video/mp4',
+    artifactDurationMs: task.durationMs,
+    artifactStorageRef: storageKey,
+  }
+}
+
+const submitOnlyDeps: VisualGenerationDependencies = {
+  submitScene: async (task) => ({
+    status: 'SUBMITTED',
+    providerCode: 'MOCK',
+    providerOperationId: `op-${task.taskId}`,
+  }),
+  pollScene: async () => ({ status: 'PROCESSING' }),
+}
+
+function neverCalledDeps(spy: {
+  submitCalls: number
+  pollCalls: number
+}): VisualGenerationDependencies {
+  return {
+    submitScene: async () => {
+      spy.submitCalls += 1
+      throw new Error('provider must not be called in this test')
+    },
+    pollScene: async () => {
+      spy.pollCalls += 1
+      throw new Error('provider must not be called in this test')
+    },
+  }
+}
+
+/** Writes ONE task row straight to SUCCEEDED with the artifact claim
+ * given. The next cycle then has nothing to submit or poll and goes
+ * DIRECTLY to the finalization gate — the only way to exercise that gate
+ * in isolation, with the provider provably untouched. */
+async function forceTaskSucceeded(
+  jobId: number,
+  claim: {
+    artifactSha256: string | null
+    artifactMimeType: string | null
+    artifactDurationMs: number | null
+    artifactStorageRef: string | null
+  },
+): Promise<void> {
+  await getDb()
+    .update(prayerGenerationVisualTasks)
+    .set({
+      status: 'SUCCEEDED',
+      artifactSha256: claim.artifactSha256,
+      artifactMimeType: claim.artifactMimeType,
+      artifactDurationMs: claim.artifactDurationMs,
+      artifactStorageRef: claim.artifactStorageRef,
+      nextPollAt: null,
+      completedAt: new Date(),
+    })
+    .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+}
+
+/** Seeds ONE job whose single task row is SUCCEEDED with `claim`, then
+ * runs the finalize-only cycle and returns its outcome plus the job row.
+ * Shared by every finalization-integrity case below so each test differs
+ * ONLY in the artifact claim under test. */
+async function runFinalizeOnlyCycle(
+  label: string,
+  buildClaim: (task: ManifestVisualTask) => Promise<{
+    artifactSha256: string | null
+    artifactMimeType: string | null
+    artifactDurationMs: number | null
+    artifactStorageRef: string | null
+  }>,
+  mutate?: (jobId: number, manifest: GenerationManifest) => Promise<void>,
+) {
+  const { jobId, manifest } = await makeGeneratingVisualsJob()
+  const task = manifest.visualTasks[0]
+  const clock = makeFakeClock(Date.now())
+  const seeded = await runVisualGenerationOnce(
+    `${label}-seed`,
+    clock,
+    submitOnlyDeps,
+  )
+  expect(seeded.status).toBe('WAITING')
+  await forceTaskSucceeded(jobId, await buildClaim(task))
+  if (mutate) await mutate(jobId, manifest)
+  clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+  const spy = { submitCalls: 0, pollCalls: 0 }
+  const outcome = await runVisualGenerationOnce(
+    `${label}-final`,
+    clock,
+    neverCalledDeps(spy),
+  )
+  // The finalize-only cycle must never call the provider: a terminal
+  // SUCCEEDED row is not re-submitted or re-polled.
+  expect(spy.submitCalls).toBe(0)
+  expect(spy.pollCalls).toBe(0)
+  return { jobId, manifest, task, outcome, job: await jobRow(jobId) }
 }
 
 beforeAll(async () => {
@@ -472,7 +669,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 20; i += 1) {
+  for (let i = 0; i < 32; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTVS${i}_${key}`.toUpperCase(),
@@ -944,11 +1141,16 @@ describe('red-team: a job whose lease is reclaimed mid-cycle never finalizes for
 
 describe('red-team: task-row status-CAS prevents a zombie worker from clobbering a newer SUCCEEDED result', () => {
   it('a late write from a reclaimed worker cannot overwrite a fresher SUCCEEDED result with a stale FAILED', async () => {
-    const { jobId } = await makeGeneratingVisualsJob()
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
     const clock = makeFakeClock(Date.now())
-    const KNOWN_SHA = 'b'.repeat(64)
-    const KNOWN_MIME = 'video/mp4'
-    const KNOWN_DURATION = 5_000
+    // Worker B's result is a GENUINE one: real bytes in private storage,
+    // hashed from those exact bytes. Anything less would be rejected by
+    // the finalization gate and this test would be proving the wrong
+    // thing (a blocked finalize rather than a protected result).
+    const bArtifact = await storeRealArtifact(manifest.visualTasks[0])
+    const KNOWN_SHA = bArtifact.artifactSha256
+    const KNOWN_MIME = bArtifact.artifactMimeType
+    const KNOWN_DURATION = bArtifact.artifactDurationMs
 
     let jobAttemptCountAfterGenuineSuccess = -1
 
@@ -1007,13 +1209,7 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
               providerCode: 'MOCK',
               providerOperationId: `op-${t.taskId}`,
             }),
-            pollScene: async () => ({
-              status: 'SUCCEEDED',
-              artifactSha256: KNOWN_SHA,
-              artifactMimeType: KNOWN_MIME,
-              artifactDurationMs: KNOWN_DURATION,
-              artifactStorageRef: 'worker-b-storage-ref',
-            }),
+            pollScene: async () => bArtifact,
           },
         )
         expect(bPollOutcome.status).toBe('COMPLETE')
@@ -1050,10 +1246,15 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
 
     // TEETH: the row must STILL hold B's EXACT SUCCEEDED values — none
     // of A's stale verdict in ANY field. Checked immediately after A's
-    // write lands, before any further cycle could run and mask a real
+    // cycle ends, before any further cycle could run and mask a real
     // clobber (a FAILED row resets to PENDING and gets resubmitted on
     // the next cycle, which would hide this bug behind a redundant
     // provider call and an eventual, misleadingly-green "SUCCEEDED").
+    // TWO independent guards must both hold here: A's post-provider
+    // lease heartbeat refuses to accept a result on a lease it no longer
+    // holds, and the row-status CAS would reject the write even if it
+    // were attempted (proven directly, without any lease loss, by the
+    // late-poll CAS tests further below).
     const final = (await visualTaskRows(jobId))[0]
     expect(final.status).toBe('SUCCEEDED')
     expect(final.artifactSha256).toBe(KNOWN_SHA)
@@ -1191,19 +1392,21 @@ describe('red-team: every Step 14 status change goes through the central transit
       true,
     )
 
-    const { jobId } = await makeGeneratingVisualsJob()
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
     const clock = makeFakeClock(Date.now())
+    // A GENUINE artifact (real stored bytes, real hash): the tampered
+    // transition map must be what blocks this job, so every OTHER gate
+    // — including finalization's storage re-verification — has to be
+    // legitimately satisfiable first.
+    const artifact = await storeRealArtifact(manifest.visualTasks[0])
     // First cycle: submit (never completes this cycle — a task that was
     // just SUBMITTED is polled on a LATER cycle, not the same one), so
     // the job legitimately WAITs.
-    const firstCycle = await runVisualGenerationOnce('rtv-bypass-seed', clock, {
-      submitScene: async (task) => ({
-        status: 'SUBMITTED',
-        providerCode: 'MOCK',
-        providerOperationId: `op-${task.taskId}`,
-      }),
-      pollScene: async () => ({ status: 'PROCESSING' }),
-    })
+    const firstCycle = await runVisualGenerationOnce(
+      'rtv-bypass-seed',
+      clock,
+      submitOnlyDeps,
+    )
     expect(firstCycle.status).toBe('WAITING')
     clock.advance(VISUAL_TASK_POLL_DELAY_MS + 1_000)
 
@@ -1220,13 +1423,7 @@ describe('red-team: every Step 14 status change goes through the central transit
         providerCode: 'MOCK',
         providerOperationId: `op-${task.taskId}`,
       }),
-      pollScene: async () => ({
-        status: 'SUCCEEDED',
-        artifactSha256: 'a'.repeat(64),
-        artifactMimeType: 'video/mp4',
-        artifactDurationMs: 5_000,
-        artifactStorageRef: 'unused-in-this-guard-test',
-      }),
+      pollScene: async () => artifact,
     }
     // runVisualGenerationOnce wraps its whole cycle body in a catch that
     // converts ANY thrown error (including isLegalTransition's
@@ -1255,5 +1452,455 @@ describe('red-team: every Step 14 status change goes through the central transit
         .limit(1)
     ).at(0)!
     expect(job.status).not.toBe('GENERATING_AUDIO')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 14 hardening item 1: artifact finalization integrity
+//
+// A SUCCEEDED task row is a CLAIM, not proof. Before
+// GENERATING_VISUALS -> GENERATING_AUDIO, every claim is re-proved
+// against PRIVATE STORAGE (the object exists, the bytes are non-empty,
+// their fresh SHA-256 matches the recorded hash, the mime is still
+// allowlisted, the duration still fits the manifest task) and the set of
+// rows is proved to be EXACTLY manifest.visualTasks.
+//
+// Each case below drives the SAME finalize-only cycle (task row already
+// terminal, provider provably untouched) and differs ONLY in the one
+// property it breaks — so a green result can never come from the gate
+// being skipped, and the first case proves the gate is passable at all.
+// ----------------------------------------------------------------------------
+
+describe('red-team: finalization verifies artifacts against private storage', () => {
+  it('a truthful stored artifact DOES finalize to GENERATING_AUDIO (control)', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-ok',
+      async (task) => await storeRealArtifact(task),
+    )
+    expect(outcome.status).toBe('COMPLETE')
+    expect(job.status).toBe('GENERATING_AUDIO')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose stored object is GONE never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-missing',
+      async (task) => {
+        const artifact = await storeRealArtifact(task)
+        // Everything the row records is well-formed — the object behind
+        // it simply is not there any more. Metadata alone would happily
+        // call this a success.
+        await storage.remove(artifact.artifactStorageRef)
+        expect(await storage.exists(artifact.artifactStorageRef)).toBe(false)
+        return artifact
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('artifact_missing_from_storage')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose stored BYTES were tampered with never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-tamper',
+      async (task) => {
+        const artifact = await storeRealArtifact(task)
+        // The object still exists and the row still carries the hash of
+        // the ORIGINAL bytes — only the bytes on disk changed. Only a
+        // fresh recomputation from the stored object catches this.
+        writeFileSync(
+          join(storageRoot, artifact.artifactStorageRef),
+          Buffer.from('tampered-artifact-bytes-not-the-generated-ones'),
+        )
+        return artifact
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('artifact_hash_mismatch')
+  }, 240_000)
+
+  it('a SUCCEEDED row with NO storage reference never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-noref',
+      async (task) => ({
+        ...(await storeRealArtifact(task)),
+        // Real bytes exist somewhere; this row just does not say where.
+        // An unreferenceable artifact is not a finalizable result.
+        artifactStorageRef: null,
+      }),
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('artifact_storage_ref_invalid')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose stored bytes are EMPTY never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-empty',
+      async (task) => {
+        const artifact = await storeRealArtifact(task)
+        writeFileSync(
+          join(storageRoot, artifact.artifactStorageRef),
+          Buffer.alloc(0),
+        )
+        return artifact
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('artifact_missing_from_storage')
+  }, 240_000)
+
+  it('a SUCCEEDED row whose duration does not fit its manifest task never advances', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-duration',
+      async (task) => ({
+        ...(await storeRealArtifact(task)),
+        // Inside the global scene ceiling, but nowhere near the length
+        // THIS scene asked for — an artifact for a different scene.
+        artifactDurationMs: Math.max(1, task.durationMs - 5_000),
+      }),
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('artifact_duration_mismatch')
+  }, 240_000)
+})
+
+describe('red-team: finalization requires the task rows to BE the manifest tasks', () => {
+  it('an EXTRA task row for the same job blocks finalization', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-extra',
+      async (task) => await storeRealArtifact(task),
+      async (jobId) => {
+        const existing = (await visualTaskRows(jobId))[0]
+        // A row nobody planned: a leftover from a superseded manifest, a
+        // hand-inserted row, a bug. Its ARTIFACT is irrelevant — its
+        // existence alone means the rows are no longer the manifest.
+        await getDb()
+          .insert(prayerGenerationVisualTasks)
+          .values({
+            generationJobId: jobId,
+            manifestSnapshotId: existing.manifestSnapshotId,
+            taskId: `${existing.taskId}-EXTRA`,
+            sceneId: existing.sceneId,
+            idempotencyKey: crypto.randomUUID().replace(/-/g, '').repeat(2),
+            status: 'SUCCEEDED',
+            artifactSha256: existing.artifactSha256,
+            artifactMimeType: existing.artifactMimeType,
+            artifactDurationMs: existing.artifactDurationMs,
+            artifactStorageRef: existing.artifactStorageRef,
+          })
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('task_count_mismatch')
+  }, 240_000)
+
+  it('a task row re-pointed at a DIFFERENT task id blocks finalization', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-identity',
+      async (task) => await storeRealArtifact(task),
+      async (jobId) => {
+        // Right count, right task id, valid artifact — but bound to a
+        // scene the manifest never assigned it to. The task-row lookup
+        // the submit/poll loop uses (task id only) sails straight past
+        // this; only the finalization gate compares the FULL binding.
+        await getDb()
+          .update(prayerGenerationVisualTasks)
+          .set({ sceneId: 'NOT-A-MANIFEST-SCENE' })
+          .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('task_scene_mismatch')
+  }, 240_000)
+
+  it('a task row whose idempotency key is not the manifest key blocks finalization', async () => {
+    const { outcome, job } = await runFinalizeOnlyCycle(
+      'rtv-fin-idem',
+      async (task) => await storeRealArtifact(task),
+      async (jobId) => {
+        // The idempotency key IS the anti-duplicate-submission identity.
+        // A row carrying a different one cannot be proved to be the
+        // single submission this manifest task authorized.
+        await getDb()
+          .update(prayerGenerationVisualTasks)
+          .set({ idempotencyKey: crypto.randomUUID().replace(/-/g, '').repeat(2) })
+          .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+      },
+    )
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect(job.status).not.toBe('GENERATING_AUDIO')
+    expect(job.lastErrorCode).toBe('VISUAL_RESULT_INTEGRITY_FAILURE')
+    expect(job.lastErrorMessage).toBe('task_idempotency_mismatch')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 14 hardening item 2: orphan artifact cleanup + lease-fenced provider
+// actions
+// ----------------------------------------------------------------------------
+
+describe('red-team: a poll result that loses its CAS never leaves its artifact behind', () => {
+  it('a losing SUCCEEDED poll removes the artifact it just stored and keeps the winner intact', async () => {
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('rtv-orphan-seed', clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+
+    // Two genuine artifacts: the one another worker's result references
+    // (the winner) and the one THIS cycle stores before discovering it
+    // lost the race (the loser).
+    const winner = await storeRealArtifact(task)
+    const loser = await storeRealArtifact(task)
+    expect(loser.artifactStorageRef).not.toBe(winner.artifactStorageRef)
+
+    const outcome = await runVisualGenerationOnce('rtv-orphan', clock, {
+      submitScene: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollScene: async () => {
+        // WHILE our poll is in flight, another worker resolves the row.
+        // Our lease is untouched — this is purely a lost row-status CAS,
+        // so the cleanup under test cannot be confused with the
+        // lease-loss path.
+        await getDb()
+          .update(prayerGenerationVisualTasks)
+          .set({
+            status: 'SUCCEEDED',
+            artifactSha256: winner.artifactSha256,
+            artifactMimeType: winner.artifactMimeType,
+            artifactDurationMs: winner.artifactDurationMs,
+            artifactStorageRef: winner.artifactStorageRef,
+            nextPollAt: null,
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+        return loser
+      },
+    })
+
+    // Our verdict was discarded, so the cycle simply waits.
+    expect(outcome.status).toBe('WAITING')
+    const row = (await visualTaskRows(jobId))[0]
+    // TEETH 1: the newer result is untouched, in every field.
+    expect(row.status).toBe('SUCCEEDED')
+    expect(row.artifactSha256).toBe(winner.artifactSha256)
+    expect(row.artifactStorageRef).toBe(winner.artifactStorageRef)
+    // TEETH 2: our unreferenced artifact is GONE from private storage —
+    // a stale worker never leaves generated bytes lying around.
+    expect(await storage.exists(loser.artifactStorageRef)).toBe(false)
+    // TEETH 3: cleanup removed OUR key only, never the referenced one.
+    expect(await storage.exists(winner.artifactStorageRef)).toBe(true)
+  }, 240_000)
+
+  it('a late poll SUCCEEDED cannot clobber a newer FAILED row', async () => {
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (
+        await runVisualGenerationOnce(
+          'rtv-late-succ-seed',
+          clock,
+          submitOnlyDeps,
+        )
+      ).status,
+    ).toBe('WAITING')
+    clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+    const late = await storeRealArtifact(task)
+
+    const outcome = await runVisualGenerationOnce('rtv-late-succ', clock, {
+      submitScene: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollScene: async () => {
+        await getDb()
+          .update(prayerGenerationVisualTasks)
+          .set({
+            status: 'FAILED',
+            lastErrorCode: 'other_worker_verdict',
+            lastErrorMessage: 'recorded by the worker that owns this row',
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+        return late
+      },
+    })
+
+    const row = (await visualTaskRows(jobId))[0]
+    // TEETH: a SUCCEEDED verdict is not privileged — it loses the CAS
+    // exactly like a FAILED one, and writes NOTHING into the row.
+    expect(row.status).toBe('FAILED')
+    expect(row.lastErrorCode).toBe('other_worker_verdict')
+    expect(row.artifactSha256).toBeNull()
+    expect(row.artifactStorageRef).toBeNull()
+    expect(await storage.exists(late.artifactStorageRef)).toBe(false)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('GENERATING_AUDIO')
+  }, 240_000)
+
+  it('a late poll FAILED cannot clobber a newer SUCCEEDED row', async () => {
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (
+        await runVisualGenerationOnce(
+          'rtv-late-fail-seed',
+          clock,
+          submitOnlyDeps,
+        )
+      ).status,
+    ).toBe('WAITING')
+    clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+    const winner = await storeRealArtifact(task)
+
+    const outcome = await runVisualGenerationOnce('rtv-late-fail', clock, {
+      submitScene: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollScene: async () => {
+        await getDb()
+          .update(prayerGenerationVisualTasks)
+          .set({
+            status: 'SUCCEEDED',
+            artifactSha256: winner.artifactSha256,
+            artifactMimeType: winner.artifactMimeType,
+            artifactDurationMs: winner.artifactDurationMs,
+            artifactStorageRef: winner.artifactStorageRef,
+            nextPollAt: null,
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+        return {
+          status: 'FAILED',
+          errorCode: 'stale_late_poll_failure',
+          errorMessage: 'a verdict from a cycle that no longer owns this row',
+        }
+      },
+    })
+
+    const row = (await visualTaskRows(jobId))[0]
+    // TEETH: the genuine result survives in EVERY field, and the stale
+    // failure is nowhere in the row.
+    expect(row.status).toBe('SUCCEEDED')
+    expect(row.artifactSha256).toBe(winner.artifactSha256)
+    expect(row.artifactStorageRef).toBe(winner.artifactStorageRef)
+    expect(row.lastErrorCode).toBeNull()
+    expect(row.lastErrorMessage).toBeNull()
+    expect(await storage.exists(winner.artifactStorageRef)).toBe(true)
+    // A discarded verdict is not a job failure.
+    expect(outcome.status).not.toBe('FAILED')
+    expect((await jobRow(jobId)).status).not.toBe('FAILED')
+  }, 240_000)
+})
+
+describe('red-team: a worker that has lost its lease starts no further provider action', () => {
+  it('losing the lease during the first task means ZERO further submits or polls', async () => {
+    const { jobId, manifest } = await makeTwoTaskGeneratingVisualsJob()
+    expect(manifest.visualTasks.length).toBeGreaterThanOrEqual(2)
+    const clock = makeFakeClock(Date.now())
+    let submitCalls = 0
+    let pollCalls = 0
+
+    const outcome = await runVisualGenerationOnce('rtv-fence', clock, {
+      submitScene: async (task) => {
+        submitCalls += 1
+        // The FIRST provider call stalls past the lease window and the
+        // job is recovered out from under this worker — exactly a
+        // crashed/hung worker whose lease expires mid-cycle.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${task.taskId}`,
+        }
+      },
+      pollScene: async () => {
+        pollCalls += 1
+        return { status: 'PROCESSING' }
+      },
+    })
+
+    expect(outcome.status).toBe('LEASE_LOST')
+    // TEETH 1: exactly ONE provider call — the loop stopped at the
+    // heartbeat instead of walking on to the second task.
+    expect(submitCalls).toBe(1)
+    expect(pollCalls).toBe(0)
+    const rows = await visualTaskRows(jobId)
+    // TEETH 2: the second task was never even reached — its row does not
+    // exist at all, because ensureVisualTaskRow runs at the top of the
+    // loop body this worker refused to enter again.
+    expect(rows.length).toBe(1)
+    // The FIRST task's provider truth IS still recorded: that operation
+    // really was submitted, and losing the lease does not un-submit it.
+    // The fence is about starting nothing FURTHER, not about discarding
+    // a provider fact the next worker needs in order to resume rather
+    // than re-submit.
+    expect(rows[0].status).toBe('SUBMITTED')
+    expect(rows[0].providerOperationId).not.toBeNull()
+  }, 240_000)
+
+  it('losing the lease during a POLL discards that poll and its artifact, and polls nothing else', async () => {
+    const { jobId, manifest } = await makeTwoTaskGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('rtv-pfence-seed', clock, submitOnlyDeps))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+    // The bytes the stalled poll "produced" — already in private storage
+    // by the time the executor hands the result back, exactly like a
+    // real SUCCEEDED poll.
+    const stranded = await storeRealArtifact(manifest.visualTasks[0])
+    let pollCalls = 0
+
+    const outcome = await runVisualGenerationOnce('rtv-pfence', clock, {
+      submitScene: async () => {
+        throw new Error('no submit expected in this cycle')
+      },
+      pollScene: async () => {
+        pollCalls += 1
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        return stranded
+      },
+    })
+
+    expect(outcome.status).toBe('LEASE_LOST')
+    // TEETH 1: the second task was never polled.
+    expect(pollCalls).toBe(1)
+    // TEETH 2: the result was NOT accepted onto a lease we no longer
+    // hold — the row is untouched and still resumable by whoever
+    // recovers the job.
+    const rows = await visualTaskRows(jobId)
+    for (const row of rows) {
+      expect(row.status).toBe('SUBMITTED')
+      expect(row.artifactSha256).toBeNull()
+      expect(row.artifactStorageRef).toBeNull()
+    }
+    // TEETH 3: and the bytes that result had already written are gone —
+    // no row references them and none ever will.
+    expect(await storage.exists(stranded.artifactStorageRef)).toBe(false)
   }, 240_000)
 })

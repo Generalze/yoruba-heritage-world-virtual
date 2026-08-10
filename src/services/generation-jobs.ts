@@ -1160,6 +1160,79 @@ function isIntegrityValidResult(
   )
 }
 
+/**
+ * The GENERATING_VISUALS → GENERATING_AUDIO gate, in full.
+ *
+ * Row metadata alone proves nothing: it says an artifact was produced,
+ * not that the artifact still EXISTS, still matches its recorded hash,
+ * or even belongs to this manifest. So finalization proves two things
+ * the per-task loop cannot:
+ *
+ *   1. IDENTITY — the persisted rows are EXACTLY the manifest's
+ *      visualTasks: same count, same task ids, same scene/idempotency
+ *      binding. A missing row, an extra row (a task from a superseded
+ *      manifest snapshot, a hand-inserted row) or a re-pointed one is a
+ *      failure, never something to work around.
+ *   2. ARTIFACT — every SUCCEEDED result is re-verified against PRIVATE
+ *      STORAGE by `verify` (bytes re-read, hash recomputed, mime
+ *      re-allowlisted, duration re-bounded against the manifest task).
+ *
+ * Fails CLOSED with a bounded machine code on the FIRST problem. A job
+ * whose artifact vanished or was tampered with never advances to
+ * GENERATING_AUDIO; it consumes retry budget like any other real
+ * failure, and never auto-heals.
+ */
+async function verifyFinalizedVisualTasks(
+  tasks: ReadonlyArray<ManifestVisualTask>,
+  rows: ReadonlyArray<typeof prayerGenerationVisualTasks.$inferSelect>,
+  verify: (
+    claim: {
+      artifactStorageRef: string | null
+      artifactSha256: string | null
+      artifactMimeType: string | null
+      artifactDurationMs: number | null
+    },
+    task: ManifestVisualTask,
+  ) => Promise<{ ok: true } | { ok: false; reasonCode: string }>,
+): Promise<{ ok: true } | { ok: false; reasonCode: string }> {
+  // Count first: with a per-task id lookup below, equal counts + every
+  // manifest task found ⇒ no extras, no duplicates, no strays.
+  if (rows.length !== tasks.length) {
+    return { ok: false, reasonCode: 'task_count_mismatch' }
+  }
+  const byTaskId = new Map(rows.map((row) => [row.taskId, row]))
+  if (byTaskId.size !== rows.length) {
+    return { ok: false, reasonCode: 'duplicate_task_row' }
+  }
+  for (const task of tasks) {
+    const row = byTaskId.get(task.taskId)
+    if (!row) return { ok: false, reasonCode: 'task_row_missing' }
+    if (row.sceneId !== task.sceneId) {
+      return { ok: false, reasonCode: 'task_scene_mismatch' }
+    }
+    if (row.idempotencyKey !== task.idempotencyKey) {
+      return { ok: false, reasonCode: 'task_idempotency_mismatch' }
+    }
+    if (row.status !== 'SUCCEEDED') {
+      return { ok: false, reasonCode: 'task_not_succeeded' }
+    }
+    if (!isIntegrityValidResult(row)) {
+      return { ok: false, reasonCode: 'artifact_metadata_invalid' }
+    }
+    const verified = await verify(
+      {
+        artifactStorageRef: row.artifactStorageRef,
+        artifactSha256: row.artifactSha256,
+        artifactMimeType: row.artifactMimeType,
+        artifactDurationMs: row.artifactDurationMs,
+      },
+      task,
+    )
+    if (!verified.ok) return { ok: false, reasonCode: verified.reasonCode }
+  }
+  return { ok: true }
+}
+
 function isDuplicateVisualTaskError(error: unknown): boolean {
   return isDuplicateKeyError(error)
 }
@@ -1248,10 +1321,17 @@ export type VisualGenerationOutcome =
  *     mid-cycle is caught there, unchanged, and also consumes budget).
  *   - every task SUCCEEDED (or there were none) → re-validate the
  *     manifest ONE MORE TIME against CURRENT authority (never trust the
- *     check from earlier in this same cycle), confirm every SUCCEEDED
- *     result is structurally integrity-valid, then finalize
- *     GENERATING_VISUALS → GENERATING_AUDIO under the SAME lease-CAS as
- *     every other transition — a stale worker can never finalize.
+ *     check from earlier in this same cycle), prove the persisted task
+ *     rows are EXACTLY the manifest's visualTasks and re-verify every
+ *     artifact against PRIVATE STORAGE (see verifyFinalizedVisualTasks),
+ *     then finalize GENERATING_VISUALS → GENERATING_AUDIO under the SAME
+ *     lease-CAS as every other transition — a stale worker can never
+ *     finalize.
+ *
+ * Every provider action is fenced by an explicit lease heartbeat on BOTH
+ * sides: a worker that has already lost its lease starts no further
+ * submit/poll, and a result that came back after the lease went away is
+ * never accepted (its stored artifact is removed rather than orphaned).
  */
 export async function runVisualGenerationOnce(
   workerId: string,
@@ -1301,7 +1381,12 @@ export async function runVisualGenerationOnce(
     // import, never a separate stale reference.
     const { loadAndValidateGenerationManifest, loadGenerationManifestSnapshot } =
       await import('./generation-storyboards')
-    const { submitScene, pollScene } = await import('./visual-generation')
+    const {
+      submitScene,
+      pollScene,
+      verifyStoredArtifact,
+      discardGeneratedArtifact,
+    } = await import('./visual-generation')
     const doSubmit = dependencies.submitScene ?? submitScene
     const doPoll = dependencies.pollScene ?? pollScene
 
@@ -1441,6 +1526,12 @@ export async function runVisualGenerationOnce(
         // iteration (see the SUBMITTED/PROCESSING branch below, which
         // captures its OWN value separately).
         const statusAtRead = row.status
+        // A worker that has ALREADY lost its lease must not start
+        // another provider action: the job has moved on without it, and
+        // every further submit/poll is work nobody asked for (and, with
+        // a real provider, spend nobody authorized). Checked immediately
+        // before the call, and again below once it returns.
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
         const submission = await doSubmit(task)
         const freshNow = clock.now()
         if (submission.status === 'SUBMITTED') {
@@ -1494,6 +1585,15 @@ export async function runVisualGenerationOnce(
             anyOutstanding = true
           }
         }
+        // The provider round-trip above is unbounded, so the lease may
+        // have expired and been recovered WHILE it was in flight. The
+        // status-CAS'd write itself is deliberately NOT gated on the
+        // lease — it records PROVIDER TRUTH (this operation exists, here
+        // is its id), which stays true no matter who owns the job, and
+        // dropping it would strand a real provider operation nobody can
+        // reach again. What a lost lease DOES forbid is going further:
+        // no next task, no other provider action, no job-level decision.
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
         continue
       }
 
@@ -1535,11 +1635,30 @@ export async function runVisualGenerationOnce(
           }
           continue
         }
+        // Same rule as the submit branch: no provider action on a lease
+        // this worker may already have lost.
+        if (!(await heartbeat())) return { status: 'LEASE_LOST', jobId: job.id }
         const poll = await doPoll({
           providerCode: row.providerCode,
           providerOperationId: row.providerOperationId,
           task,
         })
+        // Unlike a submission (whose id is unrecoverable once dropped —
+        // see the submit branch), a poll result is fully REPEATABLE: the
+        // row stays SUBMITTED/PROCESSING and whoever holds the job next
+        // polls the SAME operation id for the same answer. So a result
+        // that came back after our lease went away is simply not ours to
+        // accept. And because a SUCCEEDED poll has ALREADY written
+        // artifact bytes to private storage by the time it returns, the
+        // object we just created would be referenced by nothing at all —
+        // it is removed rather than left behind by a worker that no
+        // longer owns this job.
+        if (!(await heartbeat())) {
+          if (poll.status === 'SUCCEEDED') {
+            await discardGeneratedArtifact(poll.artifactStorageRef)
+          }
+          return { status: 'LEASE_LOST', jobId: job.id }
+        }
         const freshNow = clock.now()
         if (poll.status === 'PROCESSING') {
           // Non-terminal either way — same reasoning as the SUBMITTED
@@ -1580,7 +1699,12 @@ export async function runVisualGenerationOnce(
             )
           if (updated[0].affectedRows !== 1) {
             // Someone else already resolved this row — never overwrite
-            // a result we don't own; wait and re-read next cycle.
+            // a result we don't own; wait and re-read next cycle. The
+            // artifact we stored moments ago lost with it: no row
+            // references that key, and none ever can (every put mints a
+            // fresh server-generated key), so remove it instead of
+            // leaving a stale worker's orphan on disk.
+            await discardGeneratedArtifact(poll.artifactStorageRef)
             anyOutstanding = true
           }
         } else {
@@ -1670,8 +1794,9 @@ export async function runVisualGenerationOnce(
 
     // Every task SUCCEEDED (or there were none). Re-validate against
     // CURRENT authority ONE MORE TIME — never trust the check from
-    // earlier in this same cycle — and confirm every SUCCEEDED result
-    // is structurally integrity-valid before finalizing.
+    // earlier in this same cycle — then prove the persisted results are
+    // EXACTLY this manifest's tasks and that every artifact still exists
+    // intact in PRIVATE STORAGE, before finalizing.
     const revalidated = await loadAndValidateGenerationManifest(job.id)
     if (revalidated.status !== 'VALID') {
       const outcome = await scheduleRetryOrFail(
@@ -1707,16 +1832,24 @@ export async function runVisualGenerationOnce(
           eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
         ),
       )
-    const allIntegrityValid = finalRows.every(
-      (row) => row.status === 'SUCCEEDED' && isIntegrityValidResult(row),
+    // Against the RE-validated manifest, not the one read at the top of
+    // this cycle — the same "never trust the earlier check" discipline
+    // the revalidation above exists for.
+    const integrity = await verifyFinalizedVisualTasks(
+      revalidated.manifest.visualTasks,
+      finalRows,
+      verifyStoredArtifact,
     )
-    if (!allIntegrityValid) {
+    if (!integrity.ok) {
       const outcome = await scheduleRetryOrFail(
         job,
         leaseToken,
         clock,
         'VISUAL_RESULT_INTEGRITY_FAILURE',
-        null,
+        // A bounded machine code (never a path, hash or provider
+        // string) — enough to tell a vanished artifact from a tampered
+        // one without echoing anything about content.
+        integrity.reasonCode,
         'GENERATING_VISUALS',
       )
       if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }

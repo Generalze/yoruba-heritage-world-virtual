@@ -8,8 +8,15 @@ import {
   spiritualContentItems,
   spiritualContentVersions,
 } from '@/db/schema'
-import { computeFileSha256, getMediaStorage } from '@/providers/media/storage'
-import { getVisualGenerationProvider } from '@/providers/visual-generation/registry'
+import {
+  computeFileSha256,
+  getMediaStorage,
+  isValidStorageKey,
+} from '@/providers/media/storage'
+import {
+  getVisualGenerationProvider,
+  resolveVisualGenerationProvider,
+} from '@/providers/visual-generation/registry'
 import { VisualGenerationProviderError } from '@/providers/visual-generation/types'
 import { MAX_SCENE_MS } from './generation-storyboards'
 import { isSacredVersionRuntimeEligible } from './sacred-content'
@@ -41,6 +48,8 @@ import type {
  * → provider-neutral submit/poll (mock only — no real provider exists yet)
  * → verified artifact (mime/type, bounded duration, non-empty, fresh SHA-256)
  * → private storage (LocalMediaStorageProvider — no S3)
+ * → re-verified against that storage before the job is ever allowed to
+ *   leave GENERATING_VISUALS (`verifyStoredArtifact`)
  * ```
  *
  * This module owns EXECUTION only — `submitScene`/`pollScene` are pure
@@ -354,6 +363,23 @@ const ARTIFACT_MIME_EXTENSIONS: Record<string, string> = {
   'video/mp4': 'mp4',
 }
 
+/** The SAME allowlist, re-checkable later against a PERSISTED mime type
+ * — an artifact whose type was allowlisted at storage time must still be
+ * allowlisted when its result is finally accepted. */
+export function isAllowedArtifactMimeType(mimeType: string): boolean {
+  return Object.hasOwn(ARTIFACT_MIME_EXTENSIONS, mimeType)
+}
+
+const ARTIFACT_HEX64 = /^[0-9a-f]{64}$/
+
+/**
+ * A provider may legitimately return a slightly different ENCODED length
+ * than the exact scene duration asked for; it may never return something
+ * materially different, which would mean the artifact belongs to another
+ * scene (or another task entirely).
+ */
+export const ARTIFACT_DURATION_TOLERANCE_MS = 1_000
+
 async function verifyAndStoreArtifact(
   artifact: VisualGenerationArtifact,
 ): Promise<
@@ -398,6 +424,98 @@ async function verifyAndStoreArtifact(
     fileSha256,
     mimeType: artifact.mimeType,
     durationMs: artifact.durationMs,
+  }
+}
+
+/** The persisted claim ONE task row makes about its artifact. Every
+ * field is nullable exactly as the column is — an absent value is a
+ * failure to prove, never an excuse to skip a check. */
+export interface StoredArtifactClaim {
+  artifactStorageRef: string | null
+  artifactSha256: string | null
+  artifactMimeType: string | null
+  artifactDurationMs: number | null
+}
+
+export type StoredArtifactVerification =
+  | { ok: true }
+  | { ok: false; reasonCode: string }
+
+/**
+ * Re-proves a PERSISTED artifact claim against PRIVATE STORAGE — the
+ * bytes themselves, not the row's own metadata.
+ *
+ * Row metadata is only ever a claim: it was written by some earlier
+ * cycle, possibly by another worker, possibly a long time ago, and the
+ * stored object can have gone missing or been altered in that window.
+ * So this re-reads the object, recomputes its SHA-256 from the exact
+ * stored bytes and re-applies the SAME allowlist/bound rules storage
+ * time applied. A tampered, truncated, missing or unreferenceable
+ * artifact fails CLOSED here.
+ *
+ * `task` is the manifest task this artifact is supposed to satisfy — the
+ * duration is checked against THAT scene, so an artifact that is
+ * internally valid but belongs to a different scene is still rejected.
+ */
+export async function verifyStoredArtifact(
+  claim: StoredArtifactClaim,
+  task: ManifestVisualTask,
+): Promise<StoredArtifactVerification> {
+  const storageRef = claim.artifactStorageRef
+  if (storageRef == null || !isValidStorageKey(storageRef)) {
+    return { ok: false, reasonCode: 'artifact_storage_ref_invalid' }
+  }
+  if (claim.artifactSha256 == null || !ARTIFACT_HEX64.test(claim.artifactSha256)) {
+    return { ok: false, reasonCode: 'artifact_hash_invalid' }
+  }
+  if (
+    claim.artifactMimeType == null ||
+    !isAllowedArtifactMimeType(claim.artifactMimeType)
+  ) {
+    return { ok: false, reasonCode: 'artifact_mime_invalid' }
+  }
+  const durationMs = claim.artifactDurationMs
+  if (durationMs == null || durationMs <= 0 || durationMs > MAX_SCENE_MS) {
+    return { ok: false, reasonCode: 'artifact_duration_bound' }
+  }
+  if (Math.abs(durationMs - task.durationMs) > ARTIFACT_DURATION_TOLERANCE_MS) {
+    return { ok: false, reasonCode: 'artifact_duration_mismatch' }
+  }
+  const storage = getMediaStorage()
+  if (!(await storage.exists(storageRef))) {
+    return { ok: false, reasonCode: 'artifact_missing_from_storage' }
+  }
+  const bytes = await storage.get(storageRef)
+  if (!bytes || bytes.length === 0) {
+    return { ok: false, reasonCode: 'artifact_missing_from_storage' }
+  }
+  if (computeFileSha256(bytes) !== claim.artifactSha256) {
+    return { ok: false, reasonCode: 'artifact_hash_mismatch' }
+  }
+  return { ok: true }
+}
+
+/**
+ * Best-effort removal of an artifact THIS worker just stored and whose
+ * result was then rejected — its persistence lost a status CAS to
+ * another worker, or its lease was gone by the time the bytes came back.
+ * Nothing references those bytes and nothing ever will, so leaving them
+ * on disk is pure accumulation from a stale worker.
+ *
+ * ONLY ever called with a key `verifyAndStoreArtifact` returned moments
+ * earlier in the SAME poll (every `put` mints a fresh server-generated
+ * key, so it can never name another worker's artifact). Never a
+ * destructive-delete path for a referenced artifact, and never fatal —
+ * an unremovable orphan must not turn a lost race into a job failure.
+ */
+export async function discardGeneratedArtifact(
+  storageRef: string,
+): Promise<void> {
+  if (!isValidStorageKey(storageRef)) return
+  try {
+    await getMediaStorage().remove(storageRef)
+  } catch {
+    // best-effort by contract — see MediaStorageProvider.remove
   }
 }
 
@@ -466,17 +584,32 @@ export async function submitScene(
  * sacred-content rights change) can shift in that window. Holds no DB
  * transaction and persists nothing itself — the caller (Bravo's loop)
  * writes the result in a separate, subsequent write.
+ *
+ * `providerOperationId` is opaque and only meaningful to the provider
+ * that ISSUED it, so the provider is resolved by the `providerCode`
+ * persisted at submission — never "whichever provider is active now".
+ * A mismatch fails CLOSED without any provider call at all: asking a
+ * different backend about an operation id it never issued could only
+ * ever return someone else's result or a meaningless failure, and
+ * accepting either would be worse than retrying.
  */
 export async function pollScene(input: {
   providerCode: string
   providerOperationId: string
   task: ManifestVisualTask
 }): Promise<VisualTaskPollResult> {
+  const provider = resolveVisualGenerationProvider(input.providerCode)
+  if (!provider) {
+    return {
+      status: 'FAILED',
+      errorCode: 'provider_code_mismatch',
+      errorMessage: null,
+    }
+  }
   const compiled = await compileVisualGenerationRequest(input.task)
   if (compiled.status !== 'OK') {
     return { status: 'FAILED', errorCode: reasonToErrorCode(compiled), errorMessage: null }
   }
-  const provider = getVisualGenerationProvider()
   try {
     const poll = await provider.pollScene(input.providerOperationId)
     if (poll.status === 'PENDING') return { status: 'PROCESSING' }
