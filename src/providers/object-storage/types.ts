@@ -81,6 +81,14 @@ export class ObjectStorageError extends Error {
   }
 }
 
+/**
+ * The code EVERY adapter must throw when a canonical object already
+ * exists. It is not an error condition so much as a race outcome: the
+ * service branches on it to verify and adopt (or refuse) whatever is
+ * already there.
+ */
+export const OBJECT_ALREADY_EXISTS_CODE = 'object_already_exists'
+
 /** Hard ceiling for a signed read URL. A "private" object reachable by
  * a link that lasts a week is not private. */
 export const MAX_SIGNED_URL_TTL_SECONDS = 15 * 60
@@ -95,7 +103,20 @@ export interface ObjectStorageProvider {
    */
   readonly isLocal: boolean
   isEnabled: () => boolean
-  /** Writes bytes at a SERVER-GENERATED key with NO public ACL. */
+  /**
+   * CREATE-IF-ABSENT. Writes bytes at a SERVER-GENERATED key with NO
+   * public ACL, and MUST NEVER overwrite an object already at that
+   * key — it throws ObjectStorageError(OBJECT_ALREADY_EXISTS_CODE)
+   * instead.
+   *
+   * Head-then-put is NOT sufficient: another worker can create the
+   * object in the gap, and a blind write would then destroy a valid
+   * canonical upload. The exclusion must be atomic in the storage
+   * layer itself — an exclusive file create locally, and a
+   * conditional create (If-None-Match: * or the provider equivalent)
+   * for any S3-compatible adapter. A plain PutObject at a canonical
+   * key is forbidden.
+   */
   putPrivateObject: (
     input: PutPrivateObjectInput,
   ) => Promise<PrivateObjectDescriptor>

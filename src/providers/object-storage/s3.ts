@@ -27,6 +27,12 @@ import type { ObjectStorageProvider } from './types'
  *   verification (e.g. an SHA-256 checksum recorded at upload and
  *   re-read on head/get) and MUST fail closed when equivalent integrity
  *   cannot be proved. An ETag is never accepted as a SHA-256;
+ * - `putPrivateObject` MUST be a CONDITIONAL CREATE — `If-None-Match: *`
+ *   (or the provider equivalent) — and must throw
+ *   ObjectStorageError(OBJECT_ALREADY_EXISTS_CODE) when the object
+ *   already exists. A blind PutObject at a canonical key is forbidden:
+ *   it would silently overwrite another worker's valid upload in the
+ *   gap between a head and a write;
  * - `createSignedReadUrl` issues a short-lived PRIVATE GET only,
  *   bounded by MAX_SIGNED_URL_TTL_SECONDS.
  */

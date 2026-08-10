@@ -2,7 +2,11 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
-import { MAX_SIGNED_URL_TTL_SECONDS, ObjectStorageError } from './types'
+import {
+  MAX_SIGNED_URL_TTL_SECONDS,
+  OBJECT_ALREADY_EXISTS_CODE,
+  ObjectStorageError,
+} from './types'
 import type {
   ObjectIntegrityVerification,
   ObjectStorageProvider,
@@ -23,6 +27,9 @@ import type {
  * root that is distinct from the Step 10 media root — a finished render
  * is a different kind of thing from working media, and mixing them
  * would let one adapter's rules leak onto the other's objects.
+ *
+ * Writes are ATOMIC CREATE-IF-ABSENT (the O_EXCL file flag): an object
+ * at a canonical key is never overwritten, whoever wins the race.
  *
  * There is no ACL concept here at all, which is the point: there is
  * nothing to accidentally set to public-read.
@@ -97,7 +104,22 @@ export class LocalPrivateObjectStorage implements ObjectStorageProvider {
     }
     const path = this.pathFor(input.objectKey)
     await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, input.bytes)
+    // ATOMIC CREATE-IF-ABSENT: the 'wx' flag makes the kernel refuse if
+    // the file already exists, so two workers racing the same canonical
+    // key cannot both write and the loser cannot clobber the winner.
+    // A head-then-write would leave exactly that gap.
+    try {
+      await writeFile(path, input.bytes, { flag: 'wx' })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new ObjectStorageError(
+          OBJECT_ALREADY_EXISTS_CODE,
+          'An object already exists at this canonical key.',
+          false,
+        )
+      }
+      throw error
+    }
     // An ETag that is deliberately NOT the content hash, so any code
     // that mistakes one for the other fails loudly in development
     // rather than silently in production.

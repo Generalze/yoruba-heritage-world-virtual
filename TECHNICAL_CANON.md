@@ -956,6 +956,24 @@ UPLOADING
   etag/version and bounded codes — never file bytes, a signed URL, a
   credential, sacred body text, spoken text, personal detail or a raw
   provider response.
+- A canonical object is CREATED, never overwritten. `putPrivateObject`
+  is create-if-absent at the storage layer itself — an exclusive file
+  create locally, a conditional create (If-None-Match: * or the
+  provider equivalent) for any S3-compatible adapter — because a
+  head-then-put leaves a gap another worker can appear in. An object
+  that appears in that gap is verified and adopted when byte-identical,
+  and fails closed when not; it is never overwritten and never deleted.
+- An in-flight upload row is bound to the storage backend it was
+  created for. A provider change fails closed before any storage call,
+  and the persisted provider identity is re-proved against the resolved
+  holding provider at the final gate.
+- At the final gate every render-derived field on the upload row is
+  bound to the FRESHLY revalidated Step 16 result — plan snapshot, plan
+  hash, artifact hash, mime, duration, and a byte size recomputed from
+  the local bytes themselves. Remote integrity is proved against those
+  authoritative values, never against the upload row's own claims: the
+  row is the thing being checked, so it can never also be the thing
+  doing the checking.
 - CRASH SAFETY BY CANONICAL KEY. "The object is already there" is the
   normal recovery case, not an error: a worker that uploaded and died
   before its database write finds its own object, verifies it byte for

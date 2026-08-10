@@ -10,7 +10,10 @@ import {
   getObjectStorage,
   resolveObjectStorage,
 } from '@/providers/object-storage/registry'
-import { ObjectStorageError } from '@/providers/object-storage/types'
+import {
+  OBJECT_ALREADY_EXISTS_CODE,
+  ObjectStorageError,
+} from '@/providers/object-storage/types'
 import {
   DEFAULT_LEASE_MS,
   GenerationJobError,
@@ -323,6 +326,17 @@ export async function runUploadOnce(
     if (identityFailure != null) {
       return fail('UPLOAD_IDENTITY_MISMATCH', identityFailure)
     }
+    // PROVIDER BINDING. An in-flight upload row belongs to the backend
+    // it was created for. Silently continuing it against a different
+    // one would leave the row pointing at an object that lives
+    // somewhere else entirely — so a provider change fails closed here,
+    // before any storage call.
+    if (
+      row.providerCode !== provider.code ||
+      row.providerIsLocal !== (provider.isLocal ? 1 : 0)
+    ) {
+      return fail('UPLOAD_PROVIDER_MISMATCH', 'upload_provider_changed')
+    }
     if (row.artifactMimeType !== plan.outputMimeType) {
       return fail('UPLOAD_IDENTITY_MISMATCH', 'upload_plan_mime_mismatch')
     }
@@ -377,20 +391,47 @@ export async function runUploadOnce(
           // "uploaded, then crashed before the database write".
           descriptor = existing.descriptor
         } else {
-          const put = dependencies.putPrivateObject
-            ? await dependencies.putPrivateObject({
-                objectKey: canonical.objectKey,
-                bytes: localBytes,
-                mimeType: row.artifactMimeType,
-                sha256: row.artifactSha256,
-              })
-            : await provider.putPrivateObject({
-                objectKey: canonical.objectKey,
-                bytes: localBytes,
-                mimeType: row.artifactMimeType,
-                sha256: row.artifactSha256,
-              })
-          descriptor = put
+          // Bound to the provider: a class-based adapter needs its own
+          // `this`, and an unbound method reference would lose it.
+          const put =
+            dependencies.putPrivateObject ??
+            provider.putPrivateObject.bind(provider)
+          try {
+            descriptor = await put({
+              objectKey: canonical.objectKey,
+              bytes: localBytes,
+              mimeType: row.artifactMimeType,
+              sha256: row.artifactSha256,
+            })
+          } catch (error) {
+            // The object appeared BETWEEN our head and our create. The
+            // create is atomic, so we lost the race rather than
+            // overwriting the winner — which is the whole point. Verify
+            // what is actually there and adopt it only if it is
+            // byte-identical.
+            if (
+              !(error instanceof ObjectStorageError) ||
+              error.code !== OBJECT_ALREADY_EXISTS_CODE
+            ) {
+              throw error
+            }
+            const raced = await provider.verifyPrivateObjectIntegrity({
+              objectKey: canonical.objectKey,
+              expectedSha256: row.artifactSha256,
+              expectedByteSize: row.byteSize,
+              expectedMimeType: row.artifactMimeType,
+            })
+            if (!raced.ok) {
+              // Someone else's object is at OUR canonical key. It is
+              // neither overwritten nor deleted: destroying it is not
+              // this stage's decision to make.
+              return fail(
+                'UPLOAD_OBJECT_CONFLICT',
+                `canonical_object_differs:${raced.reasonCode}`.slice(0, 500),
+              )
+            }
+            descriptor = raced.descriptor
+          }
         }
       } catch (error) {
         const code =
@@ -483,6 +524,23 @@ export async function runUploadOnce(
       return fail(revalidatedRender.errorCode, revalidatedRender.detail)
     }
 
+    // AUTHORITY COMES FROM THE FRESH RENDER, NOT FROM THE ROW. Every
+    // render-derived field is taken from what verifyCompletedRender
+    // just re-proved, and the byte size is recomputed from the local
+    // bytes themselves — the upload row is the thing being checked, so
+    // it can never also be the thing doing the checking.
+    const authoritative = revalidatedRender.verified.result
+    const authoritativeBytes = await getMediaStorage().get(
+      authoritative.artifactStorageRef!,
+    )
+    if (!authoritativeBytes || authoritativeBytes.length === 0) {
+      return fail('RENDER_ARTIFACT_INVALID', 'local_artifact_missing')
+    }
+    const authoritativeSha256 = authoritative.artifactSha256!
+    const authoritativeMimeType = authoritative.artifactMimeType!
+    const authoritativeDurationMs = authoritative.artifactDurationMs!
+    const authoritativeByteSize = authoritativeBytes.length
+
     const finalRow = (
       await getDb()
         .select()
@@ -491,16 +549,31 @@ export async function runUploadOnce(
         .limit(1)
     ).at(0)
     if (!finalRow) return fail('UPLOAD_ROW_MISSING', null)
-    if (
-      finalRow.generationJobId !== job.id ||
-      finalRow.renderResultId !== revalidatedRender.verified.result.id ||
-      finalRow.renderPlanSha256 !==
-        revalidatedRender.verified.result.renderPlanSha256 ||
-      finalRow.idempotencyKey !== idempotencyKey ||
-      finalRow.objectKey !== canonical.objectKey ||
-      finalRow.artifactSha256 !== revalidatedRender.verified.result.artifactSha256
-    ) {
-      return fail('UPLOAD_IDENTITY_MISMATCH', 'upload_identity_moved')
+    const finalMismatch =
+      finalRow.generationJobId !== job.id
+        ? 'upload_job_mismatch'
+        : finalRow.renderResultId !== authoritative.id
+          ? 'upload_result_mismatch'
+          : finalRow.renderPlanSnapshotId !==
+              revalidatedRender.verified.planSnapshotId
+            ? 'upload_plan_snapshot_mismatch'
+            : finalRow.renderPlanSha256 !== authoritative.renderPlanSha256
+              ? 'upload_plan_hash_mismatch'
+              : finalRow.idempotencyKey !== idempotencyKey
+                ? 'upload_idempotency_mismatch'
+                : finalRow.objectKey !== canonical.objectKey
+                  ? 'upload_object_key_mismatch'
+                  : finalRow.artifactSha256 !== authoritativeSha256
+                    ? 'upload_artifact_hash_mismatch'
+                    : finalRow.artifactMimeType !== authoritativeMimeType
+                      ? 'upload_artifact_mime_mismatch'
+                      : finalRow.artifactDurationMs !== authoritativeDurationMs
+                        ? 'upload_artifact_duration_mismatch'
+                        : finalRow.byteSize !== authoritativeByteSize
+                          ? 'upload_byte_size_mismatch'
+                          : null
+    if (finalMismatch != null) {
+      return fail('UPLOAD_IDENTITY_MISMATCH', finalMismatch)
     }
     if (finalRow.status !== 'SUCCEEDED') {
       return fail('UPLOAD_NOT_SUCCEEDED', finalRow.status)
@@ -516,11 +589,18 @@ export async function runUploadOnce(
     if (!stillAllowed.ok) {
       return fail('OBJECT_STORAGE_NOT_PERMITTED', stillAllowed.reasonCode)
     }
+    // The row's own claim about which backend holds this object must
+    // still describe the provider that actually answers to that code.
+    if (finalRow.providerIsLocal !== (holdingProvider.isLocal ? 1 : 0)) {
+      return fail('UPLOAD_PROVIDER_MISMATCH', 'upload_provider_changed')
+    }
+    // Remote integrity is proved against the AUTHORITATIVE Step 16
+    // values, never against the upload row's own claims.
     const stillIntact = await holdingProvider.verifyPrivateObjectIntegrity({
       objectKey: finalRow.objectKey,
-      expectedSha256: finalRow.artifactSha256,
-      expectedByteSize: finalRow.byteSize,
-      expectedMimeType: finalRow.artifactMimeType,
+      expectedSha256: authoritativeSha256,
+      expectedByteSize: authoritativeByteSize,
+      expectedMimeType: authoritativeMimeType,
     })
     if (!stillIntact.ok) {
       return fail('UPLOAD_REMOTE_INTEGRITY_FAILURE', stillIntact.reasonCode)

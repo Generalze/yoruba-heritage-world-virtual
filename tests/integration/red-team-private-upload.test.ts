@@ -113,6 +113,7 @@ import {
 } from '@/providers/object-storage/registry'
 import {
   MAX_SIGNED_URL_TTL_SECONDS,
+  OBJECT_ALREADY_EXISTS_CODE,
   ObjectStorageError,
 } from '@/providers/object-storage/types'
 import { resolveS3CompatibleConfig } from '@/providers/object-storage/s3'
@@ -1475,4 +1476,269 @@ describe('red-team: Step 17 makes no network call and exposes nothing publicly',
       expect(name).not.toMatch(/^(@aws-sdk|aws-sdk|minio)/)
     }
   })
+})
+
+// ----------------------------------------------------------------------------
+// Step 17 hardening item 1: the canonical object is created, never overwritten
+// ----------------------------------------------------------------------------
+
+/** Reports "nothing there" however many objects actually exist, so a
+ * test can drive the service into the exact HEAD→PUT gap a second
+ * worker would race through. */
+function blindHeadStorage(counter: { puts: number }): ObjectStorageProvider {
+  return {
+    code: objectStorage.code,
+    isLocal: objectStorage.isLocal,
+    isEnabled: () => objectStorage.isEnabled(),
+    putPrivateObject: async (input) => {
+      counter.puts += 1
+      return objectStorage.putPrivateObject(input)
+    },
+    // The lie that opens the race.
+    headPrivateObject: async () => null,
+    getPrivateObject: (key) => objectStorage.getPrivateObject(key),
+    removePrivateObject: (key) => objectStorage.removePrivateObject(key),
+    verifyPrivateObjectIntegrity: (input) =>
+      objectStorage.verifyPrivateObjectIntegrity(input),
+    createSignedReadUrl: (input) => objectStorage.createSignedReadUrl(input),
+  }
+}
+
+describe('red-team: a canonical object is created exclusively, never overwritten', () => {
+  it('a second direct PUT with different bytes cannot replace the first', async () => {
+    const key = `renders/aa/${'a'.repeat(64)}.mp4`
+    const first = new TextEncoder().encode('the-original-canonical-bytes')
+    await objectStorage.putPrivateObject({
+      objectKey: key,
+      bytes: first,
+      mimeType: 'video/mp4',
+      sha256: computeFileSha256(first),
+    })
+    const second = new TextEncoder().encode('an-impostor-trying-to-overwrite')
+    // TEETH: the storage layer itself refuses — this is an atomic
+    // exclusive create, not a head-then-write with a gap in it.
+    await expect(
+      objectStorage.putPrivateObject({
+        objectKey: key,
+        bytes: second,
+        mimeType: 'video/mp4',
+        sha256: computeFileSha256(second),
+      }),
+    ).rejects.toThrow(ObjectStorageError)
+    const stored = await objectStorage.getPrivateObject(key)
+    expect(stored).not.toBeNull()
+    expect(computeFileSha256(stored!)).toBe(computeFileSha256(first))
+    await objectStorage.removePrivateObject(key)
+  })
+
+  it('the refusal carries the well-known already-exists code', async () => {
+    const key = `renders/bb/${'b'.repeat(64)}.mp4`
+    const bytes = new TextEncoder().encode('canonical')
+    await objectStorage.putPrivateObject({
+      objectKey: key,
+      bytes,
+      mimeType: 'video/mp4',
+      sha256: computeFileSha256(bytes),
+    })
+    let caught: unknown
+    try {
+      await objectStorage.putPrivateObject({
+        objectKey: key,
+        bytes,
+        mimeType: 'video/mp4',
+        sha256: computeFileSha256(bytes),
+      })
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(ObjectStorageError)
+    expect((caught as ObjectStorageError).code).toBe(OBJECT_ALREADY_EXISTS_CODE)
+    await objectStorage.removePrivateObject(key)
+  })
+
+  it('an IDENTICAL object appearing between HEAD and PUT is adopted, not overwritten', async () => {
+    const { jobId, clock } = await makeUploadableJob()
+    const expected = await canonicalKeyFor(jobId)
+    // The racing worker's object is already there …
+    const racing = await localArtifactBytes(jobId)
+    await objectStorage.putPrivateObject({
+      objectKey: expected.objectKey,
+      bytes: racing,
+      mimeType: 'video/mp4',
+      sha256: expected.sha256,
+    })
+    const before = await objectStorage.headPrivateObject(expected.objectKey)
+    // … but our HEAD says otherwise, so we attempt the create and lose.
+    const counter = { puts: 0 }
+    setObjectStorageForTests(blindHeadStorage(counter))
+    let outcome
+    try {
+      outcome = await runUploadOnce('rtu-race-identical', clock)
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    // TEETH: we tried, the atomic create refused, and the byte-identical
+    // winner was verified and adopted rather than replaced.
+    expect(counter.puts).toBe(1)
+    expect(outcome.status).toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).toBe('READY')
+    const after = await objectStorage.headPrivateObject(expected.objectKey)
+    expect(after?.providerEtag).toBe(before?.providerEtag)
+    const stored = await objectStorage.getPrivateObject(expected.objectKey)
+    expect(computeFileSha256(stored!)).toBe(expected.sha256)
+  }, 240_000)
+
+  it('a DIFFERENT object appearing between HEAD and PUT is preserved and fails closed', async () => {
+    const { jobId, clock } = await makeUploadableJob()
+    const expected = await canonicalKeyFor(jobId)
+    const foreign = new TextEncoder().encode('another-workers-different-object')
+    await objectStorage.putPrivateObject({
+      objectKey: expected.objectKey,
+      bytes: foreign,
+      mimeType: 'video/mp4',
+      sha256: computeFileSha256(foreign),
+    })
+    const counter = { puts: 0 }
+    setObjectStorageForTests(blindHeadStorage(counter))
+    let outcome
+    try {
+      outcome = await runUploadOnce('rtu-race-different', clock)
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    expect(counter.puts).toBe(1)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('READY')
+    expect((await jobRow(jobId)).lastErrorCode).toBe('UPLOAD_OBJECT_CONFLICT')
+    // TEETH: the object that was already there is byte-for-byte intact —
+    // not overwritten by our create, and not deleted afterwards either.
+    const stored = await objectStorage.getPrivateObject(expected.objectKey)
+    expect(stored).not.toBeNull()
+    expect(computeFileSha256(stored!)).toBe(computeFileSha256(foreign))
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 17 hardening item 2: an upload row is bound to its storage backend
+// ----------------------------------------------------------------------------
+
+describe('red-team: an in-flight upload never moves between storage backends', () => {
+  it('a provider change between attempts fails closed with ZERO storage calls', async () => {
+    const { jobId, clock } = await makeUploadableJob()
+    // Seed the row against the LOCAL provider via a failing attempt.
+    await runUploadOnce('rtu-provider-seed', clock, {
+      putPrivateObject: async () => {
+        throw new ObjectStorageError('transient', 'synthetic', true)
+      },
+    })
+    const seeded = (await uploadRows(jobId))[0]
+    expect(seeded.providerCode).toBe('LOCAL_PRIVATE')
+
+    // A DIFFERENT backend is now active.
+    const counter = { puts: 0 }
+    let headCalls = 0
+    setObjectStorageForTests({
+      ...blindHeadStorage(counter),
+      code: 'OTHER_PRIVATE_STORE',
+      isLocal: false,
+      headPrivateObject: async () => {
+        headCalls += 1
+        return null
+      },
+    })
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'UPLOADING',
+        attemptCount: 0,
+        leaseToken: null,
+        leaseExpiresAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let outcome
+    try {
+      outcome = await runUploadOnce('rtu-provider-change', clock)
+    } finally {
+      setObjectStorageForTests(objectStorage)
+    }
+    // TEETH: refused before touching storage — an in-flight row is never
+    // silently re-pointed at a different backend.
+    expect(counter.puts).toBe(0)
+    expect(headCalls).toBe(0)
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('READY')
+    expect((await jobRow(jobId)).lastErrorCode).toBe('UPLOAD_PROVIDER_MISMATCH')
+    expect((await jobRow(jobId)).lastErrorMessage).toBe(
+      'upload_provider_changed',
+    )
+    // The row still names the backend it was created for.
+    expect((await uploadRows(jobId))[0].providerCode).toBe('LOCAL_PRIVATE')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 17 hardening item 3: the final gate binds to the REVALIDATED render
+// ----------------------------------------------------------------------------
+
+describe('red-team: the final gate trusts the render, not the upload row', () => {
+  /** Tampers the upload row DURING the upload — after the pre-spend
+   * identity check has already passed — so only the final gate's
+   * binding to the freshly revalidated render can catch it. */
+  async function expectGateBlocks(
+    label: string,
+    patch: Partial<typeof prayerGenerationUploads.$inferInsert>,
+  ) {
+    const { jobId, clock } = await makeUploadableJob()
+    const outcome = await runUploadOnce(label, clock, {
+      putPrivateObject: async (input) => {
+        const stored = await objectStorage.putPrivateObject(input)
+        await getDb()
+          .update(prayerGenerationUploads)
+          .set(patch)
+          .where(eq(prayerGenerationUploads.generationJobId, jobId))
+        return stored
+      },
+    })
+    expect(outcome.status).not.toBe('COMPLETE')
+    expect((await jobRow(jobId)).status).not.toBe('READY')
+    return await jobRow(jobId)
+  }
+
+  it('a duration altered mid-flight blocks READY', async () => {
+    const job = await expectGateBlocks('rtu-gate-duration', {
+      artifactDurationMs: 999_000,
+    })
+    expect(job.lastErrorCode).toBe('UPLOAD_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('upload_artifact_duration_mismatch')
+  }, 240_000)
+
+  it('a MIME altered mid-flight blocks READY', async () => {
+    const job = await expectGateBlocks('rtu-gate-mime', {
+      artifactMimeType: 'video/webm',
+    })
+    expect(job.lastErrorCode).toBe('UPLOAD_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('upload_artifact_mime_mismatch')
+  }, 240_000)
+
+  it('a byte size altered mid-flight blocks READY', async () => {
+    const job = await expectGateBlocks('rtu-gate-size', { byteSize: 12 })
+    expect(job.lastErrorCode).toBe('UPLOAD_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('upload_byte_size_mismatch')
+  }, 240_000)
+
+  it('a render-plan snapshot id altered mid-flight blocks READY', async () => {
+    const job = await expectGateBlocks('rtu-gate-plan', {
+      renderPlanSnapshotId: 999_999,
+    })
+    expect(job.lastErrorCode).toBe('UPLOAD_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('upload_plan_snapshot_mismatch')
+  }, 240_000)
+
+  it('an artifact hash altered mid-flight blocks READY', async () => {
+    const job = await expectGateBlocks('rtu-gate-hash', {
+      artifactSha256: 'e'.repeat(64),
+    })
+    expect(job.lastErrorCode).toBe('UPLOAD_IDENTITY_MISMATCH')
+    expect(job.lastErrorMessage).toBe('upload_artifact_hash_mismatch')
+  }, 240_000)
 })
