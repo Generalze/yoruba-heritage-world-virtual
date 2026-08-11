@@ -1443,16 +1443,45 @@ Provider-side idempotency remains welcome as an OPTIONAL additional
 protection, and may be bound to the deterministic task key — but only
 when officially documented and verified.
 
-**THE UNAPPROVED ADAPTER IS NAMED, NOT INVENTED.** No external
-visual-generation vendor has been chosen, and this codebase does not
-choose one. That stage has two honest settings: `MOCK` — refused
-outright in production — and `DISABLED`, under which a job that
-REQUIRES that work fails closed as a recorded task failure and is NEVER
-silently skipped. The refusal happens BEFORE the approved sacred body is
-read, preserving the Step 15 rule that the body is retrieved only when
-synthesis is currently authorized. A manifest needing neither —
-approved media for every scene, approved human recordings for every
-voice — runs normally, and startup logs the reduced capability.
+**VISUALS HAVE ONE APPROVED ADAPTER: KLING (Step 20).** Kling API 2.0
+text-to-video, with Kling 3.0 encoded in the endpoint
+(`POST /text-to-video/kling-3.0`) — there is deliberately no model
+selector to invent. Auth is the new API-Key scheme only
+(`Authorization: Bearer <KLING_API_KEY>`); the legacy AK/SK JWT flow is
+absent. The create body is a CLOSED allowlist — `prompt`,
+`settings { audio: "off", multi_shot: false, duration }`,
+`options { external_task_id }` — with no callback_url, no resolution or
+aspect_ratio (the repo contract fixes neither, so Kling's documented
+defaults apply), and no image, element or voice input of any kind.
+`external_task_id` carries the task's deterministic idempotencyKey as
+provider-side reconciliation help; the durable at-most-once reservation
+remains the ONLY thing preventing a second paid call. Durations are
+whole seconds 3–15, never rounded — anything else is a provably
+NOT_SENT refusal via the provider's declared-limits hook, checked
+before the network, as is a compiled prompt that cannot fit the
+official 3072-char bound (approved text is never truncated to fit a
+vendor). Prompts are compiled DETERMINISTICALLY from the currently
+approved Visual Bible rules plus safe scene metadata; METADATA_ONLY
+never retrieves the sacred body, APPROVED_TEXT_CONTEXT sends only the
+exact authorized text, and nothing is ever invented. The create answer
+requires `code` 0, `data.id` (persisted byte-for-byte as the operation
+id) and a documented status; polling asks
+`GET /tasks?task_ids=<exact id>` and requires exactly the matching
+task. A completed task's video artifact downloads ONLY from the
+`KLING_ARTIFACT_ORIGINS` allowlist — HTTPS, exact bare origins,
+credentials refused, redirects refused, bounded bytes, `video/mp4`
+only — is hashed locally, and its REAL duration is measured with
+ffprobe (an artifact carrying an unexpected audio stream is refused:
+Kling generates visuals only). Provider errors, response bodies,
+prompts, keys and signed artifact URLs never reach rows, events or
+logs; transport retries are ZERO and the timeout is bounded below the
+reservation staleness threshold. Selecting
+`VISUAL_GENERATION_DRIVER=KLING` requires the three `KLING_*` variables
+in EVERY environment, with no fallback to MOCK or DISABLED. `DISABLED`
+remains the honest setting for a deployment that does not want
+generation: a job that REQUIRES the work fails closed as a recorded
+task failure and is NEVER silently skipped, while a manifest needing
+neither generation nor synthesis runs normally.
 
 **SPEECH HAS ONE APPROVED ADAPTER: 9JALINGO (Step 20).** 9jaLingo's
 officially documented OpenAI-compatible `POST /v1/audio/speech`, spoken

@@ -49,10 +49,16 @@ export interface VisualGenerationRequest {
 
 export type VisualGenerationJobStatus = 'PENDING' | 'COMPLETED' | 'FAILED'
 
-export interface VisualGenerationSubmission {
-  providerJobId: string
-  status: VisualGenerationJobStatus
-}
+/**
+ * What ONE submission produced. `PENDING` + providerJobId is the
+ * asynchronous acceptance every video vendor answers with; `FAILED` is
+ * the provider's OWN explicit rejection, as a bounded machine code.
+ * Transport failures still THROW VisualGenerationProviderError — an
+ * explicit "no" and a ripped socket are different facts.
+ */
+export type VisualGenerationSubmission =
+  | { status: 'PENDING'; providerJobId: string }
+  | { status: 'FAILED'; failureCode: string }
 
 /** Raw provider artifact bytes — verified by the executor service
  * (mime/type, bounded duration, non-empty, fresh SHA-256) before
@@ -92,6 +98,19 @@ export interface VisualGenerationProvider {
   readonly code: string
   readonly displayName: string
   isEnabled: () => boolean
+  /**
+   * PURE, NETWORK-FREE admission check for the provider's own declared
+   * limits (an unsupported duration, a compiled prompt that cannot
+   * fit). The EXECUTOR calls this after compilation and BEFORE the
+   * provider is invoked, so a refusal here is provably NOT_SENT — a
+   * recorded, freely-retryable task failure with zero provider contact
+   * and zero spend. Approved content is NEVER rewritten, truncated,
+   * padded or rounded to fit a vendor; this refusal is the correct
+   * outcome. Deterministic and side-effect-free by contract.
+   */
+  readonly validateRequest?: (
+    request: VisualGenerationRequest,
+  ) => { ok: true } | { ok: false; reasonCode: string }
   /**
    * ONE submission per idempotencyKey.
    *

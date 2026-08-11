@@ -352,6 +352,122 @@ describe('9jaLingo TTS selection (Step 20)', () => {
   })
 })
 
+describe('Kling visual generation selection (Step 20)', () => {
+  /** The complete, valid Kling overlay — each case below breaks it in
+   * exactly one way. */
+  const KLING_SOURCE: Record<string, string> = {
+    VISUAL_GENERATION_DRIVER: 'KLING',
+    KLING_API_KEY: 'kling-test-key-placeholder',
+    KLING_API_BASE_URL: 'https://api-singapore.klingai.com',
+    KLING_ARTIFACT_ORIGINS:
+      'https://cdn-a.kling-artifacts.test,https://cdn-b.kling-artifacts.test',
+  }
+
+  it('accepts a completely configured KLING production environment', () => {
+    const cfg = parse(KLING_SOURCE)
+    expect(cfg.VISUAL_GENERATION_DRIVER).toBe('KLING')
+    const result = preflight(KLING_SOURCE)
+    expect(result.ok).toBe(true)
+    expect(result.issues).toEqual([])
+    // A REAL adapter is not reduced capability: only speech remains
+    // disabled in this baseline.
+    expect(describeUnavailableCapabilities(parse(KLING_SOURCE))).toEqual([
+      'tts_disabled',
+    ])
+  })
+
+  it('requires every KLING variable whenever the driver is selected, in ANY environment', () => {
+    for (const name of [
+      'KLING_API_KEY',
+      'KLING_API_BASE_URL',
+      'KLING_ARTIFACT_ORIGINS',
+    ]) {
+      for (const nodeEnv of ['development', 'test', 'production']) {
+        expect(() =>
+          envSchema.parse({
+            ...PRODUCTION_SOURCE,
+            ...KLING_SOURCE,
+            NODE_ENV: nodeEnv,
+            [name]: '',
+          }),
+        ).toThrow()
+      }
+    }
+  })
+
+  it('requires a plain HTTPS base URL and BARE HTTPS artifact origins', () => {
+    for (const badUrl of [
+      'http://api-singapore.klingai.com',
+      'https://user:pass@api-singapore.klingai.com',
+      'https://api-singapore.klingai.com?key=abc',
+      'not a url',
+    ]) {
+      expect(() =>
+        envSchema.parse({
+          ...PRODUCTION_SOURCE,
+          ...KLING_SOURCE,
+          KLING_API_BASE_URL: badUrl,
+        }),
+      ).toThrow()
+    }
+    for (const badOrigins of [
+      'http://cdn.example',
+      'https://cdn.example/path',
+      'https://cdn.example/',
+      'https://user:pw@cdn.example',
+      'https://cdn.example?q=1',
+      'garbage',
+    ]) {
+      expect(() =>
+        envSchema.parse({
+          ...PRODUCTION_SOURCE,
+          ...KLING_SOURCE,
+          KLING_ARTIFACT_ORIGINS: badOrigins,
+        }),
+      ).toThrow()
+    }
+  })
+
+  it('reports preflight codes and variable NAMES for a broken Kling config — never values', () => {
+    // Exercised with a hand-built cfg (the schema would refuse to
+    // construct one) — the split-lock design: either lock alone holds.
+    const cfg = {
+      ...parse(),
+      VISUAL_GENERATION_DRIVER: 'KLING' as const,
+      KLING_API_KEY: '',
+      KLING_API_BASE_URL: 'http://insecure.example',
+      KLING_ARTIFACT_ORIGINS: 'https://cdn.example/path',
+    }
+    const result = checkProductionPreflight(
+      { ...PRODUCTION_SOURCE, ...KLING_SOURCE },
+      cfg,
+    )
+    expect(result.ok).toBe(false)
+    const byCode = new Set(
+      result.issues.map((issue) => `${issue.code}|${issue.envName}`),
+    )
+    expect(byCode.has('kling_config_missing|KLING_API_KEY')).toBe(true)
+    expect(byCode.has('kling_endpoint_not_https|KLING_API_BASE_URL')).toBe(true)
+    expect(
+      byCode.has('kling_artifact_origin_not_bare|KLING_ARTIFACT_ORIGINS'),
+    ).toBe(true)
+    const serialized =
+      JSON.stringify(result) + formatPreflightIssues(result).join('|')
+    expect(serialized).not.toContain(KLING_SOURCE.KLING_API_KEY)
+    expect(serialized).not.toContain('insecure.example')
+  })
+
+  it('never falls back: the registry wires KLING to the real adapter and unknown drivers still throw', async () => {
+    const source = await Bun.file(
+      'src/providers/visual-generation/registry.ts',
+    ).text()
+    expect(source).toContain("case 'KLING':")
+    expect(source).toContain('createKlingVisualGenerationProvider()')
+    expect(source).toContain('default:')
+    expect(source).toContain('throw new')
+  })
+})
+
 describe('the two processes share one gate', () => {
   it('the web entry and the worker both call assertProductionPreflight', async () => {
     // A worker that started while the app knew the configuration was

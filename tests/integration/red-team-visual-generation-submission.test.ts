@@ -93,10 +93,12 @@ import {
   runVisualGenerationOnce,
 } from '@/services/generation-jobs'
 import { submitScene } from '@/services/visual-generation'
+import { createKlingVisualGenerationProvider } from '@/providers/visual-generation/kling'
 import {
   resetVisualGenerationProviderForTests,
   setVisualGenerationProviderForTests,
 } from '@/providers/visual-generation/registry'
+import type { KlingVisualConfig } from '@/providers/visual-generation/kling'
 import { VisualGenerationProviderError } from '@/providers/visual-generation/types'
 import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 import {
@@ -2596,5 +2598,208 @@ describe('red-team: admin retry refuses unresolved provider spend (DB-driven)', 
     expect(retried.status).toBe('RETRYING')
     expect(retried.resumeStatus).toBe('PREPARING')
     expect(retried.attemptCount).toBe(0)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20: Kling API 2.0 — the production text-to-video provider
+// ----------------------------------------------------------------------------
+
+/** Test doubles ONLY: zero network, zero real API, zero spend. */
+const KLING_TEST_CONFIG: KlingVisualConfig = {
+  apiKey: 'rt-kling-secret-key',
+  baseUrl: 'https://api-singapore.klingai.com',
+  artifactOrigins: ['https://cdn.kling-artifacts.test'],
+}
+
+describe('red-team: Kling through the REAL executor (fake HTTP, ZERO network)', () => {
+  it('reserves, submits ONCE, persists the EXACT provider id, polls the same id, and completes with locally measured bytes', async () => {
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    // The fixture scene is a whole number of seconds inside Kling's
+    // official 3–15 s window — the pipeline's own scene ceiling
+    // (MAX_SCENE_MS = 15 s) matches the vendor bound exactly.
+    expect(task.durationMs % 1000).toBe(0)
+    expect(task.durationMs).toBeGreaterThanOrEqual(3_000)
+    expect(task.durationMs).toBeLessThanOrEqual(15_000)
+
+    const clock = makeFakeClock(Date.now())
+    const mp4Bytes = new TextEncoder().encode(
+      `rt-kling-mp4-${'y'.repeat(4096)}`,
+    )
+    const providerOperationId = 'kling-op-e2e-001'
+    const artifactUrl =
+      'https://cdn.kling-artifacts.test/v/e2e.mp4?sig=E2E_SECRET_SIG'
+    const requests: Array<{
+      method: string
+      url: string
+      headers: Readonly<Record<string, string>>
+      body?: string
+    }> = []
+    const downloads: Array<string> = []
+    setVisualGenerationProviderForTests(
+      createKlingVisualGenerationProvider(
+        KLING_TEST_CONFIG,
+        {
+          async requestJson(input) {
+            requests.push(input)
+            if (input.method === 'POST') {
+              return {
+                status: 200,
+                bodyText: JSON.stringify({
+                  code: 0,
+                  data: { id: providerOperationId, status: 'submitted' },
+                }),
+              }
+            }
+            return {
+              status: 200,
+              bodyText: JSON.stringify({
+                code: 0,
+                data: [
+                  {
+                    id: providerOperationId,
+                    status: 'succeeded',
+                    outputs: [{ type: 'video', url: artifactUrl }],
+                  },
+                ],
+              }),
+            }
+          },
+          async downloadArtifact(input) {
+            downloads.push(input.url)
+            return { status: 200, contentType: 'video/mp4', bytes: mp4Bytes }
+          },
+        },
+        // ffprobe stand-in: the LOCAL measurement is what the row gets.
+        async () => ({
+          ok: true,
+          durationMs: task.durationMs,
+          hasAudio: false,
+          hasVideo: true,
+        }),
+      ),
+    )
+    try {
+      // Cycle 1: durable reservation → create → WAITING. No injected
+      // deps: this drives the REAL submitScene/pollScene seam.
+      const first = await runVisualGenerationOnce('w-kling-1', clock)
+      expect(first.status).toBe('WAITING')
+      const afterSubmit = (await visualTaskRows(jobId))[0]
+      expect(afterSubmit.status).toBe('SUBMITTED')
+      expect(afterSubmit.providerCode).toBe('KLING')
+      // The provider's OWN id, byte-for-byte — polling continues it.
+      expect(afterSubmit.providerOperationId).toBe(providerOperationId)
+      expect(afterSubmit.submittedAt).not.toBeNull()
+
+      // Exactly ONE create call, carrying the exact official contract.
+      expect(requests).toHaveLength(1)
+      const createCall = requests[0]
+      expect(createCall.method).toBe('POST')
+      expect(createCall.url).toBe(
+        'https://api-singapore.klingai.com/text-to-video/kling-3.0',
+      )
+      expect(createCall.headers.Authorization).toBe(
+        `Bearer ${KLING_TEST_CONFIG.apiKey}`,
+      )
+      const body = JSON.parse(createCall.body!) as {
+        prompt: string
+        settings: Record<string, unknown>
+        options: Record<string, unknown>
+      }
+      expect(body.settings.audio).toBe('off')
+      expect(body.settings.multi_shot).toBe(false)
+      expect(body.settings.duration).toBe(task.durationMs / 1000)
+      expect(body.options.external_task_id).toBe(task.idempotencyKey)
+      // METADATA_ONLY: the compiled prompt carries the approved rule
+      // text and safe metadata — never a sacred body.
+      expect(body.prompt).toContain('riverside at dawn')
+
+      // Cycle 2: poll the SAME operation, download from the allowlisted
+      // origin, measure locally, store, finalize.
+      clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+      const second = await runVisualGenerationOnce('w-kling-2', clock)
+      expect(second.status).toBe('COMPLETE')
+      expect(requests).toHaveLength(2)
+      expect(requests[1].method).toBe('GET')
+      expect(requests[1].url).toBe(
+        `https://api-singapore.klingai.com/tasks?task_ids=${encodeURIComponent(providerOperationId)}`,
+      )
+      expect(downloads).toEqual([artifactUrl])
+
+      const row = (await visualTaskRows(jobId))[0]
+      expect(row.status).toBe('SUCCEEDED')
+      expect(row.artifactSha256).toBe(computeFileSha256(mp4Bytes))
+      expect(row.artifactMimeType).toBe('video/mp4')
+      expect(row.artifactDurationMs).toBe(task.durationMs)
+      const stored = await storage.get(row.artifactStorageRef!)
+      expect(stored).not.toBeNull()
+      expect(computeFileSha256(stored!)).toBe(computeFileSha256(mp4Bytes))
+      expect((await jobRow(jobId)).status).toBe('GENERATING_AUDIO')
+
+      // NOTHING SECRET PERSISTED: not the key, not the bearer header,
+      // not the signed artifact URL, not the compiled prompt.
+      const events = await getDb()
+        .select()
+        .from(prayerGenerationJobEvents)
+        .where(eq(prayerGenerationJobEvents.generationJobId, jobId))
+      const payload = JSON.stringify({
+        rows: await visualTaskRows(jobId),
+        events,
+        job: await jobRow(jobId),
+      })
+      expect(payload).not.toContain(KLING_TEST_CONFIG.apiKey)
+      expect(payload).not.toContain('Bearer')
+      expect(payload).not.toContain('E2E_SECRET_SIG')
+      expect(payload).not.toContain('kling-artifacts.test')
+      expect(payload).not.toContain('riverside at dawn')
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  }, 240_000)
+
+  it('an unsupported scene duration is refused NOT_SENT with ZERO provider contact', async () => {
+    const { manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    let networkCalls = 0
+    setVisualGenerationProviderForTests(
+      createKlingVisualGenerationProvider(
+        KLING_TEST_CONFIG,
+        {
+          async requestJson() {
+            networkCalls += 1
+            throw new Error('the network must never be reached')
+          },
+          async downloadArtifact() {
+            networkCalls += 1
+            throw new Error('the network must never be reached')
+          },
+        },
+        async () => ({
+          ok: true,
+          durationMs: 1,
+          hasAudio: false,
+          hasVideo: true,
+        }),
+      ),
+    )
+    try {
+      // Kling takes whole seconds 3–15; nothing is EVER rounded to
+      // fit, so each of these is a recorded, freely-retryable refusal
+      // decided before the network.
+      for (const durationMs of [2_000, 16_000, 10_500]) {
+        const result = await submitScene(
+          { ...task, durationMs },
+          { expectedProviderCode: 'KLING' },
+        )
+        expect(result.status).toBe('FAILED')
+        if (result.status !== 'FAILED') continue
+        expect(result.errorCode).toBe('duration_unsupported_by_provider')
+        expect(result.spendState).toBe('NOT_SENT')
+      }
+      expect(networkCalls).toBe(0)
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
   }, 240_000)
 })

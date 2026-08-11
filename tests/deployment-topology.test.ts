@@ -237,10 +237,17 @@ describe('operations documentation', () => {
     expect(runbook).toContain('THROWAWAY database')
   })
 
-  it('names the outstanding vendor decisions rather than assuming them', () => {
+  it('records the vendor decisions as SETTLED rather than silently dropping them', () => {
+    // Both Step 20 vendor decisions are made now — Kling for visuals,
+    // 9jaLingo for speech — and the runbook must say so explicitly,
+    // the same way the Remotion provisioning decision is recorded.
     expect(runbook).toContain('Visual generation vendor')
     expect(runbook).toContain('Speech synthesis vendor')
-    expect(runbook).toContain('None approved')
+    expect(runbook).toContain('Kling')
+    expect(runbook).toContain('9jaLingo')
+    expect(runbook).toContain('SETTLED')
+    // The list still names what remains genuinely open.
+    expect(runbook).toContain('Outstanding — not yet decided')
   })
 
   it('has scripts that print no credential and refuse to back up into the repo', () => {

@@ -74,6 +74,14 @@ Production requires, at minimum:
   refused.
 - `RENDER_DRIVER=REMOTION` — `MOCK` is refused
 - `VISUAL_GENERATION_DRIVER` and `TTS_DRIVER` — `MOCK` is refused
+- `VISUAL_GENERATION_DRIVER=KLING` additionally requires **all three**
+  of `KLING_API_KEY`, `KLING_API_BASE_URL` (plain HTTPS — no
+  credentials, query or fragment) and `KLING_ARTIFACT_ORIGINS`
+  (comma-separated **bare HTTPS origins** — no paths, no wildcards). A
+  gap is a startup refusal (`kling_config_missing` / `kling_endpoint_…`
+  / `kling_artifact_…` naming the variable) — never a silent fallback
+  to `MOCK` or `DISABLED`. The API key is a secret: server environment
+  only, outside Git.
 - `TTS_DRIVER=9JALINGO` additionally requires **all four** of
   `NAIJALINGO_API_KEY`, `NAIJALINGO_API_BASE_URL` (plain HTTPS — no
   credentials, query or fragment), `NAIJALINGO_YO_VOICE_ID` and
@@ -84,6 +92,37 @@ Production requires, at minimum:
 
 Sessions need **no** `SESSION_SECRET`: they are 256-bit random bearer
 tokens stored hashed, so there is nothing to leak or rotate.
+
+### Visual generation: Kling (`VISUAL_GENERATION_DRIVER=KLING`)
+
+The one approved visual adapter (Step 20): Kling API 2.0 text-to-video,
+with Kling 3.0 encoded in the endpoint (`POST /text-to-video/kling-3.0`)
+— no model id to configure or guess. Submission is asynchronous: the
+platform's at-most-once reservation applies unchanged (durable
+reservation before the create call, the provider's exact task id
+persisted and polled, ambiguous outcomes quarantined as
+`provider_outcome_unknown`, zero HTTP-client retries).
+
+Facts an operator should know:
+
+- **Visuals only.** Every request carries `settings.audio: "off"` and
+  `multi_shot: false`; an artifact that arrives with an audio stream
+  anyway is refused, never shipped. Voice belongs to the TTS/human-
+  recording pipeline.
+- **Whole seconds, 3–15.** A scene outside Kling's documented duration
+  law is refused before the network as a recorded, retryable task
+  failure — durations are never silently rounded.
+- **Prompts are compiled, not written.** Deterministically from the
+  currently approved Visual Bible rules plus safe scene metadata;
+  `METADATA_ONLY` content never has its sacred body retrieved, and
+  `APPROVED_TEXT_CONTEXT` sends only the exact authorized text. A
+  compiled prompt that cannot fit Kling's 3072-char bound is refused —
+  approved text is never truncated to fit a vendor.
+- **Artifacts download only from `KLING_ARTIFACT_ORIGINS`.** HTTPS,
+  exact origins, redirects refused, bounded size, `video/mp4` only;
+  bytes are hashed locally and the real duration is measured with
+  ffprobe — provider-reported durations are never trusted. Signed
+  artifact URLs are never logged.
 
 ### Speech synthesis: 9jaLingo (`TTS_DRIVER=9JALINGO`)
 
@@ -111,9 +150,9 @@ Governance facts an operator should know:
 ### Deliberately reduced capability
 
 `VISUAL_GENERATION_DRIVER=DISABLED` and `TTS_DRIVER=DISABLED` remain
-valid production settings — for visual generation, DISABLED is still
-the only honest one, as no external image-generation vendor has been
-approved. They mean:
+valid production settings for a deployment that does not want a
+capability — both stages now also have an approved real adapter
+(KLING, 9JALINGO). DISABLED means:
 
 - a job that REQUIRES that work **fails closed** and is recorded as
   failed. It is never silently skipped, because a recording assembled
@@ -401,9 +440,10 @@ exactly the signal readiness exists to surface.
 
 Named here rather than quietly assumed:
 
-1. **Visual generation vendor.** None approved. Production runs
-   `VISUAL_GENERATION_DRIVER=DISABLED` and fails closed on jobs that need
-   generated imagery.
+1. ~~Visual generation vendor~~ — SETTLED (Step 20): **Kling**
+   (API 2.0 text-to-video, Kling 3.0), `VISUAL_GENERATION_DRIVER=KLING`
+   with the `KLING_*` variables. `DISABLED` remains valid where
+   generation is not wanted.
 2. ~~Speech synthesis vendor~~ — SETTLED (Step 20): **9jaLingo**,
    Yoruba only, `TTS_DRIVER=9JALINGO` with the `NAIJALINGO_*`
    variables. `DISABLED` remains valid where synthesis is not wanted;

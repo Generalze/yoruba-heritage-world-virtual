@@ -100,6 +100,59 @@ export function validateStorageEndpoint(
   return { ok: true, origin: parsed.origin }
 }
 
+export type OriginAllowlistValidation =
+  | { ok: true; origins: ReadonlyArray<string> }
+  | { ok: false; reasonCode: string }
+
+/**
+ * Parses a comma-separated allowlist of BARE HTTPS ORIGINS — the shape
+ * a download-origin pin needs (Step 20: KLING_ARTIFACT_ORIGINS).
+ *
+ * Every entry must BE an origin, exactly: `https://host[:port]` with no
+ * path, no trailing slash, no credentials, no query, no fragment. The
+ * strictness is the point — an entry that is "almost" an origin means
+ * the operator's intent and the effective pin differ, and a pin that
+ * differs from intent is how a signed artifact URL gets fetched from a
+ * host nobody meant to trust.
+ */
+export function parseHttpsOriginAllowlist(
+  raw: string | null | undefined,
+): OriginAllowlistValidation {
+  if (raw == null || raw.trim() === '') {
+    return { ok: false, reasonCode: 'origin_allowlist_empty' }
+  }
+  const entries = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '')
+  if (entries.length === 0) {
+    return { ok: false, reasonCode: 'origin_allowlist_empty' }
+  }
+  const origins: Array<string> = []
+  for (const entry of entries) {
+    let parsed: URL
+    try {
+      parsed = new URL(entry)
+    } catch {
+      return { ok: false, reasonCode: 'origin_unparseable' }
+    }
+    if (parsed.protocol !== 'https:') {
+      return { ok: false, reasonCode: 'origin_not_https' }
+    }
+    if (parsed.username !== '' || parsed.password !== '') {
+      return { ok: false, reasonCode: 'origin_has_credentials' }
+    }
+    // `URL.origin` is scheme+host+port and nothing else; an entry that
+    // is not literally its own origin carried a path, slash, query or
+    // fragment that would be silently discarded.
+    if (parsed.origin !== entry) {
+      return { ok: false, reasonCode: 'origin_not_bare' }
+    }
+    if (!origins.includes(parsed.origin)) origins.push(parsed.origin)
+  }
+  return { ok: true, origins }
+}
+
 /**
  * The Content-Security-Policy this application can actually run under.
  *

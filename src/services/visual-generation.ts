@@ -594,6 +594,24 @@ export async function submitScene(
       spendState: 'NOT_SENT',
     }
   }
+  // THE PROVIDER'S OWN DECLARED LIMITS gate the request while nothing
+  // has been sent (Step 20: Kling's whole-second 3–15 s duration and
+  // its 3072-char prompt bound). The check is pure and network-free by
+  // contract, so a refusal is provably NOT_SENT — and the content is
+  // NEVER rounded, truncated or rewritten to fit a vendor; a recorded,
+  // freely-retryable refusal is the correct outcome.
+  if (provider.validateRequest) {
+    const admitted = provider.validateRequest(compiled.request)
+    if (!admitted.ok) {
+      return {
+        status: 'FAILED',
+        providerCode: provider.code,
+        errorCode: admitted.reasonCode,
+        errorMessage: null,
+        spendState: 'NOT_SENT',
+      }
+    }
+  }
   try {
     const submission = await provider.submitScene(compiled.request)
     if (submission.status === 'FAILED') {

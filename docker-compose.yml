@@ -58,13 +58,17 @@ x-app-environment: &app-environment
   # rather than letting a render discover it.
   FFPROBE_PATH: ${FFPROBE_PATH:-/usr/bin/ffprobe}
   REMOTION_BROWSER_EXECUTABLE: ${REMOTION_BROWSER_EXECUTABLE:-/usr/bin/chromium}
-  # No approved external vendor exists for visual generation. DISABLED
-  # is the honest default for both: work that needs them FAILS CLOSED
-  # and is never silently skipped. Speech has ONE approved adapter —
-  # set TTS_DRIVER=9JALINGO with the NAIJALINGO_* variables to enable
-  # Yoruba synthesis.
+  # DISABLED is the honest default for both generation stages: work
+  # that needs them FAILS CLOSED and is never silently skipped. Each
+  # stage has ONE approved real adapter — set
+  # VISUAL_GENERATION_DRIVER=KLING with the KLING_* variables for
+  # text-to-video, and TTS_DRIVER=9JALINGO with the NAIJALINGO_*
+  # variables for Yoruba synthesis.
   VISUAL_GENERATION_DRIVER: ${VISUAL_GENERATION_DRIVER:-DISABLED}
   TTS_DRIVER: ${TTS_DRIVER:-DISABLED}
+  KLING_API_KEY: ${KLING_API_KEY:-}
+  KLING_API_BASE_URL: ${KLING_API_BASE_URL:-}
+  KLING_ARTIFACT_ORIGINS: ${KLING_ARTIFACT_ORIGINS:-}
   NAIJALINGO_API_KEY: ${NAIJALINGO_API_KEY:-}
   NAIJALINGO_API_BASE_URL: ${NAIJALINGO_API_BASE_URL:-}
   NAIJALINGO_YO_VOICE_ID: ${NAIJALINGO_YO_VOICE_ID:-}

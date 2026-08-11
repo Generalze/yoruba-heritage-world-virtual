@@ -1,24 +1,25 @@
 import { env } from '@/lib/env'
 import { createDisabledVisualGenerationProvider } from './disabled'
+import { createKlingVisualGenerationProvider } from './kling'
 import { createMockVisualGenerationProvider } from './mock'
 import { VisualGenerationProviderError } from './types'
 import type { VisualGenerationProvider } from './types'
 
 /**
- * Visual generation provider access point (Phase One, Step 14). The
+ * Visual generation provider access point (Phase One, Step 14/20). The
  * ONLY way the executor service obtains a provider — mirrors the
  * `src/providers/media/storage.ts` single-active-provider pattern
  * (there is exactly one real provider slot, swappable for tests, rather
  * than the multi-provider Map registry payments uses for several
  * simultaneously-enabled checkout options).
  *
- * TWO configurations exist, selected by VISUAL_GENERATION_DRIVER: the
- * deterministic MOCK (development and test only — refused in
- * production) and DISABLED, the honest production statement that no
- * external vendor has been approved. A real adapter plugs in here
- * behind the SAME VisualGenerationProvider interface with no change to
- * the executor service, once one is chosen — and choosing one is a
- * decision for people, not for this file.
+ * THREE configurations exist, selected by VISUAL_GENERATION_DRIVER:
+ * the deterministic MOCK (development and test only — refused in
+ * production), DISABLED (the honest statement that no generation
+ * backend is configured), and KLING — the approved production
+ * text-to-video adapter (Kling API 2.0), configured entirely from
+ * server environment variables. There is no fallback among them: a
+ * selected driver either constructs completely or stops the process.
  */
 
 let overrideProvider: VisualGenerationProvider | null = null
@@ -40,6 +41,12 @@ export function getVisualGenerationProvider(): VisualGenerationProvider {
       break
     case 'DISABLED':
       defaultProvider = createDisabledVisualGenerationProvider()
+      break
+    case 'KLING':
+      // Constructed from server env only; an incomplete configuration
+      // throws here rather than producing a half-configured paid
+      // client. There is NO fallback to MOCK or DISABLED.
+      defaultProvider = createKlingVisualGenerationProvider()
       break
     default:
       throw new VisualGenerationProviderError(

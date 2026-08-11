@@ -1,5 +1,8 @@
 import { env } from '@/lib/env'
-import { validateStorageEndpoint } from '@/lib/security-headers'
+import {
+  parseHttpsOriginAllowlist,
+  validateStorageEndpoint,
+} from '@/lib/security-headers'
 import { checkRenderRuntimeDependencies } from '@/providers/render/media-probe'
 import type { RenderRuntimeCheck } from '@/providers/render/media-probe'
 import type { Env } from '@/lib/env'
@@ -153,13 +156,11 @@ export function checkProductionPreflight(
 
   // --- Generation adapters ------------------------------------------------
   //
-  // These are NOT oversights to be waved through. No external VISUAL
-  // generation vendor has been selected, so that stage has exactly two
-  // honest options: DISABLED, meaning a job that requires the work
-  // fails closed and says so; or a real adapter, which does not exist
-  // yet. Speech now HAS an approved adapter — 9JALINGO — but MOCK,
-  // handing someone synthetic output as their prayer, remains
-  // forbidden for both stages.
+  // Both stages now have an approved real adapter — KLING for visuals
+  // and 9JALINGO for speech — and DISABLED remains a valid, honest
+  // setting for a deployment that does not want the capability. What
+  // stays forbidden is MOCK: handing someone synthetic output as their
+  // prayer is not a production option for either stage.
   if (cfg.VISUAL_GENERATION_DRIVER === 'MOCK') {
     add(
       'mock_visual_generation_forbidden_in_production',
@@ -168,6 +169,33 @@ export function checkProductionPreflight(
   }
   if (cfg.TTS_DRIVER === 'MOCK') {
     add('mock_tts_forbidden_in_production', 'TTS_DRIVER')
+  }
+  // The Kling adapter is a PAID client: selected, it must be
+  // completely configured — there is no fallback to MOCK or DISABLED.
+  // The schema enforces the same rules in every environment; this
+  // repeats them as readiness codes an operator can act on.
+  if (cfg.VISUAL_GENERATION_DRIVER === 'KLING') {
+    for (const name of [
+      'KLING_API_KEY',
+      'KLING_API_BASE_URL',
+      'KLING_ARTIFACT_ORIGINS',
+    ] as const) {
+      if (cfg[name].trim().length === 0) {
+        add('kling_config_missing', name)
+      }
+    }
+    if (cfg.KLING_API_BASE_URL.trim().length > 0) {
+      const endpoint = validateStorageEndpoint(cfg.KLING_API_BASE_URL)
+      if (!endpoint.ok) {
+        add(`kling_${endpoint.reasonCode}`, 'KLING_API_BASE_URL')
+      }
+    }
+    if (cfg.KLING_ARTIFACT_ORIGINS.trim().length > 0) {
+      const origins = parseHttpsOriginAllowlist(cfg.KLING_ARTIFACT_ORIGINS)
+      if (!origins.ok) {
+        add(`kling_artifact_${origins.reasonCode}`, 'KLING_ARTIFACT_ORIGINS')
+      }
+    }
   }
   // The 9jaLingo adapter is a PAID client: selected, it must be
   // completely configured — there is no fallback to MOCK or DISABLED,

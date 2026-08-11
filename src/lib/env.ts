@@ -1,6 +1,9 @@
 import { z } from 'zod'
 
-import { validateStorageEndpoint } from '@/lib/security-headers'
+import {
+  parseHttpsOriginAllowlist,
+  validateStorageEndpoint,
+} from '@/lib/security-headers'
 
 /**
  * Server-side environment configuration, validated with Zod.
@@ -192,7 +195,30 @@ const envObjectSchema = z
      * generation or speech vendor has been approved, and this codebase
      * does not name one on its own initiative.
      */
-    VISUAL_GENERATION_DRIVER: z.enum(['MOCK', 'DISABLED']).default('MOCK'),
+    /** KLING is the approved production text-to-video adapter
+     * (Step 20): Kling API 2.0, Kling 3.0 encoded in the endpoint,
+     * visuals only. Selecting it requires the KLING_* variables below
+     * in EVERY environment — a half-configured paid client must not
+     * exist. */
+    VISUAL_GENERATION_DRIVER: z
+      .enum(['MOCK', 'DISABLED', 'KLING'])
+      .default('MOCK'),
+
+    // --- Kling visual generation (Phase One, Step 20) ---------------------
+    //
+    // The API key lives ONLY in the server environment — never in Git,
+    // never in a row, never in a log line.
+    KLING_API_KEY: z.string().default(''),
+    /** HTTPS base URL of the Kling API 2.0 host (official example:
+     * https://api-singapore.klingai.com). Plain: no credentials, no
+     * query, no fragment. */
+    KLING_API_BASE_URL: z.string().default(''),
+    /** Comma-separated allowlist of BARE HTTPS ORIGINS artifact
+     * downloads may come from. Exact origins only — no paths, no
+     * wildcards. A completed generation whose video URL sits on any
+     * other origin is refused, never fetched. */
+    KLING_ARTIFACT_ORIGINS: z.string().default(''),
+
     /** 9JALINGO is the approved production speech adapter (Step 20):
      * 9jaLingo's OpenAI-compatible synchronous `/v1/audio/speech`,
      * Yoruba only. Selecting it requires the NAIJALINGO_* variables
@@ -291,6 +317,49 @@ const envObjectSchema = z
             code: 'custom',
             path: [key],
             message: `OBJECT_STORAGE_DRIVER=S3 requires ${key}`,
+          })
+        }
+      }
+    }
+
+    // A Kling driver without its complete configuration is a
+    // configuration error EVERYWHERE, exactly like an S3 driver
+    // without a bucket.
+    if (cfg.VISUAL_GENERATION_DRIVER === 'KLING') {
+      for (const key of [
+        'KLING_API_KEY',
+        'KLING_API_BASE_URL',
+        'KLING_ARTIFACT_ORIGINS',
+      ] as const) {
+        if (cfg[key].trim().length === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `VISUAL_GENERATION_DRIVER=KLING requires ${key}`,
+          })
+        }
+      }
+      if (cfg.KLING_API_BASE_URL.trim().length > 0) {
+        // The API key travels as a bearer header to this URL: plain
+        // HTTPS, no credentials, no query, no fragment.
+        const endpoint = validateStorageEndpoint(cfg.KLING_API_BASE_URL)
+        if (!endpoint.ok) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['KLING_API_BASE_URL'],
+            message: `KLING_API_BASE_URL must be a plain HTTPS base URL (${endpoint.reasonCode})`,
+          })
+        }
+      }
+      if (cfg.KLING_ARTIFACT_ORIGINS.trim().length > 0) {
+        // Paid artifacts are downloaded from EXACTLY these origins and
+        // nowhere else — every entry must be a bare HTTPS origin.
+        const origins = parseHttpsOriginAllowlist(cfg.KLING_ARTIFACT_ORIGINS)
+        if (!origins.ok) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['KLING_ARTIFACT_ORIGINS'],
+            message: `KLING_ARTIFACT_ORIGINS must list bare HTTPS origins (${origins.reasonCode})`,
           })
         }
       }
