@@ -153,35 +153,57 @@ describe('landing page (src/routes/index.tsx)', () => {
     expect(code).toContain('listDeitiesFn')
   })
 
-  it('invents no prices, testimonials or sacred quotations', () => {
-    // A literal dollar/naira amount in the code would be an invented
-    // price — real prices arrive only through formatMinorAmount over
-    // catalogue data.
+  it('renders NO price on the landing page — locked, even when one is stored', () => {
+    // The landing lock from the Step 21A fidelity pass: featured
+    // services never show price/currency here. Real prices surface in
+    // the booking flow, not on discovery.
     expect(code).not.toMatch(/[$₦]\s*\d/)
     expect(code).not.toMatch(/From \$/i)
+    expect(code).not.toContain('formatMinorAmount')
+    expect(code).not.toContain('priceMinor')
+    expect(code).not.toContain('currency')
     expect(code).not.toMatch(/testimonial/i)
-    expect(code).toContain('formatMinorAmount')
   })
 
-  it('presents Olódùmárè separately and respectfully — never as a deity card', () => {
+  it('presents Olódùmárè separately, respectfully, and BEFORE the deity profiles', () => {
     // The approved wording from the existing /olodumare page, verbatim.
     expect(code).toContain(
       'Olódùmárè is presented separately and respectfully',
     )
     expect(code).toContain('to="/olodumare"')
-    // The deity grid renders loader data; Olódùmárè's own section is a
-    // distinct block AFTER it, not an entry inside the map.
-    const deityGrid = code.indexOf('deities.map')
+    // LOCKED landing order: … Sacred Houses → Olódùmárè → deity
+    // profiles. Olódùmárè is its own ceremonial section ahead of the
+    // grid, never an entry inside the deity map.
     const olodumareSection = code.indexOf('Olódùmárè is presented separately')
+    const deityGrid = code.indexOf('deities.map')
+    expect(olodumareSection).toBeGreaterThan(-1)
     expect(deityGrid).toBeGreaterThan(-1)
-    expect(olodumareSection).toBeGreaterThan(deityGrid)
+    expect(olodumareSection).toBeLessThan(deityGrid)
   })
 
-  it('keeps the skip-link target and page chrome', () => {
+  it('follows the locked section order: services → houses → Olódùmárè → deities → trust', () => {
+    const markers = [
+      'Featured Spiritual Services',
+      '<EmblemMedallion',
+      'Olódùmárè is presented separately',
+      'deities.map',
+      'Built for dignity and privacy',
+    ]
+    const positions = markers.map((marker) => code.indexOf(marker))
+    for (const position of positions) expect(position).toBeGreaterThan(-1)
+    for (let i = 1; i < positions.length; i += 1) {
+      expect(positions[i]).toBeGreaterThan(positions[i - 1])
+    }
+  })
+
+  it('keeps the skip-link target, page chrome and the illustrated hero', () => {
     expect(source).toContain('SkipLink')
     expect(source).toContain('id="main-content"')
     expect(source).toContain('SiteHeader')
     expect(source).toContain('SiteFooter')
+    // The reference-matching hero tableau — a standalone original
+    // asset, never a crop of the showcase screenshot.
+    expect(source).toContain('HeroTableau')
   })
 })
 

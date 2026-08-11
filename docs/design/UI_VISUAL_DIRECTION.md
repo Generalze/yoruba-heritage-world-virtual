@@ -349,6 +349,26 @@ Animation must respect `prefers-reduced-motion`.
 
 ---
 
+# 9A. Fidelity Rule (Step 21A correction)
+
+**Reference-first visual fidelity; canon-first functional fidelity.**
+
+The showcase PNG is the PRIMARY VISUAL TARGET, not merely a loose mood
+reference. For purely visual matters — composition, proportions,
+section density, card styling, dark/light balance, navigation
+treatment, gold detailing, typography scale, shadows/borders,
+icons/emblems, hierarchy, spacing, imagery placement, section framing —
+implementations should match the showcase as closely as practical.
+
+The repository and canon win ONLY where the reference conflicts with
+real backend data, security/privacy, accessibility, RBAC, spiritual
+governance, actual routes/business rules, or Phase One functionality.
+Section 13's data/placeholder restrictions (no fake prices, dates,
+statistics, records, doctrine) remain fully in force: copy the
+reference's visual design, never its invented values.
+
+---
+
 # 10. Screen Direction
 
 ## 10.1 Home / Landing Page
