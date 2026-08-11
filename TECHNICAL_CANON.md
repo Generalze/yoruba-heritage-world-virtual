@@ -20,6 +20,21 @@ The following product rules are locked:
 - Sacred Houses privately assign the approved representative or group responsible for an appointment.
 - Deity profiles are informational and educational, and may connect users to services and subscriptions.
 - Olódùmárè is presented separately and respectfully, not as one equivalent deity among others.
+- **APPROVED OLÓDÙMÁRÈ WORDING (Step 21A).** The platform owner has
+  authorised this exact wording, and it is the ONLY theological
+  statement the product may render about Olódùmárè:
+
+  > God most high, the God of all.
+  >
+  > LORD JESUS, the one who made all things and by him all things
+  > consist.
+
+  It is presented ahead of every catalogue section, never inside the
+  deity collection, and always alongside the separateness statements
+  above. It is fixed platform wording, not editable content and not
+  AI-generated: no other doctrinal claim about Olódùmárè may be added,
+  extended, paraphrased or inferred anywhere in the product without a
+  further explicit authorisation recorded here.
 - Daily spiritual subscriptions are a distinct system from appointment bookings.
 - Recorded Prayer Rooms are time-gated and linked to confirmed appointments.
 - Live Prayer Rooms are a later-phase capability.

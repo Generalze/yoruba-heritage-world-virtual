@@ -166,14 +166,13 @@ describe('landing page (src/routes/index.tsx)', () => {
   })
 
   it('presents Olódùmárè separately, respectfully, and BEFORE the deity profiles', () => {
-    // The approved wording from the existing /olodumare page, verbatim.
+    // The separateness statements from canon §1, verbatim.
     expect(code).toContain(
       'Olódùmárè is presented separately and respectfully',
     )
     expect(code).toContain('to="/olodumare"')
-    // LOCKED landing order: … Sacred Houses → Olódùmárè → deity
-    // profiles. Olódùmárè is its own ceremonial section ahead of the
-    // grid, never an entry inside the deity map.
+    // Olódùmárè is its own section ahead of the grid, never an entry
+    // inside the deity map.
     const olodumareSection = code.indexOf('Olódùmárè is presented separately')
     const deityGrid = code.indexOf('deities.map')
     expect(olodumareSection).toBeGreaterThan(-1)
@@ -181,11 +180,13 @@ describe('landing page (src/routes/index.tsx)', () => {
     expect(olodumareSection).toBeLessThan(deityGrid)
   })
 
-  it('follows the locked section order: services → houses → Olódùmárè → deities → trust', () => {
+  it('follows the locked section order: Olódùmárè → services → houses → deities → trust', () => {
+    // Olódùmárè comes FIRST after the hero, ahead of every catalogue
+    // section (owner-locked order).
     const markers = [
+      'Olódùmárè is presented separately',
       'Featured Spiritual Services',
       '<EmblemMedallion',
-      'Olódùmárè is presented separately',
       'deities.map',
       'Built for dignity and privacy',
     ]
@@ -196,14 +197,71 @@ describe('landing page (src/routes/index.tsx)', () => {
     }
   })
 
-  it('keeps the skip-link target, page chrome and the illustrated hero', () => {
+  it('keeps the skip-link target, page chrome and the full-bleed hero backdrop', () => {
     expect(source).toContain('SkipLink')
     expect(source).toContain('id="main-content"')
     expect(source).toContain('SiteHeader')
     expect(source).toContain('SiteFooter')
-    // The reference-matching hero tableau — a standalone original
-    // asset, never a crop of the showcase screenshot.
-    expect(source).toContain('HeroTableau')
+    // The reference-matching hero backdrop — original artwork, never a
+    // crop of the showcase screenshot.
+    expect(source).toContain('HeroBackdrop')
+  })
+})
+
+// --- Approved Olódùmárè wording -------------------------------------------------
+
+describe('the approved Olódùmárè wording', () => {
+  // The ONLY theological statement the product may render about
+  // Olódùmárè, authorised by the platform owner and recorded verbatim
+  // in TECHNICAL_CANON.md §1. These assertions exist so the rendered
+  // wording and the canon can never drift apart, and so no further
+  // doctrinal line can be added without the canon changing too.
+  const APPROVED = [
+    'God most high, the God of all.',
+    'LORD JESUS, the one who made all things and by him all things consist.',
+  ]
+  // JSX line-wraps prose, so compare on whitespace-normalised text —
+  // the wording must match word-for-word, not line-for-line.
+  const flatten = (source: string): string =>
+    withoutComments(source).replace(/\s+/g, ' ')
+  // The canon records the wording as a markdown blockquote; strip the
+  // quote markers before comparing the prose itself.
+  const canon = read('TECHNICAL_CANON.md')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\s+/g, ' ')
+  const landing = flatten(read('src/routes/index.tsx'))
+  const page = flatten(read('src/routes/olodumare.tsx'))
+
+  it('is recorded in the canon as approved, fixed platform wording', () => {
+    expect(canon).toContain('APPROVED OLÓDÙMÁRÈ WORDING')
+    for (const line of APPROVED) {
+      expect(canon).toContain(line)
+    }
+    expect(canon).toContain('not editable content and not')
+  })
+
+  it('renders identically on the landing page and the Olódùmárè page', () => {
+    for (const surface of [landing, page]) {
+      for (const line of APPROVED) {
+        expect(surface).toContain(line)
+      }
+      // Always accompanied by the separateness statements.
+      expect(surface).toContain(
+        'Olódùmárè is presented separately and respectfully',
+      )
+      expect(surface).toContain(
+        'Olódùmárè is not presented as one deity among a collection',
+      )
+    }
+  })
+
+  it('is never rendered as a deity catalogue card', () => {
+    // The Olódùmárè page performs no catalogue queries at all.
+    expect(page).not.toContain('listDeitiesFn')
+    expect(page).not.toContain('deities.map')
+    // And the landing keeps it out of the deity grid.
+    const deityGrid = landing.indexOf('deities.map')
+    expect(landing.indexOf('God most high')).toBeLessThan(deityGrid)
   })
 })
 

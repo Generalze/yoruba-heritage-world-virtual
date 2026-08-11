@@ -1,276 +1,286 @@
 /**
- * Hero tableau (Step 21A high-fidelity pass): a standalone illustrated
- * scene reproducing the APPROVED reference hero's composition — a
- * dignified elder in flowing cream robes seated in a candle-lit,
- * deep-brown sanctuary interior with brass vessels — as an original
- * layered SVG in the platform palette.
+ * Hero backdrop (Step 21A fidelity pass): a full-bleed, candle-lit
+ * sanctuary interior used as the hero BACKGROUND, matching the
+ * approved reference's composition — deep chiaroscuro, a carved wall
+ * disc, vessels and carved forms receding into shadow, a warm pool of
+ * candlelight, heavy vignette — with the hero copy overlaid on a dark
+ * scrim at the left, exactly as the reference does it.
  *
- * This is an ORIGINAL asset, not a crop of the showcase screenshot
- * (docs/design/UI_VISUAL_DIRECTION.md §13 forbids copying showcase
- * pixels/values). It depicts atmosphere and material culture only:
- * no specific ritual, offering, doctrine or instruction is shown or
- * implied, and nothing here is labeled as an authentic spiritual
- * symbol. Self-contained vector art keeps the CSP happy (no external
- * image) and stays crisp at every size.
+ * ORIGINAL ARTWORK, not a crop of the showcase screenshot (UI
+ * direction §13). Deliberately NO human figure: a stylised face reads
+ * as caricature beside photography, and the reference's real subject
+ * is the ATMOSPHERE. Everything is rendered with soft gradients,
+ * blur and bokeh so it behaves like a photographic backdrop rather
+ * than flat vector art.
+ *
+ * GOVERNANCE: material culture and light only. The wall disc and
+ * carved forms are decorative geometry — no ritual, offering,
+ * doctrine or deity iconography is depicted, and nothing here may be
+ * labelled an authentic spiritual symbol (§5/§11).
+ *
+ * SWAPPING IN A PHOTOGRAPH: this component is the fallback. When an
+ * approved, rights-cleared photograph exists, drop it in `public/`
+ * and render it in place of <HeroBackdrop /> in src/routes/index.tsx
+ * — the surrounding scrim/composition needs no other change, and the
+ * CSP already allows same-origin images.
  */
-export function HeroTableau({ className = '' }: { className?: string }) {
+/** Candle cluster geometry, shared by the glow and wax passes. */
+const CANDLES = [
+  { x: 812, y: 606, w: 40, h: 138 },
+  { x: 872, y: 636, w: 34, h: 108 },
+  { x: 926, y: 660, w: 28, h: 84 },
+  { x: 762, y: 668, w: 24, h: 76 },
+] as const
+
+export function HeroBackdrop({ className = '' }: { className?: string }) {
   return (
     <svg
-      viewBox="70 190 600 690"
+      viewBox="0 0 1600 900"
       preserveAspectRatio="xMidYMid slice"
-      role="img"
-      aria-label="Illustration of a candle-lit interior where an elder in flowing cream robes sits beside brass vessels."
+      aria-hidden="true"
+      focusable="false"
       className={className}
     >
       <defs>
-        <linearGradient id="ht-room" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#241811" />
-          <stop offset="0.55" stopColor="#1b1009" />
-          <stop offset="1" stopColor="#120a05" />
+        <linearGradient id="hb-wall" x1="0" y1="0" x2="0.35" y2="1">
+          <stop offset="0" stopColor="#2a1a0f" />
+          <stop offset="0.5" stopColor="#1d1108" />
+          <stop offset="1" stopColor="#0d0704" />
         </linearGradient>
-        <radialGradient id="ht-glow" cx="0.42" cy="0.72" r="0.65">
-          <stop offset="0" stopColor="#f0b95c" stopOpacity="0.5" />
-          <stop offset="0.35" stopColor="#c2913f" stopOpacity="0.22" />
-          <stop offset="1" stopColor="#c2913f" stopOpacity="0" />
+        <radialGradient id="hb-keylight" cx="0.63" cy="0.72" r="0.6">
+          <stop offset="0" stopColor="#ffd08a" stopOpacity="0.92" />
+          <stop offset="0.22" stopColor="#e8a94f" stopOpacity="0.55" />
+          <stop offset="0.5" stopColor="#c08331" stopOpacity="0.26" />
+          <stop offset="0.78" stopColor="#8a5c1e" stopOpacity="0.1" />
+          <stop offset="1" stopColor="#8a5c1e" stopOpacity="0" />
         </radialGradient>
-        <radialGradient id="ht-arch-glow" cx="0.5" cy="0.85" r="0.75">
-          <stop offset="0" stopColor="#a06b2c" stopOpacity="0.5" />
-          <stop offset="1" stopColor="#a06b2c" stopOpacity="0" />
+        <radialGradient id="hb-halo" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stopColor="#fff0cf" stopOpacity="1" />
+          <stop offset="0.32" stopColor="#ffc978" stopOpacity="0.62" />
+          <stop offset="1" stopColor="#e09a3a" stopOpacity="0" />
         </radialGradient>
-        <linearGradient id="ht-robe" x1="0" y1="0" x2="0.4" y2="1">
-          <stop offset="0" stopColor="#f2e9d8" />
-          <stop offset="0.6" stopColor="#ddcdae" />
-          <stop offset="1" stopColor="#bfa980" />
-        </linearGradient>
-        <linearGradient id="ht-robe-shade" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#8a6220" stopOpacity="0" />
-          <stop offset="1" stopColor="#5c3f16" stopOpacity="0.35" />
-        </linearGradient>
-        <linearGradient id="ht-skin" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#6b4226" />
-          <stop offset="1" stopColor="#3c2414" />
-        </linearGradient>
-        <linearGradient id="ht-brass" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#e3b365" />
-          <stop offset="0.5" stopColor="#b07f33" />
-          <stop offset="1" stopColor="#6d4a1a" />
-        </linearGradient>
-        <linearGradient id="ht-wood" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#3a2413" />
-          <stop offset="1" stopColor="#20120a" />
-        </linearGradient>
-        <radialGradient id="ht-flame" cx="0.5" cy="0.75" r="0.75">
-          <stop offset="0" stopColor="#fff3cf" />
-          <stop offset="0.45" stopColor="#f6c66a" />
-          <stop offset="1" stopColor="#d97b2a" stopOpacity="0.9" />
+        <radialGradient id="hb-flame" cx="0.5" cy="0.72" r="0.7">
+          <stop offset="0" stopColor="#fffaf0" />
+          <stop offset="0.4" stopColor="#ffd98a" />
+          <stop offset="1" stopColor="#e8892c" stopOpacity="0.85" />
         </radialGradient>
-        <radialGradient id="ht-vignette" cx="0.45" cy="0.55" r="0.85">
-          <stop offset="0" stopColor="#120a05" stopOpacity="0" />
-          <stop offset="0.72" stopColor="#120a05" stopOpacity="0" />
-          <stop offset="1" stopColor="#0c0603" stopOpacity="0.9" />
+        <linearGradient id="hb-brass" x1="0" y1="0" x2="0.3" y2="1">
+          <stop offset="0" stopColor="#c99a4e" />
+          <stop offset="0.45" stopColor="#8a6021" />
+          <stop offset="1" stopColor="#3a2810" />
+        </linearGradient>
+        <linearGradient id="hb-disc" x1="0.2" y1="0" x2="0.8" y2="1">
+          <stop offset="0" stopColor="#7a5522" />
+          <stop offset="0.5" stopColor="#4a3116" />
+          <stop offset="1" stopColor="#241708" />
+        </linearGradient>
+        <radialGradient id="hb-vignette" cx="0.58" cy="0.62" r="0.78">
+          <stop offset="0" stopColor="#0d0704" stopOpacity="0" />
+          <stop offset="0.55" stopColor="#0d0704" stopOpacity="0" />
+          <stop offset="0.82" stopColor="#0b0503" stopOpacity="0.6" />
+          <stop offset="1" stopColor="#080402" stopOpacity="0.95" />
         </radialGradient>
-        <filter id="ht-soft" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="16" />
+        <filter id="hb-blur-s" x="-70%" y="-70%" width="240%" height="240%">
+          <feGaussianBlur stdDeviation="9" />
         </filter>
-        <filter id="ht-softer" x="-80%" y="-80%" width="260%" height="260%">
-          <feGaussianBlur stdDeviation="34" />
+        <filter id="hb-blur-m" x="-70%" y="-70%" width="240%" height="240%">
+          <feGaussianBlur stdDeviation="26" />
         </filter>
-        <pattern
-          id="ht-lattice"
-          width="46"
-          height="46"
-          patternUnits="userSpaceOnUse"
-        >
-          <path
-            d="M23 3 43 23 23 43 3 23Z M23 13 33 23 23 33 13 23Z"
-            fill="none"
-            stroke="#c2913f"
-            strokeOpacity="0.1"
+        <filter id="hb-blur-l" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur stdDeviation="60" />
+        </filter>
+        <filter id="hb-grain">
+          <feTurbulence
+            type="fractalNoise"
+            baseFrequency="0.9"
+            numOctaves="3"
+            result="noise"
           />
-        </pattern>
+          <feColorMatrix type="saturate" values="0" />
+          <feComponentTransfer>
+            <feFuncA type="linear" slope="0.055" />
+          </feComponentTransfer>
+        </filter>
       </defs>
 
-      {/* Room */}
-      <rect width="720" height="880" fill="url(#ht-room)" />
-      <rect width="720" height="880" fill="url(#ht-lattice)" />
+      {/* Back wall */}
+      <rect width="1600" height="900" fill="url(#hb-wall)" />
 
-      {/* Arched alcove */}
-      <path
-        d="M96 880 V400 Q96 176 320 176 Q544 176 544 400 V880 Z"
-        fill="#241811"
-      />
-      <path
-        d="M96 880 V400 Q96 176 320 176 Q544 176 544 400 V880 Z"
-        fill="url(#ht-arch-glow)"
-      />
-      <path
-        d="M96 880 V400 Q96 176 320 176 Q544 176 544 400 V880"
-        fill="none"
-        stroke="#c2913f"
-        strokeOpacity="0.35"
-        strokeWidth="3"
-      />
-      <path
-        d="M120 880 V404 Q120 200 320 200 Q520 200 520 404 V880"
-        fill="none"
-        stroke="#c2913f"
-        strokeOpacity="0.14"
-        strokeWidth="1.5"
-      />
-
-      {/* Ambient candle glow */}
-      <ellipse cx="292" cy="648" rx="330" ry="300" fill="url(#ht-glow)" />
-
-      {/* Shelf with vessels (material culture, abstracted) */}
-      <rect x="558" y="392" width="130" height="8" rx="3" fill="#2c1c10" />
-      <path
-        d="M586 392 v-38 q0 -14 12 -14 q12 0 12 14 v38 Z"
-        fill="#3a2a1d"
-        stroke="#c2913f"
-        strokeOpacity="0.3"
-      />
-      <path
-        d="M626 392 v-24 q0 -20 16 -20 q16 0 16 20 v24 Z"
-        fill="#33220f"
-        stroke="#c2913f"
-        strokeOpacity="0.24"
-      />
-      <rect x="558" y="524" width="130" height="8" rx="3" fill="#2c1c10" />
-      <ellipse cx="606" cy="504" rx="22" ry="18" fill="#3a2a1d" />
-      <ellipse cx="606" cy="492" rx="14" ry="6" fill="url(#ht-brass)" opacity="0.75" />
-      <path
-        d="M648 524 v-30 l10 -12 h6 l10 12 v30 Z"
-        fill="#33220f"
-        stroke="#c2913f"
-        strokeOpacity="0.22"
-      />
-
-      {/* Seated figure — dignified, stylized, facing the candles */}
-      <g>
-        {/* flowing robe */}
-        <path
-          d="M212 880
-             C204 776 224 668 268 596
-             C286 566 300 540 306 512
-             L360 500
-             C400 540 428 596 446 660
-             C466 730 474 806 476 880 Z"
-          fill="url(#ht-robe)"
-        />
-        <path
-          d="M212 880 C204 776 224 668 268 596 C286 566 300 540 306 512 L360 500 C400 540 428 596 446 660 C466 730 474 806 476 880 Z"
-          fill="url(#ht-robe-shade)"
-        />
-        {/* fold lines */}
-        <path
-          d="M300 560 C296 640 288 730 292 880 M340 540 C356 620 368 720 372 880 M400 590 C416 668 428 760 432 880"
-          fill="none"
-          stroke="#a98e5f"
-          strokeOpacity="0.45"
-          strokeWidth="2.5"
-        />
-        {/* sleeve reaching toward the low table */}
-        <path
-          d="M306 560 C270 592 240 626 224 664 C216 684 228 700 250 694 C286 684 316 660 336 630 Z"
-          fill="#e7dcc2"
-        />
-        {/* neck + head, profile */}
-        <path
-          d="M318 508 q-4 -26 8 -34 q0 -18 10 -26 q16 -12 32 -2 q10 8 10 24 q0 10 -6 18 q10 10 6 22 q-24 12 -60 -2 Z"
-          fill="url(#ht-skin)"
-        />
-        {/* fila cap */}
-        <path
-          d="M330 448 q4 -22 26 -24 q22 -2 28 16 q2 8 -2 12 q-30 -10 -52 -4 Z"
-          fill="#8c3a30"
-        />
-        <path
-          d="M382 440 q14 2 12 16 l-10 4 q2 -12 -2 -20 Z"
-          fill="#7a2f27"
-        />
-        {/* coral bead strands */}
-        <path
-          d="M334 520 q22 18 46 12"
-          fill="none"
-          stroke="#a4392f"
-          strokeWidth="7"
-          strokeLinecap="round"
-          strokeDasharray="0.1 11"
-        />
-        <path
-          d="M330 534 q26 22 54 14"
-          fill="none"
-          stroke="#c04a37"
-          strokeWidth="6"
-          strokeLinecap="round"
-          strokeDasharray="0.1 10"
-        />
-      </g>
-
-      {/* Low table with brass vessels and candles */}
-      <g>
-        <path d="M104 704 H420 l-14 44 H120 Z" fill="url(#ht-wood)" />
-        <rect x="128" y="748" width="14" height="132" fill="#20120a" />
-        <rect x="382" y="748" width="14" height="132" fill="#1a0e07" />
-
-        {/* brass bowl */}
-        <ellipse cx="200" cy="700" rx="44" ry="12" fill="#6d4a1a" />
-        <path d="M156 700 q6 30 44 30 q38 0 44 -30 Z" fill="url(#ht-brass)" />
-        <ellipse cx="200" cy="700" rx="34" ry="8" fill="#2a1a0c" />
-        {/* calabash */}
-        <ellipse cx="266" cy="688" rx="24" ry="20" fill="#3a2413" />
-        <ellipse cx="266" cy="680" rx="20" ry="9" fill="#553517" />
-
-        {/* candles */}
-        <g>
-          <ellipse
-            cx="336"
-            cy="620"
-            rx="120"
-            ry="110"
-            fill="#f0b95c"
-            opacity="0.16"
-            filter="url(#ht-softer)"
-          />
-          <rect x="312" y="612" width="26" height="92" rx="5" fill="#efe3c6" />
-          <rect x="348" y="640" width="22" height="64" rx="5" fill="#e6d7b2" />
-          <rect x="378" y="660" width="18" height="44" rx="4" fill="#efe3c6" />
-          <ellipse
-            cx="325"
-            cy="596"
-            rx="20"
-            ry="26"
-            fill="#f6c66a"
-            opacity="0.5"
-            filter="url(#ht-soft)"
-          />
-          <path d="M325 574 q10 14 0 30 q-10 -16 0 -30 Z" fill="url(#ht-flame)" />
-          <ellipse
-            cx="359"
-            cy="626"
-            rx="16"
-            ry="20"
-            fill="#f6c66a"
-            opacity="0.5"
-            filter="url(#ht-soft)"
-          />
-          <path d="M359 608 q8 12 0 24 q-8 -13 0 -24 Z" fill="url(#ht-flame)" />
-          <ellipse
-            cx="387"
-            cy="648"
-            rx="13"
-            ry="16"
-            fill="#f6c66a"
-            opacity="0.45"
-            filter="url(#ht-soft)"
-          />
-          <path d="M387 634 q7 10 0 20 q-7 -11 0 -20 Z" fill="url(#ht-flame)" />
+      {/* Carved wall disc — decorative concentric geometry, softened
+          so it sits BEHIND the light rather than competing with it */}
+      <g
+        transform="translate(1010 330)"
+        filter="url(#hb-blur-s)"
+        opacity="0.85"
+      >
+        <circle r="196" fill="url(#hb-disc)" />
+        <circle r="196" fill="none" stroke="#c8933c" strokeOpacity="0.62" strokeWidth="8" />
+        <circle r="162" fill="none" stroke="#e0ab54" strokeOpacity="0.42" strokeWidth="3" />
+        <circle r="118" fill="none" stroke="#e0ab54" strokeOpacity="0.5" strokeWidth="5" />
+        <circle r="54" fill="none" stroke="#f0bf68" strokeOpacity="0.58" strokeWidth="4" />
+        <g stroke="#e0ab54" strokeOpacity="0.45" strokeWidth="4">
+          {Array.from({ length: 16 }, (_, index) => {
+            const angle = (index * Math.PI * 2) / 16
+            return (
+              <line
+                key={index}
+                x1={Math.cos(angle) * 122}
+                y1={Math.sin(angle) * 122}
+                x2={Math.cos(angle) * 160}
+                y2={Math.sin(angle) * 160}
+              />
+            )
+          })}
+        </g>
+        <g fill="#e0ab54" fillOpacity="0.4">
+          {Array.from({ length: 8 }, (_, index) => {
+            const angle = (index * Math.PI * 2) / 8 + Math.PI / 8
+            return (
+              <circle
+                key={index}
+                cx={Math.cos(angle) * 86}
+                cy={Math.sin(angle) * 86}
+                r="13"
+              />
+            )
+          })}
         </g>
       </g>
 
-      {/* Floor light pool + vignette */}
-      <ellipse cx="300" cy="856" rx="330" ry="70" fill="#c2913f" opacity="0.1" />
-      <rect width="720" height="880" fill="url(#ht-vignette)" />
+      {/* Carved column forms receding into shadow (abstract, faceless) */}
+      <g filter="url(#hb-blur-m)" opacity="0.85">
+        <path
+          d="M1318 900 V430 q0 -46 34 -46 q34 0 34 46 V900 Z"
+          fill="#20140a"
+        />
+        <path
+          d="M1404 900 V486 q0 -38 28 -38 q28 0 28 38 V900 Z"
+          fill="#190f07"
+        />
+        <path d="M1246 900 V520 q0 -30 22 -30 q22 0 22 30 V900 Z" fill="#1c1109" />
+      </g>
+
+      {/* Plinth + vessels, lit from the candles below-left */}
+      <g filter="url(#hb-blur-s)">
+        <rect x="792" y="596" width="470" height="26" rx="8" fill="#2a1a0f" />
+        <path d="M842 596 q6 -78 54 -78 q48 0 54 78 Z" fill="url(#hb-brass)" />
+        <ellipse cx="896" cy="520" rx="54" ry="13" fill="#f0c06e" opacity="0.85" />
+        <path
+          d="M988 596 v-96 q0 -34 26 -34 q26 0 26 34 v96 Z"
+          fill="url(#hb-brass)"
+        />
+        <path d="M1092 596 q4 -62 40 -62 q36 0 40 62 Z" fill="#5c3f17" />
+      </g>
+
+      {/* Warm key light from the candle cluster */}
+      <ellipse cx="1000" cy="650" rx="760" ry="620" fill="url(#hb-keylight)" />
+
+      {/* Foreground table edge */}
+      <path d="M640 742 H1600 V900 H600 Z" fill="#150c06" />
+      <path
+        d="M640 742 H1600"
+        stroke="#8a6021"
+        strokeOpacity="0.35"
+        strokeWidth="3"
+      />
+
+      {/* Candle cluster — the only crisp elements, as in a photograph
+          where the light source holds focus */}
+      <g>
+        {/* Ambient bloom, then per-flame glow — ALL behind the wax, so
+            the candles stay crisp instead of hiding in their own light */}
+        <ellipse
+          cx="866"
+          cy="628"
+          rx="300"
+          ry="225"
+          fill="url(#hb-halo)"
+          opacity="0.42"
+          filter="url(#hb-blur-l)"
+        />
+        {CANDLES.map((candle) => (
+          <ellipse
+            key={`glow-${candle.x}`}
+            cx={candle.x + candle.w / 2}
+            cy={candle.y - 30}
+            rx={candle.w * 1.5}
+            ry={candle.w * 1.9}
+            fill="#ffcf86"
+            opacity="0.42"
+            filter="url(#hb-blur-s)"
+          />
+        ))}
+        {CANDLES.map((candle) => (
+          <g key={candle.x}>
+            <rect
+              x={candle.x}
+              y={candle.y}
+              width={candle.w}
+              height={candle.h}
+              rx={candle.w / 2.4}
+              fill="#f6ead0"
+            />
+            <rect
+              x={candle.x + candle.w * 0.6}
+              y={candle.y}
+              width={candle.w * 0.4}
+              height={candle.h}
+              rx={candle.w / 3}
+              fill="#8a6b3c"
+              opacity="0.5"
+            />
+            <ellipse
+              cx={candle.x + candle.w / 2}
+              cy={candle.y + 3}
+              rx={candle.w / 2}
+              ry={candle.w / 6}
+              fill="#fff6e2"
+            />
+            <path
+              d={`M${candle.x + candle.w / 2} ${candle.y - 46}
+                  q${candle.w * 0.36} ${candle.w * 0.58} 0 ${candle.w * 1.05}
+                  q-${candle.w * 0.36} -${candle.w * 0.47} 0 -${candle.w * 1.05} Z`}
+              fill="url(#hb-flame)"
+            />
+          </g>
+        ))}
+      </g>
+
+      {/* Bokeh — distant light points, the photographic tell */}
+      <g filter="url(#hb-blur-s)">
+        {[
+          { cx: 1268, cy: 268, r: 20, o: 0.24 },
+          { cx: 1382, cy: 372, r: 14, o: 0.18 },
+          { cx: 1188, cy: 176, r: 11, o: 0.16 },
+          { cx: 1462, cy: 250, r: 17, o: 0.14 },
+          { cx: 748, cy: 300, r: 13, o: 0.12 },
+          { cx: 1528, cy: 452, r: 10, o: 0.12 },
+        ].map((dot) => (
+          <circle
+            key={`${dot.cx}-${dot.cy}`}
+            cx={dot.cx}
+            cy={dot.cy}
+            r={dot.r}
+            fill="#ffcf8a"
+            opacity={dot.o}
+          />
+        ))}
+      </g>
+
+      {/* Light pooling across the table */}
+      <ellipse
+        cx="900"
+        cy="782"
+        rx="430"
+        ry="84"
+        fill="#f0b458"
+        opacity="0.14"
+        filter="url(#hb-blur-m)"
+      />
+
+      {/* Atmospheric haze + vignette + grain */}
+      <rect width="1600" height="900" fill="url(#hb-vignette)" />
+      <rect width="1600" height="900" filter="url(#hb-grain)" opacity="0.5" />
     </svg>
   )
 }
