@@ -16,12 +16,15 @@ import type {
  * `POST /v1/audio/speech` that synthesizes in the request itself and
  * answers with RAW AUDIO BYTES (WAV by default). Parameters are the
  * OpenAI TTS set (`model`, `voice`, `input`, `response_format`) plus
- * 9jaLingo's `lang` extension (`yo` for Yoruba). Because the endpoint
- * is OpenAI-compatible, transport and authentication come from the
- * official `openai` client (`baseURL` + `apiKey` → `Authorization:
- * Bearer`), never from a hand-rolled HTTP layer: auth is the client's
- * documented job, and guessing at it is how header bugs become silent
- * 401 retries against a paid endpoint.
+ * 9jaLingo's `lang` extension (`yo` for Yoruba). 9jaLingo also ships
+ * its own SDKs (Python and Node, `npm install naijalingo`); this
+ * adapter DELIBERATELY uses the equally documented OpenAI-compatible
+ * surface instead, through the official `openai` client — pinned
+ * EXACTLY (see package.json), since a paid transport must not shift
+ * under a range — with `baseURL` + `apiKey` → `Authorization: Bearer`.
+ * Auth and transport are the client's documented job, never a
+ * hand-rolled HTTP layer: guessing at headers is how bugs become
+ * silent 401 retries against a paid endpoint.
  *
  * SYNCHRONOUS, HONESTLY. One call, one spend, bytes or an error —
  * there is no provider-side job, so `submitSpeech` answers
@@ -136,12 +139,13 @@ function createOpenAiCompatibleSpeechClient(
   })
   return {
     async createSpeech(body: NaijalingoSpeechRequestBody): Promise<Uint8Array> {
-      // `client.post` is the client's documented surface for an
+      // Both halves of this call are the client's DOCUMENTED public
+      // surface, and nothing else is used: generic `client.post` for an
       // OpenAI-compatible endpoint carrying a vendor extension (`lang`)
-      // the upstream types do not know about.
-      const response = await client
-        .post('/audio/speech', { body, __binaryResponse: true })
-        .asResponse()
+      // the upstream types do not know about, and `.asResponse()` for
+      // the raw, unconsumed HTTP response — which is already the WAV
+      // bytes, so no undocumented flag is needed to skip JSON parsing.
+      const response = await client.post('/audio/speech', { body }).asResponse()
       return new Uint8Array(await response.arrayBuffer())
     },
   }
@@ -149,11 +153,19 @@ function createOpenAiCompatibleSpeechClient(
 
 /**
  * Strict RIFF/WAVE duration reader: data-chunk bytes over the fmt
- * chunk's byte rate. Returns null for anything that is not a coherent
- * WAV stream — the caller treats null as a failed synthesis, never
- * guesses. Duration is MEASURED from the returned media (the Step 20
- * "real media timing" rule); it is never requested of, or reported by,
- * the provider.
+ * chunk's byte rate. Returns null for anything that is not a coherent,
+ * COMPLETE WAV stream — the caller treats null as a failed synthesis,
+ * never guesses. Duration is MEASURED from the returned media (the
+ * Step 20 "real media timing" rule); it is never requested of, or
+ * reported by, the provider.
+ *
+ * TRUNCATION FAILS CLOSED. Every chunk's DECLARED size must fully fit
+ * inside the bytes that actually arrived — a data chunk announcing
+ * 100,000 bytes of prayer audio of which only 40,000 came back is a
+ * partial download, and a partial download must be rejected outright,
+ * never shortened into a smaller "valid" prayer. Bounds are proven
+ * BEFORE any offset advances, so a hostile chunk size can neither
+ * truncate silently nor walk the cursor out of the buffer.
  */
 export function parseWavDurationMs(bytes: Uint8Array): number | null {
   const HEADER_BYTES = 12
@@ -175,18 +187,31 @@ export function parseWavDurationMs(bytes: Uint8Array): number | null {
     const chunkId = tag(offset)
     const chunkSize = view.getUint32(offset + 4, true)
     const body = offset + CHUNK_HEADER_BYTES
+    // THE INTEGRITY GATE: the declared chunk must fit, completely, in
+    // what arrived. Checked before the chunk is interpreted and before
+    // the cursor moves — a declared size beyond the buffer is either a
+    // truncated download or a malformed header, and both are refusals.
+    if (chunkSize > bytes.length - body) return null
     if (chunkId === 'fmt ') {
-      // Byte rate lives at fmt+8 in every PCM/extensible layout.
-      if (body + 12 > bytes.length) return null
+      // One fmt chunk, at least the 16-byte PCM layout, byte rate at
+      // fmt+8. Anything else is not a WAV this pipeline should trust.
+      if (byteRate != null) return null
+      if (chunkSize < 16) return null
       byteRate = view.getUint32(body + 8, true)
     } else if (chunkId === 'data') {
-      // Honor the declared size, bounded by what actually arrived — a
-      // truncated stream must not claim its declared length.
-      dataBytes = Math.min(chunkSize, bytes.length - body)
+      // Exactly one data chunk, taken at its DECLARED size — which the
+      // gate above has already proven is fully present.
+      if (dataBytes != null) return null
+      dataBytes = chunkSize
     }
     // RIFF chunks are word-aligned; odd sizes carry a pad byte.
     offset = body + chunkSize + (chunkSize % 2)
   }
+  // Leftover bytes too short to be a chunk header mean the stream was
+  // cut mid-header: also a truncation, also refused. (A single missing
+  // final pad byte can leave offset one past the end; that is the only
+  // overshoot the alignment rule itself can produce.)
+  if (offset < bytes.length) return null
   if (byteRate == null || byteRate <= 0) return null
   if (dataBytes == null || dataBytes <= 0) return null
   return Math.round((dataBytes / byteRate) * 1000)

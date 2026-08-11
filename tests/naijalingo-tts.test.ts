@@ -300,10 +300,37 @@ describe('the WAV duration reader', () => {
     ).toBe(1_000)
   })
 
-  it('honors ACTUAL bytes over a declared data size on a truncated stream', () => {
+  it('REJECTS a truncated stream outright — a partial prayer is never shortened into a "valid" one', () => {
+    // The data chunk DECLARES 32,000 bytes; only half arrived. The old
+    // behavior clamped to what arrived and produced a shorter, wrong
+    // duration — for approved prayer audio that is unacceptable, so
+    // truncation now fails CLOSED.
     const wav = buildWav({ dataBytes: 32_000 }) // declares 1000 ms
     const truncated = wav.subarray(0, 44 + 16_000) // half the data arrived
-    expect(parseWavDurationMs(truncated)).toBe(500)
+    expect(parseWavDurationMs(truncated)).toBeNull()
+    // A stream cut mid-chunk-header is the same truncation.
+    const midHeader = wav.subarray(0, 41)
+    expect(parseWavDurationMs(midHeader)).toBeNull()
+  })
+
+  it('REJECTS a chunk whose declared size exceeds the buffer, before any offset advances', () => {
+    // A hostile or corrupt header claiming a near-4GB data chunk must
+    // be refused at the bounds check — never used to size a duration
+    // and never allowed to walk the cursor.
+    const oversized = buildWav({ dataBytes: 16_000 })
+    new DataView(oversized.buffer).setUint32(40, 0xfffffff0, true)
+    expect(parseWavDurationMs(oversized)).toBeNull()
+    // Same rule applied to a non-data chunk: an fmt chunk that cannot
+    // fit is an incoherent stream, not something to skip past.
+    const badFmt = buildWav({ dataBytes: 16_000 })
+    new DataView(badFmt.buffer).setUint32(16, 0x7fffffff, true)
+    expect(parseWavDurationMs(badFmt)).toBeNull()
+  })
+
+  it('still ACCEPTS a complete, coherent WAV exactly', () => {
+    // The control for the two refusals above: completeness is the only
+    // thing being demanded, not some stricter dialect of WAV.
+    expect(parseWavDurationMs(buildWav({ dataBytes: 32_000 }))).toBe(1_000)
   })
 
   it('returns null for anything that is not a coherent WAV', () => {
@@ -316,6 +343,28 @@ describe('the WAV duration reader', () => {
     const zeroRate = buildWav({ dataBytes: 16 })
     new DataView(zeroRate.buffer).setUint32(28, 0, true)
     expect(parseWavDurationMs(zeroRate)).toBeNull()
+  })
+})
+
+describe('the production transport stays on the documented surface', () => {
+  it('uses only documented client API — no internal or undocumented request flags', async () => {
+    const source = await Bun.file('src/providers/tts/naijalingo.ts').text()
+    // Assembled from fragments so this file's own prose cannot trip it.
+    const undocumentedFlag = '__binary' + 'Response'
+    expect(source).not.toContain(undocumentedFlag)
+    // The documented pair that replaces it.
+    expect(source).toContain(".post('/audio/speech', { body })")
+    expect(source).toContain('.asResponse()')
+  })
+
+  it('pins the openai dependency EXACTLY — a paid transport must not shift under a semver range', async () => {
+    const pkg = JSON.parse(await Bun.file('package.json').text()) as {
+      dependencies: Record<string, string>
+    }
+    const pinned = pkg.dependencies.openai
+    // An exact version: digits and dots only — no ^, ~, x, ranges.
+    expect(pinned).toBe('7.4.0')
+    expect(/^\d+\.\d+\.\d+$/.test(pinned)).toBe(true)
   })
 })
 

@@ -1457,9 +1457,14 @@ voice — runs normally, and startup logs the reduced capability.
 **SPEECH HAS ONE APPROVED ADAPTER: 9JALINGO (Step 20).** 9jaLingo's
 officially documented OpenAI-compatible `POST /v1/audio/speech`, spoken
 to through the official `openai` client (`baseURL` + `apiKey` — auth is
-the client's documented job, never hand-rolled), with transport retries
-at ZERO (a retried synthesis is a second spend) and a timeout bounded
-below the reservation staleness threshold. The vendor synthesizes
+the client's documented job, never hand-rolled; only its DOCUMENTED
+public surface is used, and the dependency is pinned to an EXACT
+version because a paid transport must not shift under a semver range),
+with transport retries at ZERO (a retried synthesis is a second spend)
+and a timeout bounded below the reservation staleness threshold.
+9jaLingo also publishes its own Python and Node SDKs; the
+OpenAI-compatible surface is the deliberate choice here, not a
+workaround for an SDK that does not exist. The vendor synthesizes
 SYNCHRONOUSLY — WAV bytes in the response — so the TtsProvider contract
 gained a second honest submission shape, `COMPLETED` + artifact,
 alongside the async `PENDING` + providerJobId. Nothing is faked to
@@ -1467,8 +1472,11 @@ bridge the two: no invented provider job id, no pretend polling, no
 in-memory artifact stash. The executor's at-most-once lifecycle is
 UNCHANGED: the durable reservation still precedes the call; a
 synchronous success verifies and stores the exact returned bytes (mime
-allowlist, bounded MEASURED WAV duration, fresh server-side SHA-256)
-and CASes the reservation directly to SUCCEEDED; a throw or ambiguous
+allowlist, bounded MEASURED WAV duration, fresh server-side SHA-256 —
+and every declared RIFF chunk must FULLY fit the bytes that arrived: a
+truncated download is rejected outright, never shortened into a
+smaller "valid" prayer) and CASes the reservation directly to
+SUCCEEDED; a throw or ambiguous
 outcome after the reservation is quarantined
 `provider_outcome_unknown`; a success whose CAS loses removes the
 just-stored orphan bytes and NEVER synthesizes again. Governance:
