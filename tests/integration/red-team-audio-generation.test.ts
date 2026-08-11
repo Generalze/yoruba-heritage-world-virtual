@@ -85,6 +85,9 @@ import {
 import {
   AUDIO_TASK_POLL_DELAY_MS,
   DEFAULT_LEASE_MS,
+  PROVIDER_OUTCOME_UNKNOWN,
+  RESERVATION_STALE_AFTER_MS,
+  adminRetryGenerationJob,
   GENERATION_TRANSITIONS,
   claimNextAudioGenerationJob,
   isLegalTransition,
@@ -101,6 +104,8 @@ import {
   submitSpeech,
   verifyExistingHumanAudio,
 } from '@/services/audio-generation'
+import { TtsProviderError } from '@/providers/tts/types'
+import { createNaijalingoTtsProvider } from '@/providers/tts/naijalingo'
 import {
   resetTtsProviderForTests,
   setTtsProviderForTests,
@@ -126,6 +131,10 @@ import type {
   SpeechSynthesisSubmission,
   TtsProvider,
 } from '@/providers/tts/types'
+import type {
+  NaijalingoSpeechRequestBody,
+  NaijalingoTtsConfig,
+} from '@/providers/tts/naijalingo'
 import type { SacredProfileInput } from '@/services/sacred-content'
 import type { SlotInput } from '@/services/prayer-templates'
 
@@ -271,6 +280,7 @@ async function makeEligibleSacred(options: {
   contentType?: 'PRAYER' | 'CHANT' | 'BLESSING'
   voicePolicy?: 'TEXT_ONLY' | 'APPROVED_TTS_ALLOWED' | 'HUMAN_RECORDED_REQUIRED'
   durationHintSeconds?: number
+  language?: 'en' | 'yo'
 }): Promise<{ itemId: number; versionId: number; bodyMarker: string }> {
   const bodyMarker = `${SACRED_BODY_MARKER} ${crypto.randomUUID()}`
   const item = await createSacredContentItem(cmId, ctx, {
@@ -287,7 +297,7 @@ async function makeEligibleSacred(options: {
     ctx,
     item.id,
     {
-      language: 'en',
+      language: options.language ?? 'en',
       title: 'Red-team audio sacred block',
       body: bodyMarker,
     },
@@ -726,7 +736,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 48; i += 1) {
+  for (let i = 0; i < 72; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTAS${i}_${key}`.toUpperCase(),
@@ -2399,5 +2409,1097 @@ describe('red-team: a tampered task row never reaches a provider', () => {
     expect(spy.pollCalls).toBe(0)
     expect(outcome.status).not.toBe('COMPLETE')
     expect(job.status).not.toBe('RENDERING')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20 follow-up: the audio stage gets the SAME adversarial choreography
+// the visual stage has — reclaimed workers, live vs stale reservations, late
+// responses, spend classification and the admin gate. DB-driven throughout.
+// ----------------------------------------------------------------------------
+
+async function readJob(jobId: number) {
+  return (
+    await getDb()
+      .select()
+      .from(prayerGenerationJobs)
+      .where(eq(prayerGenerationJobs.id, jobId))
+      .limit(1)
+  ).at(0)!
+}
+
+async function advanceToNextAttempt(
+  jobId: number,
+  clock: ReturnType<typeof makeFakeClock>,
+): Promise<void> {
+  const job = await readJob(jobId)
+  if (job.nextAttemptAt != null) {
+    const dueMs = new Date(job.nextAttemptAt).getTime()
+    if (dueMs > clock.now().getTime()) {
+      clock.advance(dueMs - clock.now().getTime() + 1_000)
+    }
+  }
+}
+
+describe('red-team: a reclaimed audio worker never submits a second time', () => {
+  it('a fresh reservation makes B WAIT; a stale one is quarantined; a late FAILED cannot overwrite', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    let freshSubmits = 0
+    let staleSubmits = 0
+
+    const zombie: AudioGenerationDependencies = {
+      submitSpeech: async () => {
+        submits += 1
+        // A's heartbeat stalls; its job lease is reclaimed while it
+        // waits on the provider.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        await advanceToNextAttempt(jobId, clock)
+
+        // --- B, while the reservation is FRESH ---------------------
+        const bFresh = await runAudioGenerationOnce('b-fresh', clock, {
+          submitSpeech: async () => {
+            freshSubmits += 1
+            throw new Error('B must not submit while a reservation is live')
+          },
+          pollSpeech: async () => ({ status: 'PROCESSING' }),
+        })
+        // TEETH: B waits. Zero submissions, zero quarantines of a
+        // request that may still be in flight.
+        expect(bFresh.status).toBe('WAITING')
+        expect(freshSubmits).toBe(0)
+        const live = (await audioTaskRows(jobId))[0]
+        expect(live.status).toBe('SUBMITTED')
+        expect(live.providerOperationId).toBeNull()
+
+        // --- B, once it is genuinely STALE -------------------------
+        clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        await advanceToNextAttempt(jobId, clock)
+        const bStale = await runAudioGenerationOnce('b-stale', clock, {
+          submitSpeech: async () => {
+            staleSubmits += 1
+            throw new Error('B must never resubmit')
+          },
+          pollSpeech: async () => ({ status: 'PROCESSING' }),
+        })
+        expect(bStale.status).toBe('FAILED')
+        expect(staleSubmits).toBe(0)
+        const quarantined = (await audioTaskRows(jobId))[0]
+        expect(quarantined.status).toBe('CANCELLED')
+        expect(quarantined.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+
+        // ONLY NOW does A's late verdict come back.
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'late_zombie_failure',
+          errorMessage: null,
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    }
+
+    const a = await runAudioGenerationOnce('worker-A', clock, zombie)
+    expect(a.status).toBe('LEASE_LOST')
+
+    // TEETH: A's late FAILED cannot replace the quarantine, and the
+    // whole episode cost exactly ONE provider submission.
+    const final = (await audioTaskRows(jobId))[0]
+    expect(final.status).toBe('CANCELLED')
+    expect(final.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(submits).toBe(1)
+
+    const job = await readJob(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+  }, 240_000)
+
+  it('a late operation id cannot resurrect a quarantined reservation', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+
+    const zombie: AudioGenerationDependencies = {
+      submitSpeech: async () => {
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        await advanceToNextAttempt(jobId, clock)
+        const bStale = await runAudioGenerationOnce('b-stale-2', clock, {
+          submitSpeech: async () => {
+            throw new Error('B must never resubmit')
+          },
+          pollSpeech: async () => ({ status: 'PROCESSING' }),
+        })
+        expect(bStale.status).toBe('FAILED')
+        // A's answer arrives AFTER the quarantine — with a perfectly
+        // valid operation id.
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-arrived-too-late',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    }
+
+    const a = await runAudioGenerationOnce('worker-A2', clock, zombie)
+    expect(a.status).toBe('LEASE_LOST')
+    // TEETH: the success write CASes on the reserved state, so it
+    // loses against CANCELLED — the operation id is never recorded and
+    // the quarantine stands.
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.providerOperationId).toBeNull()
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+  }, 240_000)
+
+  it('a durably recorded operation id is POLLED by the next worker, never resubmitted', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runAudioGenerationOnce('w-op-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-continue-me',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('WAITING')
+
+    // Long past the staleness threshold: a KNOWN operation is still
+    // continued, never quarantined and never resubmitted.
+    clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+    await recoverExpiredGenerationLeases(clock)
+    await advanceToNextAttempt(jobId, clock)
+
+    const polls: Array<string> = []
+    const second = await runAudioGenerationOnce('w-op-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a known operation must be polled, never resubmitted')
+      },
+      pollSpeech: async (input) => {
+        polls.push(input.providerOperationId)
+        return { status: 'PROCESSING' }
+      },
+    })
+    expect(second.status).toBe('WAITING')
+    expect(polls).toEqual(['op-continue-me'])
+    expect(submits).toBe(1)
+  }, 240_000)
+
+  it('a late stale poll verdict cannot overwrite a genuine SUCCEEDED result', async () => {
+    const { jobId, requirement } = await makeTtsJob()
+    const windowMs = requirement.endMs - requirement.startMs
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('w-succ-seed', clock, {
+        submitSpeech: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-to-finish',
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 1_000)
+    const artifact = await storeRealArtifact(windowMs)
+
+    const zombiePoll: AudioGenerationDependencies = {
+      submitSpeech: async () => {
+        throw new Error('no submission expected')
+      },
+      pollSpeech: async () => {
+        // A's poll stalls; B reclaims and finishes the SAME operation.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        await advanceToNextAttempt(jobId, clock)
+        const b = await runAudioGenerationOnce('b-finishes', clock, {
+          submitSpeech: async () => {
+            throw new Error('B polls, it does not resubmit')
+          },
+          pollSpeech: async () => artifact,
+        })
+        expect(b.status).not.toBe('IDLE')
+        const succeeded = (await audioTaskRows(jobId))[0]
+        expect(succeeded.status).toBe('SUCCEEDED')
+        // A's own stale verdict lands only now.
+        return {
+          status: 'FAILED',
+          errorCode: 'late_stale_poll_verdict',
+          errorMessage: null,
+        }
+      },
+    }
+    const a = await runAudioGenerationOnce('worker-A3', clock, zombiePoll)
+    expect(a.status).toBe('LEASE_LOST')
+    // TEETH: the row still holds the genuine result, byte for byte.
+    const final = (await audioTaskRows(jobId))[0]
+    expect(final.status).toBe('SUCCEEDED')
+    expect(final.artifactSha256).toBe(artifact.artifactSha256)
+  }, 240_000)
+})
+
+describe('red-team: audio spend classification decides retry or quarantine', () => {
+  it('a NOT_SENT refusal lands on the RESERVED row and is retryable', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runAudioGenerationOnce('a-ns-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await audioTaskRows(jobId))[0]
+    // TEETH for the reserved-state CAS: the DATABASE changed.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+
+    await advanceToNextAttempt(jobId, clock)
+    const second = await runAudioGenerationOnce('a-ns-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-after-free-retry',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    expect((await audioTaskRows(jobId))[0].status).toBe('SUBMITTED')
+  }, 240_000)
+
+  it('an UNKNOWN failure quarantines and can NEVER take the retry path', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const outcome = await runAudioGenerationOnce('a-unk-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // NO spendState: absence is UNKNOWN, and UNKNOWN never retries.
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'ambiguous_transport_failure',
+          errorMessage: null,
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.submittedAt).not.toBeNull()
+    const job = await readJob(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.nextAttemptAt).toBeNull()
+    const again = await runAudioGenerationOnce('a-unk-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
+
+  it('an operation id too long for its column is quarantined after contact', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runAudioGenerationOnce('a-long-op', clock, {
+      submitSpeech: async () => ({
+        status: 'SUBMITTED',
+        providerCode: 'MOCK_TTS',
+        providerOperationId: 'x'.repeat(201),
+      }),
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.providerOperationId).toBeNull()
+  }, 240_000)
+
+  it('a compile refusal in the REAL submitSpeech is provably NOT_SENT', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    // A wrong caller-supplied idempotency key is refused during
+    // compilation, strictly before any provider work.
+    const result = await submitSpeech({
+      requirement,
+      generationJobId: jobId,
+      manifestSha256: manifest.manifestSha256,
+      idempotencyKey: 'deliberately-wrong',
+    })
+    expect(result.status).toBe('FAILED')
+    if (result.status !== 'FAILED') return
+    expect(result.errorCode).toBe('idempotency_key_mismatch')
+    expect(result.spendState).toBe('NOT_SENT')
+  }, 240_000)
+
+  it('a provider-boundary failure in the REAL submitSpeech is never NOT_SENT', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    setTtsProviderForTests({
+      code: 'MOCK_TTS',
+      displayName: 'throwing test provider',
+      isEnabled: () => true,
+      submitSpeech: async () => {
+        throw new TtsProviderError(
+          'provider_unreachable',
+          'synthetic transport failure',
+          true,
+        )
+      },
+      pollSpeech: async () => {
+        throw new TtsProviderError('unused', 'unused', false)
+      },
+    })
+    try {
+      const result = await submitSpeech({
+        requirement,
+        generationJobId: jobId,
+        manifestSha256: manifest.manifestSha256,
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('provider_unreachable')
+      // The request may have crossed the boundary before the throw.
+      expect(result.spendState).toBeUndefined()
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('an in-seam provider SWITCH refusal — NOT_SENT under the NEW code — stays retryable', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runAudioGenerationOnce('a-switch-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // The seam's own selection check caught a provider switch and
+        // refused BEFORE the network — reporting the NEW provider's
+        // code, because that is who it honestly saw. NOT_SENT must be
+        // honored BEFORE the provider-binding gate: gating first would
+        // quarantine this free refusal into a dead recording.
+        return {
+          status: 'FAILED',
+          providerCode: 'SWITCHED_TTS',
+          errorCode: 'provider_selection_changed',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await audioTaskRows(jobId))[0]
+    // TEETH: retryable, not quarantined — the DATABASE says so.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+    expect(afterFirst.lastErrorCode).toBe('provider_selection_changed')
+
+    await advanceToNextAttempt(jobId, clock)
+    const second = await runAudioGenerationOnce('a-switch-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-after-switch-refusal',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    // The refusal cost nothing: the SAME requirement submits cleanly
+    // under the provider actually reserved.
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    expect((await audioTaskRows(jobId))[0].status).toBe('SUBMITTED')
+  }, 240_000)
+
+  it('a submitSpeech that THROWS after the reservation is quarantined, raw error dropped', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    const marker = `boom-${crypto.randomUUID()}`
+    let submits = 0
+    const outcome = await runAudioGenerationOnce('a-throw-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // The reservation is durable and the call was in flight when
+        // this escaped — the request may already have been accepted.
+        throw new Error(marker)
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    // Quarantined DETERMINISTICALLY — never handed to the generic
+    // error path, which would burn the budget as a retry and leave
+    // the row waiting to go stale.
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // Submission evidence retained — the NOT_SENT reset can never
+    // touch this row.
+    expect(row.submittedAt).not.toBeNull()
+    // The exception itself was DROPPED, not recorded: raw provider
+    // errors reach neither rows nor events.
+    expect(
+      JSON.stringify({
+        rows: await audioTaskRows(jobId),
+        events: await jobEventRows(jobId),
+      }),
+    ).not.toContain(marker)
+    const job = await readJob(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+    const again = await runAudioGenerationOnce('a-throw-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
+})
+
+describe('red-team: admin retry refuses unresolved audio spend (DB-driven)', () => {
+  it('a quarantined audio task blocks the generic admin retry', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-1', clock, {
+        submitSpeech: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'ambiguous',
+          errorMessage: null,
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('FAILED')
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    expect((await readJob(jobId)).status).toBe('FAILED')
+  }, 240_000)
+
+  it('a LEGACY failed-with-evidence audio row blocks it too', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-2', clock, {
+        submitSpeech: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-legacy',
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    await getDb()
+      .update(prayerGenerationAudioTasks)
+      .set({
+        status: 'FAILED',
+        providerOperationId: null,
+        lastErrorCode: 'legacy_provider_error',
+      })
+      .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a MAX-ATTEMPT STRANDED reservation — still SUBMITTED, no operation id — blocks it', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    // Spend the whole budget beforehand, so the next lease recovery is
+    // the LAST: the job dies with its reservation still open, and no
+    // later worker cycle ever exists to normalize the row.
+    const fresh = await readJob(jobId)
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ attemptCount: fresh.maxAttempts - 1 })
+      .where(eq(prayerGenerationJobs.id, jobId))
+
+    let refusedWhileStranded: unknown
+    const outcome = await runAudioGenerationOnce('a-adm-strand', clock, {
+      submitSpeech: async () => {
+        // The durable reservation exists NOW. This worker "dies": its
+        // lease expires and recovery — budget exhausted — fails the
+        // job terminally, stranding the reservation.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        const dead = await readJob(jobId)
+        expect(dead.status).toBe('FAILED')
+        expect(dead.lastErrorCode).toBe('LEASE_EXPIRED')
+        expect(dead.nextAttemptAt).toBeNull()
+        const stranded = (await audioTaskRows(jobId))[0]
+        // THE SHAPE A NARROWER GUARD MISSES: not a quarantine, not a
+        // legacy FAILED — literally SUBMITTED with no operation id,
+        // while the request may be executing right now.
+        expect(stranded.status).toBe('SUBMITTED')
+        expect(stranded.providerOperationId).toBeNull()
+        expect(stranded.submittedAt).not.toBeNull()
+        try {
+          await adminRetryGenerationJob(adminId, ctx, jobId)
+        } catch (error) {
+          refusedWhileStranded = error
+        }
+        throw new Error('worker dies without a provider verdict')
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    // Refused AT THE MOMENT the row was still a bare reservation.
+    expect(String((refusedWhileStranded as Error).message)).toContain(
+      'unresolved',
+    )
+    expect(outcome.status).toBe('LEASE_LOST')
+    // The dying worker's own throw then sealed the reservation, and
+    // the refusal holds for the sealed shape too.
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.submittedAt).not.toBeNull()
+    expect((await readJob(jobId)).status).toBe('FAILED')
+    let refusedAfter: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refusedAfter = error
+    }
+    expect(String((refusedAfter as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a KNOWN OPERATION mid-poll — SUBMITTED with an operation id — blocks it', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-op', clock, {
+        submitSpeech: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          // Deliberately unnormalized: interior caps and surrounding
+          // whitespace, valid because it is non-empty after trimming.
+          providerOperationId: '  Op-Verbatim-TTS  ',
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    // BYTE-FOR-BYTE: the id was validated raw and persisted verbatim —
+    // never trimmed, lowercased or otherwise "tidied" — because the
+    // provider will be asked for it back exactly as issued.
+    const submitted = (await audioTaskRows(jobId))[0]
+    expect(submitted.providerOperationId).toBe('  Op-Verbatim-TTS  ')
+    // The job dies later for an unrelated reason; the paid operation
+    // itself is still out there.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        lastErrorCode: 'LEASE_EXPIRED',
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    // And the operation record is untouched — reconciliation, not
+    // amnesia.
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('SUBMITTED')
+    expect(row.providerOperationId).toBe('  Op-Verbatim-TTS  ')
+  }, 240_000)
+
+  it('even a SUCCEEDED task blocks it — paid output a restart would abandon and re-buy', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-succ-1', clock, realDependencies))
+        .status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 60_000)
+    expect(
+      (await runAudioGenerationOnce('a-adm-succ-2', clock, realDependencies))
+        .status,
+    ).toBe('COMPLETE')
+    expect((await readJob(jobId)).status).toBe('RENDERING')
+    // A LATER stage then fails the job; the audio spend is real and
+    // already delivered.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('SUCCEEDED')
+    expect(row.submittedAt).not.toBeNull()
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    // Restart-from-PREPARING would mint fresh task identities and buy
+    // this synthesis a second time while abandoning the artifact
+    // already paid for.
+    expect(String((refused as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a provably-unsent failure (submittedAt NULL) remains retryable — the control', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-free', clock, {
+        submitSpeech: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('RETRY_SCHEDULED')
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('FAILED')
+    expect(row.submittedAt).toBeNull()
+    // The job's own budget then runs out on later, equally free
+    // failures — seeded directly; the row keeps its NOT_SENT shape.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        resumeStatus: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    // TEETH: the blunt rule does NOT overreach. No submission evidence
+    // exists, so the generic retry PROCEEDS.
+    await adminRetryGenerationJob(adminId, ctx, jobId)
+    const retried = await readJob(jobId)
+    expect(retried.status).toBe('RETRYING')
+    expect(retried.resumeStatus).toBe('PREPARING')
+    expect(retried.attemptCount).toBe(0)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20: 9jaLingo — the synchronous production TTS provider
+// ----------------------------------------------------------------------------
+
+/** Test doubles ONLY: zero network, zero real API, zero spend. */
+const NAIJALINGO_TEST_CONFIG: NaijalingoTtsConfig = {
+  apiKey: 'rt-test-secret-key',
+  baseUrl: 'https://api.example-9jalingo.test/v1',
+  model: 'naijalingo-tts-1',
+  yorubaVoiceId: 'adeola_yo',
+}
+
+/** Minimal coherent PCM WAV (16 kHz mono 16-bit ⇒ byteRate 32000). */
+function buildTestWav(dataBytes: number): Uint8Array {
+  const data = new Uint8Array(dataBytes)
+  for (let i = 0; i < data.length; i += 1) data[i] = (i * 7) % 251
+  const bytes = new Uint8Array(44 + data.length)
+  const view = new DataView(bytes.buffer)
+  const writeTag = (offset: number, text: string): void => {
+    for (let i = 0; i < text.length; i += 1) {
+      bytes[offset + i] = text.charCodeAt(i)
+    }
+  }
+  writeTag(0, 'RIFF')
+  view.setUint32(4, 36 + data.length, true)
+  writeTag(8, 'WAVE')
+  writeTag(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, 16_000, true)
+  view.setUint32(28, 32_000, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeTag(36, 'data')
+  view.setUint32(40, data.length, true)
+  bytes.set(data, 44)
+  return bytes
+}
+
+/** A REAL yo-language sacred fixture plus the manifest-shaped
+ * requirement the executor would derive for it — no job or template
+ * plumbing needed for service-level proofs. */
+async function makeYorubaTtsRequirement(): Promise<{
+  requirement: ManifestAudioRequirement
+  bodyMarker: string
+  identity: { generationJobId: number; manifestSha256: string }
+}> {
+  const theme = `${CODE_PREFIX}_9JA_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  const sacred = await makeEligibleSacred({
+    themeCode: theme,
+    contentType: 'PRAYER',
+    voicePolicy: 'APPROVED_TTS_ALLOWED',
+    language: 'yo',
+  })
+  const profile = (
+    await getDb()
+      .select({
+        contentSha256: sacredContentVersionProfiles.contentSha256,
+      })
+      .from(sacredContentVersionProfiles)
+      .where(eq(sacredContentVersionProfiles.contentVersionId, sacred.versionId))
+      .limit(1)
+  ).at(0)!
+  const requirement: ManifestAudioRequirement = {
+    mode: 'TTS_PENDING',
+    mediaAssetVersionId: null,
+    fileSha256: null,
+    contentVersionId: sacred.versionId,
+    contentSha256: profile.contentSha256!,
+    language: 'yo',
+    voicePolicy: 'APPROVED_TTS_ALLOWED',
+    requirementId: `req-9ja-${crypto.randomUUID().slice(0, 8)}`,
+    sceneId: 'scene-9ja-1',
+    startMs: 0,
+    endMs: 10_000,
+  }
+  return {
+    requirement,
+    bodyMarker: sacred.bodyMarker,
+    identity: {
+      generationJobId: 987_654,
+      manifestSha256: 'b'.repeat(64),
+    },
+  }
+}
+
+describe('red-team: 9jaLingo synchronous synthesis (fake client, ZERO network)', () => {
+  it('the REAL seam + REAL adapter sends the exact approved Yoruba text once and answers COMPLETED with stored, hashed bytes', async () => {
+    const { requirement, bodyMarker, identity: taskIdentity } =
+      await makeYorubaTtsRequirement()
+    const wav = buildTestWav(64_000) // 2000 ms at byteRate 32000
+    const calls: Array<NaijalingoSpeechRequestBody> = []
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech(body) {
+          calls.push(body)
+          return wav
+        },
+      }),
+    )
+    try {
+      const result = await submitSpeech({ requirement, ...taskIdentity })
+      // ONE call carrying the approved text VERBATIM — the fixture's
+      // exact body — under the operator-configured voice and model,
+      // as Yoruba, as WAV, and nothing else.
+      expect(calls).toHaveLength(1)
+      expect(calls[0].input).toBe(bodyMarker)
+      expect(calls[0].lang).toBe('yo')
+      expect(calls[0].response_format).toBe('wav')
+      expect(calls[0].voice).toBe(NAIJALINGO_TEST_CONFIG.yorubaVoiceId)
+      expect(calls[0].model).toBe(NAIJALINGO_TEST_CONFIG.model)
+      expect(Object.keys(calls[0]).sort()).toEqual([
+        'input',
+        'lang',
+        'model',
+        'response_format',
+        'voice',
+      ])
+
+      expect(result.status).toBe('COMPLETED')
+      if (result.status !== 'COMPLETED') return
+      expect(result.providerCode).toBe('9JALINGO')
+      // The ACTUAL returned bytes were hashed fresh and stored — the
+      // claim is provable against private storage right now.
+      expect(result.artifactSha256).toBe(computeFileSha256(wav))
+      expect(result.artifactMimeType).toBe('audio/wav')
+      expect(result.artifactDurationMs).toBe(2_000)
+      const stored = readFileSync(join(storageRoot, result.artifactStorageRef))
+      expect(new Uint8Array(stored)).toEqual(new Uint8Array(wav))
+      // And the result the pipeline would persist carries no text.
+      expect(JSON.stringify(result)).not.toContain(bodyMarker)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('an unsupported language is refused NOT_SENT, BEFORE compilation, with ZERO client calls', async () => {
+    let clientCalls = 0
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech() {
+          clientCalls += 1
+          throw new Error('the client must never be reached')
+        },
+      }),
+    )
+    try {
+      // The contentVersionId deliberately does NOT exist: if the
+      // language gate ran AFTER compilation, this would surface
+      // sacred_content_missing instead. Seeing the language refusal
+      // proves the gate fires before the body could even be looked up.
+      const requirement = {
+        mode: 'TTS_PENDING',
+        mediaAssetVersionId: null,
+        fileSha256: null,
+        contentVersionId: 999_999_999,
+        contentSha256: 'c'.repeat(64),
+        language: 'en',
+        voicePolicy: 'APPROVED_TTS_ALLOWED',
+        requirementId: 'req-9ja-en-refusal',
+        sceneId: 'scene-9ja-en',
+        startMs: 0,
+        endMs: 10_000,
+      } as ManifestAudioRequirement
+      const result = await submitSpeech({
+        requirement,
+        generationJobId: 987_655,
+        manifestSha256: 'b'.repeat(64),
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('language_unsupported_by_provider')
+      // PROVABLY not sent: freely retryable, never quarantined — and
+      // the prayer is NEVER translated to fit a provider.
+      expect(result.spendState).toBe('NOT_SENT')
+      expect(clientCalls).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a thrown client call surfaces as a FIXED unknown-spend failure with no text or key in it', async () => {
+    const { requirement, bodyMarker, identity: taskIdentity } =
+      await makeYorubaTtsRequirement()
+    const marker = `leak-${crypto.randomUUID()}`
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech() {
+          throw new Error(
+            `transport blew up: ${marker} key=${NAIJALINGO_TEST_CONFIG.apiKey}`,
+          )
+        },
+      }),
+    )
+    try {
+      const result = await submitSpeech({ requirement, ...taskIdentity })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('provider_call_failed')
+      // NO spendState: the call was in flight, so the executor treats
+      // it as an unknown outcome and quarantines — the exact discipline
+      // every ambiguous submission already gets.
+      expect(result.spendState).toBeUndefined()
+      const serialized = JSON.stringify(result)
+      expect(serialized).not.toContain(marker)
+      expect(serialized).not.toContain(NAIJALINGO_TEST_CONFIG.apiKey)
+      expect(serialized).not.toContain(bodyMarker)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('bytes that are not a coherent WAV are a failed synthesis with unknown spend — never an artifact', async () => {
+    const { requirement, identity: taskIdentity } =
+      await makeYorubaTtsRequirement()
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech() {
+          return new TextEncoder().encode('<html>502 Bad Gateway</html>')
+        },
+      }),
+    )
+    try {
+      const result = await submitSpeech({ requirement, ...taskIdentity })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('artifact_wav_invalid')
+      expect(result.spendState).toBeUndefined()
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+describe('red-team: the synchronous COMPLETED path through the JOB LOOP (DB-driven)', () => {
+  it('a synchronous success resolves the reservation DIRECTLY to SUCCEEDED and finalizes in ONE cycle', async () => {
+    const { jobId, bodyMarker } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const wav = buildTestWav(64_000)
+    const outcome = await runAudioGenerationOnce('a-sync-ok', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // AT-MOST-ONCE IS PRESERVED: the durable reservation exists
+        // BEFORE the synchronous call, exactly as for async providers.
+        const reserved = (await audioTaskRows(jobId))[0]
+        expect(reserved.status).toBe('SUBMITTED')
+        expect(reserved.providerOperationId).toBeNull()
+        expect(reserved.submittedAt).not.toBeNull()
+        // The seam stores the verified bytes BEFORE answering — this
+        // fake does exactly what the real one does.
+        const { storageKey } = await storage.put(wav, 'wav')
+        return {
+          status: 'COMPLETED',
+          providerCode: 'MOCK_TTS',
+          artifactSha256: computeFileSha256(wav),
+          artifactMimeType: 'audio/wav',
+          artifactDurationMs: 2_000,
+          artifactStorageRef: storageKey,
+        }
+      },
+      pollSpeech: async () => {
+        throw new Error('a synchronous completion must never be polled')
+      },
+    })
+    // ONE cycle: submit → SUCCEEDED → finalization gate → RENDERING.
+    expect(outcome.status).toBe('COMPLETE')
+    expect(submits).toBe(1)
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('SUCCEEDED')
+    // No operation id ever existed and none was invented.
+    expect(row.providerOperationId).toBeNull()
+    // Submission evidence is RETAINED — the generic admin retry stays
+    // blocked for this paid, delivered work.
+    expect(row.submittedAt).not.toBeNull()
+    expect(row.artifactSha256).toBe(computeFileSha256(wav))
+    expect(row.artifactMimeType).toBe('audio/wav')
+    const stored = readFileSync(join(storageRoot, row.artifactStorageRef!))
+    expect(new Uint8Array(stored)).toEqual(new Uint8Array(wav))
+    expect((await readJob(jobId)).status).toBe('RENDERING')
+    // Nothing about the approved text survives anywhere.
+    const payload = JSON.stringify({
+      rows: await audioTaskRows(jobId),
+      events: await jobEventRows(jobId),
+      job: await readJob(jobId),
+    })
+    expect(payload).not.toContain(bodyMarker)
+  }, 240_000)
+
+  it('a LOST success CAS removes the freshly stored artifact and NEVER synthesizes again', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    let storedKey: string | null = null
+    const wav = buildTestWav(32_000)
+    const outcome = await runAudioGenerationOnce('a-sync-lost', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // While the (long) synchronous call is in flight, another
+        // worker judges the reservation stale and seals it — the same
+        // quarantine the stale-reservation sweep writes.
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({
+            status: 'CANCELLED',
+            lastErrorCode: 'provider_outcome_unknown',
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+        const { storageKey } = await storage.put(wav, 'wav')
+        storedKey = storageKey
+        expect(await storage.exists(storageKey)).toBe(true)
+        return {
+          status: 'COMPLETED',
+          providerCode: 'MOCK_TTS',
+          artifactSha256: computeFileSha256(wav),
+          artifactMimeType: 'audio/wav',
+          artifactDurationMs: 1_000,
+          artifactStorageRef: storageKey,
+        }
+      },
+      pollSpeech: async () => {
+        throw new Error('nothing exists to poll')
+      },
+    })
+    // The job fails CLOSED on the unresolved spend…
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    // …the orphan bytes this cycle stored are GONE…
+    expect(storedKey).not.toBeNull()
+    expect(await storage.exists(storedKey!)).toBe(false)
+    // …the quarantine stands untouched…
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // …and there is NO automatic second synthesis, ever.
+    const again = await runAudioGenerationOnce('a-sync-lost-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a sealed spend must never be re-bought')
+      },
+      pollSpeech: async () => {
+        throw new Error('nothing exists to poll')
+      },
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
   }, 240_000)
 })

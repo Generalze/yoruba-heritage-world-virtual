@@ -19,10 +19,15 @@
     "db:seed": "bun run src/db/seed.ts",
     "db:seed:domain": "bun run src/db/seed-domain.ts",
     "admin:grant": "bun run src/db/grant-role.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "smoke:runtime": "bun run scripts/runtime-smoke.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1106.0",
+    "@aws-sdk/s3-request-presigner": "^3.1106.0",
     "@js-temporal/polyfill": "^0.5.1",
+    "@remotion/bundler": "4.0.507",
+    "@remotion/renderer": "4.0.507",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-devtools": "^0.10.9",
     "@tanstack/react-router": "^1.170.23",
@@ -30,8 +35,10 @@
     "@tanstack/react-start": "^1.168.40",
     "drizzle-orm": "^0.44.0",
     "mysql2": "^3.15.0",
+    "openai": "7.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "remotion": "4.0.507",
     "tailwindcss": "^4.1.18",
     "zod": "^4.0.0"
   },

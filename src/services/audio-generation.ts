@@ -38,9 +38,12 @@ import type {
  *   eligibility, content hash currency, language, and an AUTHORITATIVE
  *   APPROVED_TTS_ALLOWED voice policy), then the EXACT approved body is
  *   retrieved server-side and compiled into an in-memory request
- * → provider-neutral submit/poll (mock only — no real provider exists yet)
+ * → provider-neutral submit/poll (the deterministic mock, or 9jaLingo's
+ *   synchronous /v1/audio/speech, which completes at submit time)
  * → verified artifact (mime/type, bounded duration, non-empty, fresh SHA-256)
- * → private storage (LocalMediaStorageProvider — no S3)
+ * → private working media storage (the configured MediaStorageProvider;
+ *   the finished recording later reaches the private object store at
+ *   the upload stage)
  * → re-verified against that storage before the job is ever allowed to
  *   leave GENERATING_AUDIO (`verifyStoredAudioArtifact`)
  * ```
@@ -696,12 +699,22 @@ function reasonToErrorCode(
 }
 
 /**
- * Submits ONE TTS requirement. Called by `runAudioGenerationOnce` at
- * most once per PENDING row (a task that already SUCCEEDED never comes
- * back through here) — but is itself idempotent regardless, since the
- * provider is keyed on the AUTHORITATIVE idempotency key and a
- * re-submission of the SAME request is a no-op at the provider layer,
- * never a second paid synthesis.
+ * Submits ONE TTS requirement.
+ *
+ * AT MOST ONCE, and the EXECUTOR enforces that — a durable pre-call
+ * reservation in `runAudioGenerationOnce` means this is genuinely
+ * called at most once per requirement, and an unresolved submission is
+ * quarantined rather than repeated. No claim is made that a provider
+ * deduplicates on the idempotency key: no real speech vendor examined
+ * for this platform documents idempotent submission, and a guarantee
+ * nobody makes is not a guarantee. The key remains the requirement's
+ * STABLE IDENTITY, and is what an external request id would bind to
+ * for a provider that verifiably supports one.
+ *
+ * A failed result says WHETHER anything was sent (`spendState`):
+ * refusals decided before invocation are NOT_SENT and freely
+ * retryable; anything at or after invocation is UNKNOWN and never
+ * retried automatically.
  *
  * The key is recomputed here from manifest authority, never taken on
  * trust from the caller, and the approved body exists only for the
@@ -710,15 +723,76 @@ function reasonToErrorCode(
  */
 export async function submitSpeech(
   input: SpeechTaskIdentity & { requirement: ManifestAudioRequirement },
+  options: { expectedProviderCode?: string } = {},
 ): Promise<AudioTaskSubmissionResult> {
   const provider = getTtsProvider()
+  // THE RESERVED PROVIDER IS THE ONLY ONE THIS SUBMISSION MAY PAY.
+  // Checked HERE, immediately before any work — not merely by the
+  // caller's earlier registry reads, which leave a gap a selection
+  // change could slip through. Refused at this point, nothing has
+  // touched the network, so the failure is PROVABLY NOT_SENT.
+  if (
+    options.expectedProviderCode != null &&
+    provider.code !== options.expectedProviderCode
+  ) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'provider_selection_changed',
+      errorMessage: null,
+      spendState: 'NOT_SENT',
+    }
+  }
+  // A DISABLED adapter is refused HERE — before compilation, and
+  // therefore before the approved body is read at all. Step 15's rule
+  // is that the sacred body is retrieved only when synthesis is
+  // currently authorized; a deployment with no speech backend is a
+  // deployment where it never is. The refusal is a recorded task
+  // failure, never a silent skip: a TTS requirement that goes
+  // unsatisfied must stop the recording, not quietly vanish from it.
+  // Decided BEFORE any invocation: provably NOT_SENT.
+  if (!provider.isEnabled()) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'tts_unavailable',
+      errorMessage: null,
+      spendState: 'NOT_SENT',
+    }
+  }
+  // THE PROVIDER'S DECLARED LANGUAGES GATE THE REQUEST BEFORE IT IS
+  // COMPILED — and therefore before the approved body is ever read.
+  // Phase One's 9jaLingo adapter is approved for Yoruba (yo) only; a
+  // requirement in any other language is refused HERE, provably
+  // NOT_SENT, with zero provider contact. The text itself is NEVER
+  // translated, rewritten, shortened or padded to fit a provider —
+  // this recorded refusal is the correct outcome, exactly as a
+  // disabled adapter's is.
+  const requirementLanguage = input.requirement.language
+  if (
+    provider.supportedLanguages != null &&
+    (requirementLanguage == null ||
+      !provider.supportedLanguages.includes(requirementLanguage))
+  ) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'language_unsupported_by_provider',
+      errorMessage: null,
+      spendState: 'NOT_SENT',
+    }
+  }
   const compiled = await compileSpeechSynthesisRequest(input.requirement, input)
   if (compiled.status !== 'OK') {
+    // A compile refusal happens strictly before the provider is
+    // invoked — nothing has been sent, and saying so is what lets the
+    // executor retry it for free instead of quarantining it.
     return {
       status: 'FAILED',
       providerCode: provider.code,
       errorCode: reasonToErrorCode(compiled),
       errorMessage: null,
+      spendState: 'NOT_SENT',
     }
   }
   try {
@@ -729,6 +803,34 @@ export async function submitSpeech(
         providerCode: provider.code,
         errorCode: 'provider_submit_failed',
         errorMessage: null,
+      }
+    }
+    if (submission.status === 'COMPLETED') {
+      // SYNCHRONOUS PROVIDER (9jaLingo): the spend has happened and
+      // the bytes are HERE. They pass the same verification every
+      // asynchronous poll result passes — allowlisted mime, bounded
+      // duration, non-empty, fresh server-side SHA-256 — and are
+      // stored in private storage BEFORE this returns, so the caller
+      // receives a durable claim, never raw bytes. A completed
+      // synthesis whose artifact fails verification is paid work we
+      // cannot use: an UNKNOWN outcome (no spendState), never a
+      // NOT_SENT, and never retried automatically.
+      const verified = await verifyAndStoreSpeechArtifact(submission.artifact)
+      if (!verified.ok) {
+        return {
+          status: 'FAILED',
+          providerCode: provider.code,
+          errorCode: verified.reasonCode,
+          errorMessage: null,
+        }
+      }
+      return {
+        status: 'COMPLETED',
+        providerCode: provider.code,
+        artifactSha256: verified.fileSha256,
+        artifactMimeType: verified.mimeType,
+        artifactDurationMs: verified.durationMs,
+        artifactStorageRef: verified.storageKey,
       }
     }
     return {

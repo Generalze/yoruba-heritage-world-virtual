@@ -1183,6 +1183,393 @@ user books
   and any queue broker remain out of scope at this stage.
 
 ---
+
+## 10.13 Amendment — Production Runtime Foundation (Phase One, Step 20)
+
+Step 20 makes the Step 19 pipeline DEPLOYABLE without enabling any
+external vendor nobody has approved. It adds no table and no migration.
+
+**ONE STARTUP GATE, SHARED.** `checkProductionPreflight()` is called by
+the web server before it binds a port and by the generation worker
+before it claims a job. The two processes cannot disagree about whether
+a deployment is fit to run — a worker that started anyway would claim
+somebody's paid appointment and then fail it on configuration, spending
+its bounded retry budget on a fault that has nothing to do with the
+booking. Production requires an HTTPS `APP_BASE_URL`, a non-empty
+database password, an EXPLICIT `TRUST_PROXY` (absence is the failure:
+off collapses every client IP to the proxy's, on without a header-
+overwriting proxy lets anyone forge one), real object storage, a real
+renderer, and a non-mock setting for both unapproved adapters. It
+reports bounded CODES plus the ENVIRONMENT VARIABLE NAMES an operator
+must set — never a value, never a secret, never a host or bucket.
+
+**EVERY DRIVER IS AN EXPLICIT ENUM, AND UNKNOWN FAILS CLOSED.**
+`OBJECT_STORAGE_DRIVER`, `RENDER_DRIVER`, `VISUAL_GENERATION_DRIVER` and
+`TTS_DRIVER` are validated in EVERY environment, so a typo stops the
+process instead of silently selecting the local/mock adapter. Each
+registry additionally throws on an unhandled value rather than
+defaulting. A variable that is present but EMPTY counts as unset, so
+"not configured" means the same thing whether the process was started by
+Compose, a shell or a test.
+
+**PRODUCTION TOPOLOGY IS THREE CONTAINERS.** `app`, `worker` and `db`,
+where `app` and `worker` run the SAME image at the SAME revision and
+differ only in command — two independently-built images are two
+independently-drifting versions of the pipeline. The runtime image now
+ships the whole of `src/` (the worker runs from source), the migrations
+and `tsconfig.json`; it keeps `USER bun`, a frozen lockfile and no baked
+secret. **The database publishes no port**; the convenient local
+mapping lives in a development-only override bound to loopback. One
+shared volume carries approved and intermediate media, because the app
+writes it and the worker reads it. Both processes drain on `SIGTERM`,
+the worker with a longer grace period because a render is long-running.
+
+**PRIVATE OBJECT STORAGE IS REAL AND STILL PRIVATE.** The S3-compatible
+adapter sends NO ACL under any spelling, constructs no public URL,
+manages no bucket policy and assumes no CDN. Writes are CONDITIONAL
+CREATES (`IfNoneMatch: '*'`), so the storage service performs the
+exclusion atomically and an existing canonical object maps to the SAME
+already-exists code the local adapter throws; a blind overwrite is
+impossible. An ETag is opaque bookkeeping and is NEVER accepted as a
+SHA-256 — integrity comes from a service-computed SHA-256 or from the
+bytes themselves, and fails closed when neither is available. Signed
+reads are PRIVATE GETs bounded by the fifteen-minute ceiling. Canonical
+objects are never deleted by the application. Errors keep a bounded code
+and drop the SDK's message, which quotes endpoints and request ids.
+Credentials live only inside the client and appear in no row, log or
+descriptor. The client is injectable, and automated verification uses a
+deterministic double — ZERO network calls.
+
+**MEASURED AUDIO IS AUTHORITY, AND THE PLAN GROWS TO FIT IT.** For the
+REAL engine, every time-bearing audio source is probed FROM ITS EXACT
+VERIFIED BYTES *before* the immutable render plan is built — approved
+human recordings and generated speech artifacts alike — and the measured
+value becomes that source's duration.
+`media_asset_versions.duration_seconds` is whole SECONDS typed by a
+person, and a speech task's duration is the provider's claim about its
+own output; neither is evidence about what is in the file. The LOCKED
+Step 16 reconciliation then does the rest by itself:
+
+```text
+finalSegmentDuration = max(plannedSegmentDuration, verifiedActualAudioDuration)
+```
+
+A 12.4-second recording whose row said 12 gets a 12.4-second segment;
+the absorbing split holds its own approved visual for the extra 400 ms;
+every later scene shifts by exactly that; the recording plays ONCE, IN
+FULL. Nothing is trimmed, stretched, sped, slowed, looped, rewritten or
+replaced, and **no render is refused merely for audio being longer than a
+stale database row** — that refusal would contradict the rule above. An
+unmeasurable recording fails closed rather than being planned around
+from a guess. The MOCK path is unchanged and still exact: it takes the
+database's number, so Step 16's round-trip proofs stay proofs. Because
+the measured value enters `renderPlanSha256`, and `verifyCompletedRender`
+rebuilds that plan and compares it byte-for-byte on every playback
+request, the measurement is a pure function of file content, memoized on
+the verified hash, and the rebuild uses the policy of the engine that
+ACTUALLY produced the row.
+
+**A HOLD FREEZES; IT NEVER REPLAYS.** All five planned fits have explicit
+compositor semantics: `STILL_HOLD` shows a still for its window; `EXACT`
+and `TRIM` play a clip bounded by its window; `HOLD_LAST_FRAME` plays a
+short clip out and then freezes its final frame for the remainder, the
+two spans covering the window exactly; and `HOLD_PREVIOUS` freezes THE
+LAST FRAME THAT WAS DISPLAYED — never frame zero, which would show the
+viewer approved footage a second time in a place nobody approved it for.
+
+**RENDERER IDENTITY IS EXACT FOR NEW SPEND, AND DURABLE FOR FINISHED
+WORK.** The Remotion package set is pinned to ONE EXACT version with no
+caret range, and the engine persists that exact version
+(`remotion-4.0.507`).
+
+- BEFORE ANY RENDER SPEND the row's `rendererCode`, `rendererVersion`
+  and `rendererIsMock` must equal the CURRENTLY selected engine exactly.
+  The check sits AFTER the idempotency short-circuit, so an
+  already-finished result is never condemned for having been made by the
+  engine that legitimately existed at the time.
+- A COMPLETED recording is judged against a TRUSTED PERSISTED-RENDERER
+  REGISTRY instead. Demanding that a finished artifact match the engine
+  installed today would mean every recording ever made became
+  unavailable the moment Remotion was upgraded — an outage dressed up as
+  a security property. The registry is checked as a WHOLE TUPLE (code +
+  version + mock flag), so a trusted code with an unknown version is not
+  trusted; the production mock prohibition is applied to the ARTIFACT's
+  own flag rather than to the active engine; the rebuild uses the
+  persisted mock/real timing policy; and every plan, hash, artifact and
+  current-authority proof is unchanged. Unknown or tampered identities
+  remain fail-closed.
+- GOVERNANCE: upgrading a renderer ADDS an identity to that registry. An
+  old identity is REMOVED only by an explicit governance or security
+  decision — removing one declares every recording it produced
+  untrustworthy and takes those recordings away from the people they
+  belong to. That must never happen as a side effect of editing
+  package.json.
+
+**THE WORKER PROVES IT CAN RENDER BEFORE IT TOUCHES THE QUEUE.** In
+production with a real renderer selected, the generation worker runs the
+SAME local-tooling check readiness uses — ffprobe and the baked browser
+— before lease recovery and before any pipeline pass. The web tier
+answering 503 protects nobody here: the worker takes its work from a
+queue, not from a load balancer. A refusal exits non-zero, logs bounded
+capability names only, and mutates no job, no lease and no retry budget.
+
+**THE BROWSER-DELIVERY ENDPOINT IS PINNED.** `OBJECT_STORAGE_ENDPOINT`
+is parsed, not string-matched: HTTPS, well-formed, and carrying no
+username, password, query or fragment — each of which would otherwise be
+silently discarded, leaving the operator's intent and the effective
+configuration different. Production additionally requires
+`OBJECT_STORAGE_FORCE_PATH_STYLE=true`, because virtual-hosted
+addressing moves the bucket into the HOST and the signed URL would land
+on an origin neither the redirect pin nor the CSP knows about; permitting
+it would mean widening `media-src` to a wildcard over the provider's
+whole domain. Before the Prayer Room returns its 302 the signed URL's
+origin must EQUAL the configured endpoint's origin; a mismatch is the
+same neutral 404 as every other refusal, with no redirect and nothing
+persisted or logged. A separate browser-delivery origin contract is a
+later, explicit stage.
+
+**RENDERING MEASURES INSTEAD OF TRUSTING.** The real engine is opt-in
+behind `RENDER_DRIVER=REMOTION`; the mock remains the default and stays
+impossible in production. The adapter re-hashes every source against the
+plan and PROBES the actual media with ffprobe, refusing when it cannot
+measure. Output is probed, not echoed: the container and
+video stream are verified and the duration is read from the encoded
+media, with a tolerance derived from the ACTUAL frame rate. The
+service-level duration rule is shared by the render write and both later
+gates, and gives a real compositor a bounded frame/container envelope
+while holding the mock to the millisecond. The composition contains only
+what the plan named — no text, title, caption, watermark, music, ambient
+audio or effect of any kind. Remotion is never invoked by automated
+verification (it drives a browser it must download); the compositor is
+the one injected seam, and everything around it is exercised with tiny
+deterministic non-sacred fixtures. Step 14's mock artifacts are left
+untouched and are never fed to a real compositor.
+
+**AT-MOST-ONCE EXTERNAL PAID SUBMISSION.** For any provider without a
+VERIFIED, officially documented server-side idempotency guarantee, a
+request that MAY have reached the provider is NEVER submitted again
+automatically. Avoiding a duplicate charge outranks automatic recovery.
+
+Until Step 20 the executors delegated this to the provider: both
+`VisualGenerationProvider` and `TtsProvider` required adapters to treat a
+repeated submission for the same idempotency key as the same job. That
+holds for the mock and for nobody else — no real generation or speech
+vendor examined for this platform documents it — so the guarantee is now
+the platform's own:
+
+- **DURABLE PRE-CALL RESERVATION.** Before any external submission, the
+  task row is CAS'd `PENDING → SUBMITTED` with the exact selected
+  provider code and a NULL operation id. Only the worker that wins that
+  CAS may cross the provider boundary, so two workers racing one task
+  produce exactly one call. A provider-selection change between
+  reservation and execution fails closed *before* the network.
+- **A NULL OPERATION ID IS NOT A LICENCE TO RESUBMIT.** It means
+  "reserved or in flight, outcome not yet durably known". A FRESH
+  reservation is simply outstanding — other workers wait and submit
+  nothing — because the reserving worker may still be inside the call.
+  It is protected for `RESERVATION_STALE_AFTER_MS`, derived from the
+  lease model (two full lease windows); any provider submission timeout
+  added later MUST be shorter than that.
+- **KNOWN OPERATION, CONTINUED — NEVER REPEATED.** Once an operation id
+  is durably recorded, later workers poll that same operation — even
+  long past the staleness threshold, a known operation is continued,
+  never quarantined and never resubmitted. The operation id is written
+  CAS'd on the reserved state, so provider truth survives even a lease
+  lost mid-call, and a late response can never resurrect or overwrite a
+  row that was already quarantined. The answer must also NAME THE
+  RESERVED PROVIDER — an adapter answering for a different provider is
+  answering a question nobody asked, and is quarantined, never polled
+  under the other identity. An operation id must be USABLE (a non-empty
+  string within its column bound); provider contact has happened by
+  then, so an unusable id is an unknown outcome, never a NOT_SENT. A
+  usable id is persisted BYTE-FOR-BYTE — validated raw, never trimmed,
+  lowercased or otherwise normalized — because the provider will be
+  asked for it back verbatim, and "helpfully" tidied identifiers are
+  how continuations silently miss.
+- **LEGACY UNRESOLVED ROWS ARE NORMALIZED, NOT TOLERATED.** A FAILED
+  task that still carries submission evidence (a non-null submittedAt)
+  predates this rule and may hide a paid execution. When a worker
+  encounters one it is CAS'd to the same terminal quarantine, and the
+  job fails closed with the stage code — never resubmitted. Generic
+  admin retry refuses these independently (see below), so an
+  administrator is protected even before the worker has visited such a
+  row.
+- **UNKNOWN OUTCOME IS QUARANTINED, NOT RETRIED.** A stale reservation
+  becomes `CANCELLED` with `provider_outcome_unknown` — terminal, using
+  the existing enum value and no migration. The job fails closed with
+  `VISUAL_PROVIDER_OUTCOME_UNKNOWN` or `TTS_PROVIDER_OUTCOME_UNKNOWN`,
+  with no automatic retry and no fall-through to the "every task
+  succeeded" finalization path.
+- **SPEND IS CLASSIFIED, NOT GUESSED.** A failed submission carries
+  `spendState: NOT_SENT | UNKNOWN`. `NOT_SENT` requires POSITIVE PROOF
+  that nothing was sent — a disabled adapter, a compile refusal, a
+  selection mismatch, a local validation rejection, all decided before
+  any network write. A timeout, a reset, a 5xx, a malformed response or
+  a generic exception is UNKNOWN, and **absent is UNKNOWN**: an adapter
+  that forgets to answer must not thereby authorise a second charge.
+  Only a failure proved `NOT_SENT` may return to `PENDING`, evidenced
+  durably by a NULL `submittedAt`. Legacy rows that cannot prove it are
+  treated as UNKNOWN. A provably-unsent refusal is honored BEFORE the
+  provider-binding gate: the in-seam selection check reports the NEW
+  provider's code precisely because a switch was caught, and that
+  honest answer stays a free, budgeted retry instead of rotting into a
+  quarantine. An exception ESCAPING the submission seam after the
+  reservation is the same unknown outcome, quarantined
+  deterministically — never handed to the generic error path, which
+  would burn the budget as a retry — and the raw error is dropped,
+  reaching neither rows nor events.
+- **THE UNIQUE IDEMPOTENCY KEY IS AN IDENTITY, NOT A PAYMENT GUARD.** It
+  makes a task recognisable across retries and is what an external
+  request id would bind to; it does not by itself prevent a second paid
+  call, and the canon no longer claims it does.
+- **GENERIC ADMIN RETRY REFUSES AN UNRESOLVED OUTCOME.**
+  `adminRetryGenerationJob` restarts from PREPARING, minting fresh
+  snapshots and therefore fresh task identities — which would sail past
+  both the unique key and the reservation. It is refused, with a
+  neutral technical message, under ONE deliberately blunt rule: any
+  visual or audio task showing external interaction evidence — a
+  non-null `submittedAt` — blocks it. That covers a live reservation, a
+  known operation mid-poll, a quarantined unknown, an un-normalized
+  legacy row, a max-attempt stranded reservation, and even SUCCEEDED
+  paid output a restart would abandon and re-buy; a NOT_SENT failure
+  clears `submittedAt`, so provably free failures (and jobs with no
+  provider tasks at all) remain retryable. There is deliberately no
+  override flag, no bypass button and no extra role: an operator
+  reconciles the outcome with the provider first. A deliberate
+  re-spend, if ever needed, must be its own designed and audited
+  action.
+
+Provider-side idempotency remains welcome as an OPTIONAL additional
+protection, and may be bound to the deterministic task key — but only
+when officially documented and verified.
+
+**VISUALS HAVE ONE APPROVED ADAPTER: KLING (Step 20).** Kling API 2.0
+text-to-video, with Kling 3.0 encoded in the endpoint
+(`POST /text-to-video/kling-3.0`) — there is deliberately no model
+selector to invent. Auth is the new API-Key scheme only
+(`Authorization: Bearer <KLING_API_KEY>`); the legacy AK/SK JWT flow is
+absent. The create body is a CLOSED allowlist — `prompt`,
+`settings { audio: "off", multi_shot: false, duration }`,
+`options { external_task_id }` — with no callback_url, no resolution or
+aspect_ratio (the repo contract fixes neither, so Kling's documented
+defaults apply), and no image, element or voice input of any kind.
+`external_task_id` carries the task's deterministic idempotencyKey as
+provider-side reconciliation help; the durable at-most-once reservation
+remains the ONLY thing preventing a second paid call. Durations are
+whole seconds 3–15, never rounded — anything else is a provably
+NOT_SENT refusal via the provider's declared-limits hook, checked
+before the network, as is a compiled prompt that cannot fit the
+official 3072-char bound (approved text is never truncated to fit a
+vendor). Prompts are compiled DETERMINISTICALLY from the currently
+approved Visual Bible rules plus safe scene metadata; METADATA_ONLY
+never retrieves the sacred body, APPROVED_TEXT_CONTEXT sends only the
+exact authorized text, and nothing is ever invented. The create answer
+requires `code` 0, `data.id` (persisted byte-for-byte as the operation
+id) and a documented status; polling asks
+`GET /tasks?task_ids=<exact id>` and requires exactly the matching
+task. A completed task's video artifact downloads ONLY from the
+`KLING_ARTIFACT_ORIGINS` allowlist — HTTPS, exact bare origins,
+credentials refused, redirects refused, bounded bytes, `video/mp4`
+only — is hashed locally, and its REAL duration is measured with
+ffprobe (an artifact carrying an unexpected audio stream is refused:
+Kling generates visuals only). Provider errors, response bodies,
+prompts, keys and signed artifact URLs never reach rows, events or
+logs; transport retries are ZERO and the timeout is bounded below the
+reservation staleness threshold. Selecting
+`VISUAL_GENERATION_DRIVER=KLING` requires the three `KLING_*` variables
+in EVERY environment, with no fallback to MOCK or DISABLED. `DISABLED`
+remains the honest setting for a deployment that does not want
+generation: a job that REQUIRES the work fails closed as a recorded
+task failure and is NEVER silently skipped, while a manifest needing
+neither generation nor synthesis runs normally.
+
+**SPEECH HAS ONE APPROVED ADAPTER: 9JALINGO (Step 20).** 9jaLingo's
+officially documented OpenAI-compatible `POST /v1/audio/speech`, spoken
+to through the official `openai` client (`baseURL` + `apiKey` — auth is
+the client's documented job, never hand-rolled; only its DOCUMENTED
+public surface is used, and the dependency is pinned to an EXACT
+version because a paid transport must not shift under a semver range),
+with transport retries at ZERO (a retried synthesis is a second spend)
+and a timeout bounded below the reservation staleness threshold.
+9jaLingo also publishes its own Python and Node SDKs; the
+OpenAI-compatible surface is the deliberate choice here, not a
+workaround for an SDK that does not exist. The vendor synthesizes
+SYNCHRONOUSLY — WAV bytes in the response — so the TtsProvider contract
+gained a second honest submission shape, `COMPLETED` + artifact,
+alongside the async `PENDING` + providerJobId. Nothing is faked to
+bridge the two: no invented provider job id, no pretend polling, no
+in-memory artifact stash. The executor's at-most-once lifecycle is
+UNCHANGED: the durable reservation still precedes the call; a
+synchronous success verifies and stores the exact returned bytes (mime
+allowlist, bounded MEASURED WAV duration, fresh server-side SHA-256 —
+and every declared RIFF chunk must FULLY fit the bytes that arrived: a
+truncated download is rejected outright, never shortened into a
+smaller "valid" prayer) and CASes the reservation directly to
+SUCCEEDED; a throw or ambiguous
+outcome after the reservation is quarantined
+`provider_outcome_unknown`; a success whose CAS loses removes the
+just-stored orphan bytes and NEVER synthesizes again. Governance:
+Phase-One Yoruba (`yo`) ONLY — any other language is refused NOT_SENT
+before the network via the provider's declared `supportedLanguages`,
+checked before the request is even compiled, so the body is never read
+for it and the prayer is never translated, rewritten, shortened or
+padded; the approved text is sent VERBATIM exactly once; the request
+body is a CLOSED five-field allowlist (`model`, `voice`, `input`,
+`lang`, `response_format`) — no `targetDurationMs` as a synthesis
+instruction, and no reference-audio or likeness field anywhere in the
+contract, so voice cloning remains structurally impossible; the voice
+id and model come ONLY from trusted server environment
+(`NAIJALINGO_YO_VOICE_ID`, `NAIJALINGO_MODEL`), and the API key lives
+ONLY in server env, outside Git, never in a row, an event or a log.
+Selecting `TTS_DRIVER=9JALINGO` requires the four `NAIJALINGO_*`
+variables in EVERY environment (base URL plain HTTPS: no credentials,
+query or fragment); production preflight reports gaps as codes naming
+the variable, and there is NO fallback to MOCK or DISABLED. Approved
+human recordings remain preferred and are never synthesized.
+
+**LIVENESS IS NOT READINESS.** `/api/health` says the process is alive;
+a container that is alive but misconfigured must be left for an operator
+rather than restart-looped into the same fault. `/api/ready` answers 503
+unless the preflight passes, the database is reachable AND — when a
+real renderer is selected — the local render tooling (ffprobe, the
+baked headless browser) is present, and it is
+what the container healthcheck and any proxy use. Both payloads are
+CLOSED schemas carrying no credential, host, bucket, endpoint, object
+key, path, personal detail or sacred text; readiness reports issue CODES
+only, while the variable NAMES stay in the process log.
+
+**HTTP POSTURE.** One place sets CSP (`default-src 'self'`,
+`frame-ancestors 'none'`, `object-src 'none'`, `base-uri`/`form-action`
+`'self'`, `media-src` limited to `'self'`, `blob:` and the ONE configured HTTPS
+object-storage origin — never a wildcard), `nosniff`, `X-Frame-Options`,
+`Referrer-Policy`, a deny-by-default `Permissions-Policy`, and HSTS ONLY
+in production over HTTPS. Headers never overwrite what a handler chose
+deliberately — the Prayer Room's private media keeps its own caching and
+framing, which are part of an authorization decision. Unhandled errors
+log their stack and return a bare 500: an error page that quotes an
+exception is a reconnaissance tool. Session cookies stay HttpOnly,
+SameSite and Secure in production, and still need NO signing secret —
+they are 256-bit random bearer tokens stored hashed. Payment webhooks
+keep raw-body verification, and `TRUST_PROXY` stays explicit.
+
+**OPERATIONS.** Migrations are NEVER applied automatically — not at
+boot, not at request time. `docs/OPERATIONS.md` carries the migration,
+backup, restore and start/stop runbook; `scripts/backup-db.sh` and
+`scripts/restore-db.sh` print no credential, pass the password through
+the environment rather than a visible argument, refuse to write inside
+the repository, verify a SHA-256 sidecar before restoring, refuse to
+restore while the app or worker is running, and require an explicit
+confirmation. A restore is verified into a throwaway database. No Redis,
+no broker, no Kubernetes, no public bucket, no CDN.
+
+**STILL OUTSTANDING, STATED RATHER THAN ASSUMED:** the visual-generation
+vendor; the speech-synthesis vendor; Remotion browser provisioning and
+image size; CSP `script-src` still requiring `'unsafe-inline'` for the
+framework's inline bootstrap and serialized router state; and the
+production media-delivery choice between signed redirects and full
+server-side proxying.
+
+---
 # 11. Visual Canon Database
 
 Each visual asset should be classified and approved.

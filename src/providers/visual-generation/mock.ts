@@ -8,10 +8,12 @@ import type {
 } from './types'
 
 /**
- * MockVisualGenerationProvider (Phase One, Step 14): the ONLY provider
- * implementation at this stage — deterministic and reproducible so no
- * real Kling/OpenArt/paid-API call or network egress is ever needed
- * locally or in tests, mirroring the payments MockProvider discipline.
+ * MockVisualGenerationProvider (Phase One, Step 14): the development
+ * and test provider — deterministic and reproducible so no real
+ * Kling/paid-API call or network egress is ever needed locally or in
+ * tests, mirroring the payments MockProvider discipline. Production
+ * uses the approved Kling adapter (or DISABLED); the mock is refused
+ * there outright.
  *
  * HARD DETERMINISM RULE: same VisualGenerationRequest ⇒ byte-identical
  * artifact, every time, on every process. NO Math.random(), NO

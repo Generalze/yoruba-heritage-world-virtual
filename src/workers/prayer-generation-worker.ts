@@ -6,6 +6,10 @@ import {
   systemGenerationClock,
 } from '@/services/generation-jobs'
 import { runGenerationPipelinePass } from '@/services/generation-pipeline'
+import {
+  assertProductionPreflight,
+  assertRenderRuntimeReady,
+} from '@/server/production-preflight'
 
 /**
  * DB-backed prayer generation worker (Phase One, Step 12; autonomous
@@ -25,16 +29,37 @@ import { runGenerationPipelinePass } from '@/services/generation-pipeline'
  *   - storyboard planning (Step 13: storyboard + provider-neutral
  *     manifest)
  *   - visual generation  (Step 14: async submit/poll of every
- *     GENERATION_REQUIRED manifest task via the mock provider only)
+ *     GENERATION_REQUIRED manifest task)
  *   - audio generation   (Step 15: approved human recordings re-verified
- *     in place, plus async submit/poll of every TTS_PENDING requirement
- *     via the mock speech provider only)
+ *     in place, plus async submit/poll of every TTS_PENDING requirement)
  *   - render assembly    (Step 16: an immutable render plan rendered
- *     through the engine-neutral RenderEngine boundary — deterministic
- *     mock engine only at this stage — into a verified LOCAL artifact)
+ *     through the engine-neutral RenderEngine boundary into a verified
+ *     LOCAL artifact)
  *   - private upload     (Step 17: that artifact placed at its canonical
- *     key in PRIVATE object storage — deterministic local adapter only
- *     at this stage — re-proved remotely, then READY)
+ *     key in PRIVATE object storage, re-proved remotely, then READY)
+ *
+ * WHICH BACKEND EACH STAGE USES IS CONFIGURATION, NOT A PROPERTY OF
+ * THIS FILE (Step 20). Every one of them is chosen by an explicit
+ * driver enum, and an unknown value stops the process rather than
+ * quietly selecting a mock:
+ *
+ *   RENDER_DRIVER              MOCK (development/test) | REMOTION
+ *   OBJECT_STORAGE_DRIVER      LOCAL (development/test) | S3
+ *   VISUAL_GENERATION_DRIVER   MOCK (development/test) | DISABLED |
+ *                              KLING (approved; Kling API 2.0
+ *                              text-to-video, visuals only, requires
+ *                              the KLING_* vars)
+ *   TTS_DRIVER                 MOCK (development/test) | DISABLED |
+ *                              9JALINGO (approved; synchronous, Yoruba
+ *                              only, requires the NAIJALINGO_* vars)
+ *
+ * PRODUCTION REFUSES EVERY MOCK AND THE LOCAL FINAL STORE. It also
+ * refuses to start at all when the configuration is incomplete — see
+ * the preflight below. DISABLED remains each generation stage's honest
+ * setting where the capability is not wanted: work that REQUIRES it
+ * fails closed as a recorded task failure and is never silently
+ * skipped, while a manifest built from approved media and approved
+ * human recordings runs normally.
  *
  * From a confirmed, paid appointment to a READY private recording there
  * is NO human step: no approval, no queue to review, no operator
@@ -43,11 +68,18 @@ import { runGenerationPipelinePass } from '@/services/generation-pipeline'
  * runtime only assembles what was already approved, and every stage
  * re-proves that authority still holds before it spends anything.
  *
- * It performs NO real provider/paid API calls of any kind — Steps 14
- * through 17 use their deterministic mocks and the local private-object
- * adapter exclusively, and production is fail-closed against every one
- * of those (see each provider registry). It is NOT required for the web
- * server to boot — run it separately:
+ * In development and test it performs NO paid API call of any kind: the
+ * default drivers are the deterministic mocks and the local
+ * private-object adapter, and automated verification never selects
+ * anything else. In production those exact defaults are refused.
+ *
+ * A real render needs LOCAL TOOLING — ffprobe to measure approved media
+ * and a headless browser for the compositor — both baked into the image
+ * and named explicitly. Readiness reports their absence rather than
+ * letting a paid appointment discover it.
+ *
+ * This process is NOT required for the web server to boot — run it
+ * separately:
  *
  *   bun run worker:generation
  */
@@ -71,6 +103,19 @@ async function sleep(ms: number): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // BEFORE THE FIRST JOB IS CLAIMED, and using the SAME function the
+  // web server calls, so the two processes can never disagree about
+  // whether this deployment is fit to run. A worker that started
+  // anyway would claim somebody's paid appointment and then fail it on
+  // configuration — consuming its bounded retry budget for a fault
+  // that has nothing to do with the booking.
+  assertProductionPreflight('worker')
+  // AND THE TOOLING A REAL RENDER NEEDS, proved by the SAME check
+  // readiness uses. The web tier answering 503 protects nobody here:
+  // the WORKER is the process that renders, and it takes its work from
+  // a queue rather than from a load balancer. Without this it would
+  // sweep leases and claim jobs it cannot possibly finish.
+  await assertRenderRuntimeReady('worker')
   console.log(`[${WORKER_ID}] prayer generation worker started (DB queue)`)
   let lastSweep = 0
   while (!shuttingDown) {
@@ -118,4 +163,13 @@ async function main(): Promise<void> {
   await closeDb()
 }
 
-void main()
+// A refused preflight must EXIT NON-ZERO, so the container restart
+// policy and the operator both see a failed process rather than a
+// quiet one that stopped doing work.
+void main().catch((error: unknown) => {
+  console.error(
+    `[${WORKER_ID}] fatal: ${error instanceof Error ? error.message : String(error)}`,
+  )
+  process.exitCode = 1
+  void closeDb().catch(() => undefined)
+})

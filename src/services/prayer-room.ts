@@ -6,6 +6,8 @@ import { MAX_SIGNED_URL_TTL_SECONDS } from '@/providers/object-storage/types'
 import { computeFileSha256 } from '@/providers/media/storage'
 import { verifyCompletedUpload } from './render-upload'
 import { buildPrivateMediaResponse } from '@/lib/media-range'
+import { mediaOriginFromEndpoint } from '@/lib/security-headers'
+import { env } from '@/lib/env'
 import type { RenderContext } from './render-assembly'
 
 /**
@@ -356,6 +358,8 @@ export async function servePrayerRoomMedia(input: {
   publicId: string
   request: Request
   now?: Date
+  /** Test seam ONLY. Production reads the configured endpoint. */
+  expectedMediaOrigin?: string | null
 }): Promise<Response> {
   // Unauthenticated is answered exactly like unknown: no shape,
   // timing or status distinguishes "you are not signed in" from
@@ -383,7 +387,13 @@ export async function servePrayerRoomMedia(input: {
     // or answers over plain HTTP is refused here rather than
     // redirected to — the request we made is not evidence about the
     // capability we were given.
-    if (!isAcceptableSignedRead(signed, issuedAt)) return notAvailable()
+    if (
+      !isAcceptableSignedRead(signed, issuedAt, {
+        expectedOrigin: input.expectedMediaOrigin ?? configuredMediaOrigin(),
+      })
+    ) {
+      return notAvailable()
+    }
     return new Response(null, {
       status: 302,
       headers: {
@@ -428,6 +438,7 @@ export async function servePrayerRoomMedia(input: {
 function isAcceptableSignedRead(
   signed: { url: string; expiresAt: Date },
   now: Date,
+  options: { expectedOrigin: string | null } = { expectedOrigin: null },
 ): boolean {
   let parsed: URL
   try {
@@ -438,6 +449,16 @@ function isAcceptableSignedRead(
   // A private recording is never fetched over a channel that can be
   // read in transit.
   if (parsed.protocol !== 'https:') return false
+  // THE EXACT CONFIGURED ORIGIN, when one is configured. Phase One
+  // delivers by redirecting to the private object-storage endpoint,
+  // and the production CSP allows only that origin — so a signed URL
+  // pointing anywhere else is either a misconfigured adapter or a
+  // redirect to somebody else’s host, and neither is followed. With
+  // no endpoint configured (local development, where storage is
+  // proxied rather than redirected) there is nothing to pin to.
+  if (options.expectedOrigin != null && parsed.origin !== options.expectedOrigin) {
+    return false
+  }
   const expiresMs = signed.expiresAt.getTime()
   if (!Number.isFinite(expiresMs)) return false
   // Already dead, or longer-lived than the ceiling this stage promises
@@ -451,6 +472,13 @@ function isAcceptableSignedRead(
   }
   return true
 }
+/** The origin the browser may be redirected to, derived from the
+ * configured endpoint and validated as a plain HTTPS base URL. Null
+ * in development, where local storage is proxied instead. */
+function configuredMediaOrigin(): string | null {
+  return mediaOriginFromEndpoint(env.OBJECT_STORAGE_ENDPOINT)
+}
+
 /** The one refusal shape. No body, no code, no hint. */
 function notAvailable(): Response {
   return new Response(null, {

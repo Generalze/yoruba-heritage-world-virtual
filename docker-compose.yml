@@ -1,42 +1,147 @@
-# Yorùbá Heritage World Virtual — local development / VPS deployment foundation
+# Yorùbá Heritage World Virtual — PRODUCTION topology
 #
 # Secrets are interpolated from the local .env file (never committed).
-# Copy .env.example to .env first. No Redis by design (TECHNICAL_CANON.md §3.1).
+# Copy .env.example to .env first. No Redis by design (canon §3.1).
 #
-# Common usage:
-#   docker compose up -d db     # database only; run the app on the host with `bun run dev`
-#   docker compose up --build   # full stack (production-style app build + database)
+# THREE SERVICES, and the worker is one of them. Until Step 20 it was a
+# commented-out aspiration, which meant a "complete" deployment shipped
+# with nothing to run the generation pipeline: appointments would
+# confirm, jobs would queue, and no recording would ever be made.
+#
+#   app     — the web server (SSR pages + /api routes)
+#   worker  — the autonomous generation pipeline (canon §10.12)
+#   db      — MariaDB
+#
+# app and worker run the SAME image at the SAME revision, differing only
+# in command. See the Dockerfile for why that is not negotiable.
+#
+# Usage:
+#   docker compose up -d db                            # database only
+#   docker compose up --build                          # production-shaped stack
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#                                                      # + publish 3306 locally
+#
+# Migrations are NEVER applied automatically. See docs/OPERATIONS.md.
 
 name: yoruba-heritage-world-virtual
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  DATABASE_HOST: db
+  DATABASE_PORT: 3306
+  DATABASE_USER: ${DATABASE_USER:?set in .env}
+  DATABASE_PASSWORD: ${DATABASE_PASSWORD:?set in .env}
+  DATABASE_NAME: ${DATABASE_NAME:?set in .env}
+  APP_BASE_URL: ${APP_BASE_URL:-}
+  # Deliberately NOT given a default here. Compose does not validate
+  # configuration — the application's own preflight does, and it reports
+  # `trust_proxy_not_explicit` naming the variable. Guessing on behalf
+  # of an operator is wrong in both directions: off, and every client IP
+  # collapses to the proxy's; on without a proxy that overwrites the
+  # header, and any client can forge one.
+  TRUST_PROXY: ${TRUST_PROXY:-}
+  # Local working storage for approved and intermediate media, shared
+  # by both processes through the media_data volume below.
+  MEDIA_STORAGE_DIR: /app/var/media
+  # Final private object storage. LOCAL is refused in production.
+  OBJECT_STORAGE_DRIVER: ${OBJECT_STORAGE_DRIVER:-S3}
+  OBJECT_STORAGE_ENDPOINT: ${OBJECT_STORAGE_ENDPOINT:-}
+  OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-}
+  OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-}
+  OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-}
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-true}
+  RENDER_DRIVER: ${RENDER_DRIVER:-REMOTION}
+  # Both default to the tooling BAKED INTO THE IMAGE. Overriding them is
+  # for an operator who has deliberately provisioned something else;
+  # leaving them empty makes readiness report the capability missing
+  # rather than letting a render discover it.
+  FFPROBE_PATH: ${FFPROBE_PATH:-/usr/bin/ffprobe}
+  REMOTION_BROWSER_EXECUTABLE: ${REMOTION_BROWSER_EXECUTABLE:-/usr/bin/chromium}
+  # DISABLED is the honest default for both generation stages: work
+  # that needs them FAILS CLOSED and is never silently skipped. Each
+  # stage has ONE approved real adapter — set
+  # VISUAL_GENERATION_DRIVER=KLING with the KLING_* variables for
+  # text-to-video, and TTS_DRIVER=9JALINGO with the NAIJALINGO_*
+  # variables for Yoruba synthesis.
+  VISUAL_GENERATION_DRIVER: ${VISUAL_GENERATION_DRIVER:-DISABLED}
+  TTS_DRIVER: ${TTS_DRIVER:-DISABLED}
+  KLING_API_KEY: ${KLING_API_KEY:-}
+  KLING_API_BASE_URL: ${KLING_API_BASE_URL:-}
+  KLING_ARTIFACT_ORIGINS: ${KLING_ARTIFACT_ORIGINS:-}
+  NAIJALINGO_API_KEY: ${NAIJALINGO_API_KEY:-}
+  NAIJALINGO_API_BASE_URL: ${NAIJALINGO_API_BASE_URL:-}
+  NAIJALINGO_YO_VOICE_ID: ${NAIJALINGO_YO_VOICE_ID:-}
+  NAIJALINGO_MODEL: ${NAIJALINGO_MODEL:-}
+  PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:-false}
+  PAYSTACK_ENABLED: ${PAYSTACK_ENABLED:-false}
+  PAYSTACK_SECRET_KEY: ${PAYSTACK_SECRET_KEY:-}
+  PAYSTACK_CURRENCIES: ${PAYSTACK_CURRENCIES:-}
+  PAYPAL_ENABLED: ${PAYPAL_ENABLED:-false}
+  PAYPAL_ENV: ${PAYPAL_ENV:-sandbox}
+  PAYPAL_CLIENT_ID: ${PAYPAL_CLIENT_ID:-}
+  PAYPAL_CLIENT_SECRET: ${PAYPAL_CLIENT_SECRET:-}
+  PAYPAL_WEBHOOK_ID: ${PAYPAL_WEBHOOK_ID:-}
+  PAYPAL_CURRENCIES: ${PAYPAL_CURRENCIES:-}
+  STRIPE_ENABLED: ${STRIPE_ENABLED:-false}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  STRIPE_CURRENCIES: ${STRIPE_CURRENCIES:-}
+  CRYPTO_ENABLED: ${CRYPTO_ENABLED:-false}
+  CRYPTO_PROVIDER: ${CRYPTO_PROVIDER:-mock}
+  CRYPTO_WEBHOOK_SECRET: ${CRYPTO_WEBHOOK_SECRET:-}
+  CRYPTO_FIAT_CURRENCIES: ${CRYPTO_FIAT_CURRENCIES:-}
 
 services:
   app:
     build: .
+    image: yhwv-app:${APP_REVISION:-local}
     restart: unless-stopped
     ports:
       - '${APP_PORT:-3000}:3000'
     environment:
-      NODE_ENV: production
+      <<: *app-environment
       APP_PORT: 3000
-      DATABASE_HOST: db
-      DATABASE_PORT: 3306
-      DATABASE_USER: ${DATABASE_USER:?set in .env}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?set in .env}
-      DATABASE_NAME: ${DATABASE_NAME:?set in .env}
+    volumes:
+      - media_data:/app/var/media
     depends_on:
       db:
         condition: service_healthy
+    # READINESS, not liveness: this reports unhealthy when the
+    # configuration is invalid or the database is unreachable, which is
+    # exactly when a proxy should stop sending people here.
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - >-
+          const r = await fetch('http://127.0.0.1:3000/api/ready');
+          process.exit(r.ok ? 0 : 1)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    stop_grace_period: 30s
 
-  # A dedicated worker service (database-backed job queue, canon §21) will be
-  # added in a later approved stage. It will reuse this image with a different
-  # command, e.g.:
-  #
-  # worker:
-  #   build: .
-  #   command: ["bun", "run", "worker"]
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
+  worker:
+    build: .
+    # THE SAME IMAGE AND REVISION as app — not a second build.
+    image: yhwv-app:${APP_REVISION:-local}
+    restart: unless-stopped
+    command: ['bun', 'run', 'worker:generation']
+    environment: *app-environment
+    volumes:
+      # The worker READS approved media and WRITES render artifacts;
+      # the app writes approved media. They must see one filesystem, or
+      # the render stage cannot find its own sources.
+      - media_data:/app/var/media
+    depends_on:
+      db:
+        condition: service_healthy
+    # A render can be long-running; give the current pass room to finish
+    # rather than tearing it out mid-encode.
+    stop_grace_period: 120s
 
   db:
     image: mariadb:11
@@ -49,8 +154,11 @@ services:
       MARIADB_DATABASE: ${DATABASE_NAME:?set in .env}
       MARIADB_USER: ${DATABASE_USER:?set in .env}
       MARIADB_PASSWORD: ${DATABASE_PASSWORD:?set in .env}
-    ports:
-      - '${DATABASE_PORT:-3306}:3306'
+    # NO `ports:` HERE, DELIBERATELY. The database is reachable only on
+    # the Compose network, by app and worker. Publishing 3306 on a VPS
+    # exposes it to the whole internet, where it is found by scanners
+    # within minutes. Local development gets the port back through
+    # docker-compose.dev.yml, which is never used in production.
     volumes:
       - db_data:/var/lib/mysql
     healthcheck:
@@ -62,3 +170,7 @@ services:
 
 volumes:
   db_data:
+  # Approved media and intermediate render artifacts. NOT the final
+  # recording: that lives in private object storage, and LOCAL final
+  # storage is refused in production.
+  media_data:

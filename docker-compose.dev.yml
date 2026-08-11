@@ -1,0 +1,19 @@
+# LOCAL DEVELOPMENT OVERRIDE — never used in production.
+#
+# The production Compose file deliberately does not publish the database
+# port: on a VPS that would expose MariaDB to the whole internet, where
+# scanners find it within minutes. But running the app on the host with
+# `bun run dev`, or running the test suite, needs to reach it — so the
+# port comes back HERE, in a file an operator has to name explicitly.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+#
+# It is bound to 127.0.0.1 rather than 0.0.0.0, so even locally the
+# database is not offered to the network the machine is on.
+
+name: yoruba-heritage-world-virtual
+
+services:
+  db:
+    ports:
+      - '127.0.0.1:${DATABASE_PORT:-3306}:3306'

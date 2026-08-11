@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { env } from '@/lib/env'
 import { LocalPrivateObjectStorage } from './local'
 import { createS3CompatibleObjectStorage } from './s3'
+import { ObjectStorageError } from './types'
 import type { ObjectStorageProvider } from './types'
 
 /**
@@ -19,19 +20,47 @@ let overrideProvider: ObjectStorageProvider | null = null
 let defaultProvider: ObjectStorageProvider | null = null
 
 function defaultRootDir(): string {
-  return process.env.OBJECT_STORAGE_ROOT ?? join(process.cwd(), 'var', 'objects')
+  return env.OBJECT_STORAGE_ROOT.trim() === ''
+    ? join(process.cwd(), 'var', 'objects')
+    : env.OBJECT_STORAGE_ROOT
 }
 
+/**
+ * Builds the configured provider. EXPLICIT SELECTION ONLY — there is no
+ * "try S3, fall back to local" path anywhere in this function, by
+ * design, and the default branch throws rather than guessing.
+ *
+ * An unknown driver string never reaches here: OBJECT_STORAGE_DRIVER is
+ * a validated enum, so a typo stops the process at configuration time,
+ * in EVERY environment. The exhaustive switch below is the second lock
+ * on the same door — if a value is ever added to the enum and not
+ * handled here, this throws instead of silently returning local
+ * storage.
+ */
 export function getObjectStorage(): ObjectStorageProvider {
   if (overrideProvider) return overrideProvider
   if (defaultProvider) return defaultProvider
-  // Explicit selection only. There is no "try S3, fall back to local"
-  // path anywhere in this function, by design.
-  defaultProvider =
-    (process.env.OBJECT_STORAGE_DRIVER ?? 'LOCAL').toUpperCase() === 'S3'
-      ? createS3CompatibleObjectStorage(process.env)
-      : new LocalPrivateObjectStorage(defaultRootDir())
+  switch (env.OBJECT_STORAGE_DRIVER) {
+    case 'LOCAL':
+      defaultProvider = new LocalPrivateObjectStorage(defaultRootDir())
+      break
+    case 'S3':
+      defaultProvider = createS3CompatibleObjectStorage(process.env)
+      break
+    default:
+      throw new ObjectStorageError(
+        'object_storage_driver_unknown',
+        'OBJECT_STORAGE_DRIVER names no implemented adapter; local storage is never a substitute.',
+        false,
+      )
+  }
   return defaultProvider
+}
+
+/** Drops the memoized provider so a configuration change (or a test
+ * that varies the driver) is observed rather than cached forever. */
+export function resetObjectStorageDefaultForTests(): void {
+  defaultProvider = null
 }
 
 /**

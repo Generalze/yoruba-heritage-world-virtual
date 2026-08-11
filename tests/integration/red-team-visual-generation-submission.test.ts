@@ -81,14 +81,25 @@ import {
 } from '@/services/visual-bibles'
 import {
   DEFAULT_LEASE_MS,
+  RESERVATION_STALE_AFTER_MS,
   GENERATION_TRANSITIONS,
   VISUAL_TASK_POLL_DELAY_MS,
   claimNextVisualGenerationJob,
   isLegalTransition,
+  PROVIDER_OUTCOME_UNKNOWN,
+  adminRetryGenerationJob,
   recoverExpiredGenerationLeases,
   runGenerationPreparationOnce,
   runVisualGenerationOnce,
 } from '@/services/generation-jobs'
+import { submitScene } from '@/services/visual-generation'
+import { createKlingVisualGenerationProvider } from '@/providers/visual-generation/kling'
+import {
+  resetVisualGenerationProviderForTests,
+  setVisualGenerationProviderForTests,
+} from '@/providers/visual-generation/registry'
+import type { KlingVisualConfig } from '@/providers/visual-generation/kling'
+import { VisualGenerationProviderError } from '@/providers/visual-generation/types'
 import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 import {
   addDays,
@@ -669,7 +680,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 32; i += 1) {
+  for (let i = 0; i < 44; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTVS${i}_${key}`.toUpperCase(),
@@ -1140,39 +1151,41 @@ describe('red-team: a job whose lease is reclaimed mid-cycle never finalizes for
 // ----------------------------------------------------------------------------
 
 describe('red-team: task-row status-CAS prevents a zombie worker from clobbering a newer SUCCEEDED result', () => {
-  it('a late write from a reclaimed worker cannot overwrite a fresher SUCCEEDED result with a stale FAILED', async () => {
-    const { jobId, manifest } = await makeGeneratingVisualsJob()
+  it('a reclaimed worker NEVER submits a second time, and a stale reservation is quarantined', async () => {
+    // THIS TEST REPLACES AN OBSOLETE ONE. Its predecessor asserted
+    // that worker B should RESUBMIT a task whose first worker lost its
+    // lease mid-call. Against a real paid provider that is a second
+    // charge for one scene, so the contract is now stronger:
+    //
+    //   A reserves and enters the provider call.
+    //   A loses the job lease.
+    //   B reclaims the job.
+    //     - while the reservation is FRESH, B submits NOTHING.
+    //     - once it is genuinely STALE, B quarantines it and still
+    //       submits NOTHING.
+    //   A late response can neither resurrect nor overwrite it.
+    //
+    // Both original safety properties are preserved: stale workers
+    // cannot overwrite newer truth, AND a reclaimed worker cannot
+    // cause duplicate spend.
+    const { jobId } = await makeGeneratingVisualsJob()
     const clock = makeFakeClock(Date.now())
-    // Worker B's result is a GENUINE one: real bytes in private storage,
-    // hashed from those exact bytes. Anything less would be rejected by
-    // the finalization gate and this test would be proving the wrong
-    // thing (a blocked finalize rather than a protected result).
-    const bArtifact = await storeRealArtifact(manifest.visualTasks[0])
-    const KNOWN_SHA = bArtifact.artifactSha256
-    const KNOWN_MIME = bArtifact.artifactMimeType
-    const KNOWN_DURATION = bArtifact.artifactDurationMs
 
-    let jobAttemptCountAfterGenuineSuccess = -1
+    let submitCalls = 0
+    let bSubmitCallsWhileFresh = 0
+    let bSubmitCallsWhenStale = 0
 
-    // Worker A's submitScene is called by runVisualGenerationOnce's loop
-    // AFTER it has already read this task row as PENDING. Everything
-    // below happens WHILE A is still "inside" that one call — exactly
-    // modeling a worker whose provider round-trip is slow enough that
-    // its lease gets reclaimed and a second worker fully completes the
-    // SAME task before A's own (stale) result ever comes back.
     const zombieDeps: VisualGenerationDependencies = {
       submitScene: async () => {
-        // A's heartbeat stalls: reclaim the job-level lease out from
-        // under it, exactly like item 4 above.
+        submitCalls += 1
+        // A's heartbeat stalls: its job lease is reclaimed out from
+        // under it while it waits on the provider.
         clock.advance(DEFAULT_LEASE_MS + 60_000)
         expect(
           await recoverExpiredGenerationLeases(clock),
         ).toBeGreaterThanOrEqual(1)
 
-        // Worker B claims the reclaimed job and drives the SAME task
-        // row all the way to a genuine SUCCEEDED with KNOWN artifact
-        // values — two cycles: submit, then (after the poll delay)
-        // poll-to-success, exactly like the real async lifecycle.
+        // --- B, while the reservation is still FRESH ---------------
         const afterRecovery = (
           await getDb()
             .select()
@@ -1186,48 +1199,64 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
             clock.now().getTime() +
             1_000,
         )
-        const bSubmitOutcome = await runVisualGenerationOnce(
-          'worker-B-submit',
+        const bFresh = await runVisualGenerationOnce(
+          'worker-B-fresh',
           clock,
           {
-            submitScene: async (t) => ({
-              status: 'SUBMITTED',
-              providerCode: 'MOCK',
-              providerOperationId: `op-${t.taskId}`,
-            }),
+            submitScene: async () => {
+              bSubmitCallsWhileFresh += 1
+              throw new Error(
+                'worker B must not submit while a reservation is live',
+              )
+            },
             pollScene: async () => ({ status: 'PROCESSING' }),
           },
         )
-        expect(bSubmitOutcome.status).toBe('WAITING')
-        clock.advance(VISUAL_TASK_POLL_DELAY_MS + 1_000)
-        const bPollOutcome = await runVisualGenerationOnce(
-          'worker-B-poll',
-          clock,
-          {
-            submitScene: async (t) => ({
-              status: 'SUBMITTED',
-              providerCode: 'MOCK',
-              providerOperationId: `op-${t.taskId}`,
-            }),
-            pollScene: async () => bArtifact,
-          },
-        )
-        expect(bPollOutcome.status).toBe('COMPLETE')
+        // TEETH: B waits. It does not submit, and it does not
+        // quarantine a reservation that may still be in flight.
+        expect(bFresh.status).toBe('WAITING')
+        expect(bSubmitCallsWhileFresh).toBe(0)
+        const stillReserved = (await visualTaskRows(jobId))[0]
+        expect(stillReserved.status).toBe('SUBMITTED')
+        expect(stillReserved.providerOperationId).toBeNull()
 
-        const succeededByB = (await visualTaskRows(jobId))[0]
-        expect(succeededByB.status).toBe('SUCCEEDED')
-        expect(succeededByB.artifactSha256).toBe(KNOWN_SHA)
-
-        const jobAfterB = (
+        // --- B, once the reservation is genuinely STALE ------------
+        clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        const staleJob = (
           await getDb()
             .select()
             .from(prayerGenerationJobs)
             .where(eq(prayerGenerationJobs.id, jobId))
             .limit(1)
         ).at(0)!
-        jobAttemptCountAfterGenuineSuccess = jobAfterB.attemptCount
+        if (staleJob.nextAttemptAt != null) {
+          clock.advance(
+            new Date(staleJob.nextAttemptAt).getTime() -
+              clock.now().getTime() +
+              1_000,
+          )
+        }
+        const bStale = await runVisualGenerationOnce(
+          'worker-B-stale',
+          clock,
+          {
+            submitScene: async () => {
+              bSubmitCallsWhenStale += 1
+              throw new Error('worker B must never resubmit')
+            },
+            pollScene: async () => ({ status: 'PROCESSING' }),
+          },
+        )
+        // TEETH: the job fails CLOSED on an unknown outcome, and B
+        // still never crossed the provider boundary.
+        expect(bStale.status).toBe('FAILED')
+        expect(bSubmitCallsWhenStale).toBe(0)
+        const quarantined = (await visualTaskRows(jobId))[0]
+        expect(quarantined.status).toBe('CANCELLED')
+        expect(quarantined.lastErrorCode).toBe('provider_outcome_unknown')
 
-        // ONLY NOW does worker A's own (stale) verdict finally land.
+        // ONLY NOW does A's own late verdict come back.
         return {
           status: 'FAILED',
           providerCode: 'MOCK',
@@ -1239,31 +1268,17 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
     }
 
     const aOutcome = await runVisualGenerationOnce('worker-A', clock, zombieDeps)
-    // A's own job-level lease was reclaimed while it was stuck — its
-    // cycle can never finalize anything at the job level either (the
-    // pre-existing job-level lease CAS, proven in item 4, still holds).
     expect(aOutcome.status).toBe('LEASE_LOST')
 
-    // TEETH: the row must STILL hold B's EXACT SUCCEEDED values — none
-    // of A's stale verdict in ANY field. Checked immediately after A's
-    // cycle ends, before any further cycle could run and mask a real
-    // clobber (a FAILED row resets to PENDING and gets resubmitted on
-    // the next cycle, which would hide this bug behind a redundant
-    // provider call and an eventual, misleadingly-green "SUCCEEDED").
-    // TWO independent guards must both hold here: A's post-provider
-    // lease heartbeat refuses to accept a result on a lease it no longer
-    // holds, and the row-status CAS would reject the write even if it
-    // were attempted (proven directly, without any lease loss, by the
-    // late-poll CAS tests further below).
+    // TEETH: A's late FAILED cannot replace the quarantine, and the
+    // whole episode cost exactly ONE provider submission.
     const final = (await visualTaskRows(jobId))[0]
-    expect(final.status).toBe('SUCCEEDED')
-    expect(final.artifactSha256).toBe(KNOWN_SHA)
-    expect(final.artifactMimeType).toBe(KNOWN_MIME)
-    expect(final.artifactDurationMs).toBe(KNOWN_DURATION)
-    expect(final.lastErrorCode).toBeNull()
-    expect(final.lastErrorMessage).toBeNull()
+    expect(final.status).toBe('CANCELLED')
+    expect(final.lastErrorCode).toBe('provider_outcome_unknown')
+    expect(submitCalls).toBe(1)
 
-    // A's no-op must not corrupt job-level state either.
+    // And the job is terminally FAILED with the bounded stage code —
+    // never scheduled for an automatic retry that would re-spend.
     const finalJob = (
       await getDb()
         .select()
@@ -1271,8 +1286,64 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
         .where(eq(prayerGenerationJobs.id, jobId))
         .limit(1)
     ).at(0)!
-    expect(finalJob.attemptCount).toBe(jobAttemptCountAfterGenuineSuccess)
-    expect(finalJob.status).not.toBe('FAILED')
+    expect(finalJob.status).toBe('FAILED')
+    expect(finalJob.lastErrorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    expect(finalJob.nextAttemptAt).toBeNull()
+  }, 240_000)
+
+  it('a durably recorded operation id is POLLED by the next worker, never resubmitted', async () => {
+    // The other half of the contract: when the operation id DID land
+    // before the lease was lost, the work is recoverable — a later
+    // worker continues that exact operation instead of paying again.
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submitCalls = 0
+    const first = await runVisualGenerationOnce(`w1`, clock, {
+      submitScene: async (t) => {
+        submitCalls += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('WAITING')
+    expect(submitCalls).toBe(1)
+
+    // Lose the lease and let a different worker take over, well past
+    // the staleness threshold.
+    clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+    await recoverExpiredGenerationLeases(clock)
+    const resumed = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    if (resumed.nextAttemptAt != null) {
+      clock.advance(
+        new Date(resumed.nextAttemptAt).getTime() - clock.now().getTime() + 1_000,
+      )
+    }
+
+    let polledOperationId: string | null = null
+    const second = await runVisualGenerationOnce(`w2`, clock, {
+      submitScene: async () => {
+        submitCalls += 1
+        throw new Error('a known operation must be polled, never resubmitted')
+      },
+      pollScene: async (input) => {
+        polledOperationId = input.providerOperationId
+        return { status: 'PROCESSING' }
+      },
+    })
+    expect(second.status).toBe('WAITING')
+    // TEETH: the SAME operation, and still exactly one submission.
+    expect(polledOperationId).toMatch(/^op-/)
+    expect(submitCalls).toBe(1)
   }, 240_000)
 })
 
@@ -1902,5 +1973,833 @@ describe('red-team: a worker that has lost its lease starts no further provider 
     // TEETH 3: and the bytes that result had already written are gone —
     // no row references them and none ever will.
     expect(await storage.exists(stranded.artifactStorageRef)).toBe(false)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20 follow-up: spend classification, reservation persistence and the
+// admin gate — every property proven against the DATABASE, not source text.
+// ----------------------------------------------------------------------------
+
+describe('red-team: spend classification decides retry or quarantine', () => {
+  it('a NOT_SENT refusal lands on the RESERVED row and is retryable', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runVisualGenerationOnce('w-ns-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // A refusal proved free of spend is a KNOWN failure: budgeted
+    // retry, not quarantine.
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await visualTaskRows(jobId))[0]
+    // TEETH for the CAS itself. The row was SUBMITTED (reserved) when
+    // this refusal came back; the first implementation CASed on
+    // PENDING, which could never match, so the refusal never landed.
+    // These assertions are about the DATABASE having changed.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+    expect(afterFirst.lastErrorCode).toBe('synthetic_pre_network_refusal')
+
+    const job = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    expect(job.status).toBe('RETRYING')
+    clock.advance(
+      new Date(job.nextAttemptAt!).getTime() - clock.now().getTime() + 1_000,
+    )
+    const second = await runVisualGenerationOnce('w-ns-2', clock, {
+      submitScene: async (t) => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    const afterSecond = (await visualTaskRows(jobId))[0]
+    expect(afterSecond.status).toBe('SUBMITTED')
+    expect(afterSecond.providerOperationId).toMatch(/^op-/)
+  }, 240_000)
+
+  it('an UNKNOWN failure quarantines the task and can NEVER take the retry path', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const outcome = await runVisualGenerationOnce('w-unk-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        // NO spendState: an adapter that does not say is treated as
+        // UNKNOWN — absence must never authorise a second charge.
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'ambiguous_transport_failure',
+          errorMessage: null,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // The submission evidence is RETAINED — precisely what bars the
+    // NOT_SENT retry path forever.
+    expect(row.submittedAt).not.toBeNull()
+    const job = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+    // And nothing ever submits again: the job is terminal.
+    const again = await runVisualGenerationOnce('w-unk-2', clock, {
+      submitScene: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
+
+  it('an answer naming a DIFFERENT provider is quarantined, never polled', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runVisualGenerationOnce('w-impostor', clock, {
+      submitScene: async () => ({
+        status: 'SUBMITTED',
+        providerCode: 'IMPOSTOR',
+        providerOperationId: 'op-under-the-wrong-roof',
+      }),
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    const row = (await visualTaskRows(jobId))[0]
+    // External contact may already have happened, under an identity
+    // nothing downstream can vouch for — so the operation is never
+    // recorded, never polled under the other provider, never retried.
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.providerOperationId).toBeNull()
+    expect(row.providerCode).toBe('MOCK')
+  }, 240_000)
+
+  it('an unusable operation id after provider contact is quarantined', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runVisualGenerationOnce('w-blank-op', clock, {
+      submitScene: async () => ({
+        status: 'SUBMITTED',
+        providerCode: 'MOCK',
+        // Whitespace-only: empty after trimming, unusable forever.
+        providerOperationId: '   ',
+      }),
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.providerOperationId).toBeNull()
+  }, 240_000)
+
+  it('the reservation hands the reserved provider to the submission seam', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let seen: string | undefined
+    const outcome = await runVisualGenerationOnce('w-seam', clock, {
+      submitScene: async (t, options) => {
+        seen = options?.expectedProviderCode
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('WAITING')
+    // The seam receives the code recorded in the durable reservation,
+    // so the check happens immediately before invocation — not only
+    // in outer registry reads with a gap between them.
+    expect(seen).toBe('MOCK')
+    void jobId
+  }, 240_000)
+
+  it('a provider-boundary failure in the real submitScene is never NOT_SENT', async () => {
+    const { manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    setVisualGenerationProviderForTests({
+      code: 'MOCK',
+      displayName: 'throwing test provider',
+      isEnabled: () => true,
+      submitScene: async () => {
+        throw new VisualGenerationProviderError(
+          'provider_unreachable',
+          'synthetic transport failure',
+          true,
+        )
+      },
+      pollScene: async () => {
+        throw new VisualGenerationProviderError('unused', 'unused', false)
+      },
+    })
+    try {
+      const result = await submitScene(task, { expectedProviderCode: 'MOCK' })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('provider_unreachable')
+      // The request may have crossed the boundary before the throw —
+      // the adapter must NOT claim otherwise.
+      expect(result.spendState).toBeUndefined()
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  }, 240_000)
+
+  it('a legacy FAILED row carrying submission evidence is normalized to quarantine', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    // Seed a genuinely submitted row, then rewrite it to the LEGACY
+    // shape older code produced: FAILED, but with submission evidence.
+    expect(
+      (await runVisualGenerationOnce('w-legacy-seed', clock, {
+        submitScene: async (t) => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    await getDb()
+      .update(prayerGenerationVisualTasks)
+      .set({
+        status: 'FAILED',
+        providerOperationId: null,
+        lastErrorCode: 'legacy_provider_error',
+      })
+      .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'GENERATING_VISUALS',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+
+    let submits = 0
+    const outcome = await runVisualGenerationOnce('w-legacy', clock, {
+      submitScene: async () => {
+        submits += 1
+        throw new Error('a legacy unresolved row must never resubmit')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    expect(submits).toBe(0)
+    const row = (await visualTaskRows(jobId))[0]
+    // Normalized, not merely tolerated: the resettable FAILED shape is
+    // gone, replaced by the terminal quarantine the whole lifecycle
+    // already understands.
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+  }, 240_000)
+
+  it('an in-seam provider SWITCH refusal — NOT_SENT under the NEW code — stays retryable', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runVisualGenerationOnce('w-switch-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        // The seam's own selection check caught a provider switch and
+        // refused BEFORE the network — reporting the NEW provider's
+        // code, because that is who it honestly saw. NOT_SENT must be
+        // honored BEFORE the provider-binding gate: gating first would
+        // quarantine this free refusal into a dead recording.
+        return {
+          status: 'FAILED',
+          providerCode: 'SWITCHED_MID_FLIGHT',
+          errorCode: 'provider_selection_changed',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await visualTaskRows(jobId))[0]
+    // TEETH: retryable, not quarantined — the DATABASE says so.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+    expect(afterFirst.lastErrorCode).toBe('provider_selection_changed')
+
+    const job = await jobRow(jobId)
+    expect(job.status).toBe('RETRYING')
+    clock.advance(
+      new Date(job.nextAttemptAt!).getTime() - clock.now().getTime() + 1_000,
+    )
+    const second = await runVisualGenerationOnce('w-switch-2', clock, {
+      submitScene: async (t) => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // The refusal cost nothing: the SAME task submits cleanly under
+    // the provider actually reserved.
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    expect((await visualTaskRows(jobId))[0].status).toBe('SUBMITTED')
+  }, 240_000)
+
+  it('a submitScene that THROWS after the reservation is quarantined, raw error dropped', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    const marker = `boom-${crypto.randomUUID()}`
+    let submits = 0
+    const outcome = await runVisualGenerationOnce('w-throw-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        // The reservation is durable and the call was in flight when
+        // this escaped — the request may already have been accepted.
+        throw new Error(marker)
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // Quarantined DETERMINISTICALLY — never handed to the generic
+    // error path, which would burn the budget as a retry and leave
+    // the row waiting to go stale.
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // Submission evidence retained — the NOT_SENT reset can never
+    // touch this row.
+    expect(row.submittedAt).not.toBeNull()
+    // The exception itself was DROPPED, not recorded: raw provider
+    // errors reach neither rows nor events.
+    const events = await getDb()
+      .select()
+      .from(prayerGenerationJobEvents)
+      .where(eq(prayerGenerationJobEvents.generationJobId, jobId))
+    expect(
+      JSON.stringify({ rows: await visualTaskRows(jobId), events }),
+    ).not.toContain(marker)
+    const job = await jobRow(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+    const again = await runVisualGenerationOnce('w-throw-2', clock, {
+      submitScene: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
+})
+
+describe('red-team: admin retry refuses unresolved provider spend (DB-driven)', () => {
+  it('a quarantined visual task blocks the generic admin retry', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-1', clock, {
+        submitScene: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'ambiguous',
+          errorMessage: null,
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('FAILED')
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    const job = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    expect(job.status).toBe('FAILED')
+  }, 240_000)
+
+  it('a LEGACY failed-with-evidence row blocks it too, before normalization', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-2', clock, {
+        submitScene: async (t) => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    // The legacy shape, still un-normalized (no worker has run), with
+    // the job already FAILED — the administrator must be protected
+    // even before the worker gets a chance to normalize.
+    await getDb()
+      .update(prayerGenerationVisualTasks)
+      .set({
+        status: 'FAILED',
+        providerOperationId: null,
+        lastErrorCode: 'legacy_provider_error',
+      })
+      .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a MAX-ATTEMPT STRANDED reservation — still SUBMITTED, no operation id — blocks it', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    // Spend the whole budget beforehand, so the next lease recovery is
+    // the LAST: the job dies with its reservation still open, and no
+    // later worker cycle ever exists to normalize the row.
+    const fresh = await jobRow(jobId)
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ attemptCount: fresh.maxAttempts - 1 })
+      .where(eq(prayerGenerationJobs.id, jobId))
+
+    let refusedWhileStranded: unknown
+    const outcome = await runVisualGenerationOnce('w-adm-strand', clock, {
+      submitScene: async () => {
+        // The durable reservation exists NOW. This worker "dies": its
+        // lease expires and recovery — budget exhausted — fails the
+        // job terminally, stranding the reservation.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        const dead = await jobRow(jobId)
+        expect(dead.status).toBe('FAILED')
+        expect(dead.lastErrorCode).toBe('LEASE_EXPIRED')
+        expect(dead.nextAttemptAt).toBeNull()
+        const stranded = (await visualTaskRows(jobId))[0]
+        // THE SHAPE A NARROWER GUARD MISSES: not a quarantine, not a
+        // legacy FAILED — literally SUBMITTED with no operation id,
+        // while the request may be executing right now.
+        expect(stranded.status).toBe('SUBMITTED')
+        expect(stranded.providerOperationId).toBeNull()
+        expect(stranded.submittedAt).not.toBeNull()
+        try {
+          await adminRetryGenerationJob(adminId, ctx, jobId)
+        } catch (error) {
+          refusedWhileStranded = error
+        }
+        throw new Error('worker dies without a provider verdict')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // Refused AT THE MOMENT the row was still a bare reservation.
+    expect(String((refusedWhileStranded as Error).message)).toContain(
+      'unresolved',
+    )
+    expect(outcome.status).toBe('LEASE_LOST')
+    // The dying worker's own throw then sealed the reservation, and
+    // the refusal holds for the sealed shape too.
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.submittedAt).not.toBeNull()
+    expect((await jobRow(jobId)).status).toBe('FAILED')
+    let refusedAfter: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refusedAfter = error
+    }
+    expect(String((refusedAfter as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a KNOWN OPERATION mid-poll — SUBMITTED with an operation id — blocks it', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-op', clock, {
+        submitScene: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          // Deliberately unnormalized: interior caps and surrounding
+          // whitespace, valid because it is non-empty after trimming.
+          providerOperationId: '  Op-Verbatim-001  ',
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    // BYTE-FOR-BYTE: the id was validated raw and persisted verbatim —
+    // never trimmed, lowercased or otherwise "tidied" — because the
+    // provider will be asked for it back exactly as issued.
+    const submitted = (await visualTaskRows(jobId))[0]
+    expect(submitted.providerOperationId).toBe('  Op-Verbatim-001  ')
+    // The job dies later for an unrelated reason; the paid operation
+    // itself is still out there.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        lastErrorCode: 'LEASE_EXPIRED',
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    // And the operation record is untouched — reconciliation, not
+    // amnesia.
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('SUBMITTED')
+    expect(row.providerOperationId).toBe('  Op-Verbatim-001  ')
+  }, 240_000)
+
+  it('even a SUCCEEDED task blocks it — paid output a restart would abandon and re-buy', async () => {
+    const { jobId, outcome, job } = await runFinalizeOnlyCycle(
+      'w-adm-succ',
+      async (task) => storeRealArtifact(task),
+    )
+    expect(outcome.status).toBe('COMPLETE')
+    expect(job.status).toBe('GENERATING_AUDIO')
+    // A LATER stage then fails the job; the visual spend is real and
+    // already delivered.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('SUCCEEDED')
+    expect(row.submittedAt).not.toBeNull()
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    // Restart-from-PREPARING would mint fresh task identities and buy
+    // this scene a second time while abandoning the artifact already
+    // paid for.
+    expect(String((refused as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a provably-unsent failure (submittedAt NULL) remains retryable — the control', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-free', clock, {
+        submitScene: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('RETRY_SCHEDULED')
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('FAILED')
+    expect(row.submittedAt).toBeNull()
+    // The job's own budget then runs out on later, equally free
+    // failures — seeded directly; the row keeps its NOT_SENT shape.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        resumeStatus: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    // TEETH: the blunt rule does NOT overreach. No submission evidence
+    // exists, so the generic retry PROCEEDS.
+    await adminRetryGenerationJob(adminId, ctx, jobId)
+    const retried = await jobRow(jobId)
+    expect(retried.status).toBe('RETRYING')
+    expect(retried.resumeStatus).toBe('PREPARING')
+    expect(retried.attemptCount).toBe(0)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20: Kling API 2.0 — the production text-to-video provider
+// ----------------------------------------------------------------------------
+
+/** Test doubles ONLY: zero network, zero real API, zero spend. */
+const KLING_TEST_CONFIG: KlingVisualConfig = {
+  apiKey: 'rt-kling-secret-key',
+  baseUrl: 'https://api-singapore.klingai.com',
+  artifactOrigins: ['https://cdn.kling-artifacts.test'],
+}
+
+describe('red-team: Kling through the REAL executor (fake HTTP, ZERO network)', () => {
+  it('reserves, submits ONCE, persists the EXACT provider id, polls the same id, and completes with locally measured bytes', async () => {
+    const { jobId, manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    // The fixture scene is a whole number of seconds inside Kling's
+    // official 3–15 s window — the pipeline's own scene ceiling
+    // (MAX_SCENE_MS = 15 s) matches the vendor bound exactly.
+    expect(task.durationMs % 1000).toBe(0)
+    expect(task.durationMs).toBeGreaterThanOrEqual(3_000)
+    expect(task.durationMs).toBeLessThanOrEqual(15_000)
+
+    const clock = makeFakeClock(Date.now())
+    const mp4Bytes = new TextEncoder().encode(
+      `rt-kling-mp4-${'y'.repeat(4096)}`,
+    )
+    const providerOperationId = 'kling-op-e2e-001'
+    const artifactUrl =
+      'https://cdn.kling-artifacts.test/v/e2e.mp4?sig=E2E_SECRET_SIG'
+    const requests: Array<{
+      method: string
+      url: string
+      headers: Readonly<Record<string, string>>
+      body?: string
+    }> = []
+    const downloads: Array<string> = []
+    setVisualGenerationProviderForTests(
+      createKlingVisualGenerationProvider(
+        KLING_TEST_CONFIG,
+        {
+          async requestJson(input) {
+            requests.push(input)
+            if (input.method === 'POST') {
+              return {
+                status: 200,
+                bodyText: JSON.stringify({
+                  code: 0,
+                  data: { id: providerOperationId, status: 'submitted' },
+                }),
+              }
+            }
+            return {
+              status: 200,
+              bodyText: JSON.stringify({
+                code: 0,
+                data: [
+                  {
+                    id: providerOperationId,
+                    status: 'succeeded',
+                    outputs: [{ type: 'video', url: artifactUrl }],
+                  },
+                ],
+              }),
+            }
+          },
+          async downloadArtifact(input) {
+            downloads.push(input.url)
+            return { status: 200, contentType: 'video/mp4', bytes: mp4Bytes }
+          },
+        },
+        // ffprobe stand-in: the LOCAL measurement is what the row gets.
+        async () => ({
+          ok: true,
+          durationMs: task.durationMs,
+          hasAudio: false,
+          hasVideo: true,
+        }),
+      ),
+    )
+    try {
+      // Cycle 1: durable reservation → create → WAITING. No injected
+      // deps: this drives the REAL submitScene/pollScene seam.
+      const first = await runVisualGenerationOnce('w-kling-1', clock)
+      expect(first.status).toBe('WAITING')
+      const afterSubmit = (await visualTaskRows(jobId))[0]
+      expect(afterSubmit.status).toBe('SUBMITTED')
+      expect(afterSubmit.providerCode).toBe('KLING')
+      // The provider's OWN id, byte-for-byte — polling continues it.
+      expect(afterSubmit.providerOperationId).toBe(providerOperationId)
+      expect(afterSubmit.submittedAt).not.toBeNull()
+
+      // Exactly ONE create call, carrying the exact official contract.
+      expect(requests).toHaveLength(1)
+      const createCall = requests[0]
+      expect(createCall.method).toBe('POST')
+      expect(createCall.url).toBe(
+        'https://api-singapore.klingai.com/text-to-video/kling-3.0',
+      )
+      expect(createCall.headers.Authorization).toBe(
+        `Bearer ${KLING_TEST_CONFIG.apiKey}`,
+      )
+      const body = JSON.parse(createCall.body!) as {
+        prompt: string
+        settings: Record<string, unknown>
+        options: Record<string, unknown>
+      }
+      expect(body.settings.audio).toBe('off')
+      expect(body.settings.multi_shot).toBe(false)
+      expect(body.settings.duration).toBe(task.durationMs / 1000)
+      expect(body.options.external_task_id).toBe(task.idempotencyKey)
+      // METADATA_ONLY: the compiled prompt carries the approved rule
+      // text and safe metadata — never a sacred body.
+      expect(body.prompt).toContain('riverside at dawn')
+
+      // Cycle 2: poll the SAME operation, download from the allowlisted
+      // origin, measure locally, store, finalize.
+      clock.advance(VISUAL_TASK_POLL_DELAY_MS + 60_000)
+      const second = await runVisualGenerationOnce('w-kling-2', clock)
+      expect(second.status).toBe('COMPLETE')
+      expect(requests).toHaveLength(2)
+      expect(requests[1].method).toBe('GET')
+      expect(requests[1].url).toBe(
+        `https://api-singapore.klingai.com/tasks?task_ids=${encodeURIComponent(providerOperationId)}`,
+      )
+      expect(downloads).toEqual([artifactUrl])
+
+      const row = (await visualTaskRows(jobId))[0]
+      expect(row.status).toBe('SUCCEEDED')
+      expect(row.artifactSha256).toBe(computeFileSha256(mp4Bytes))
+      expect(row.artifactMimeType).toBe('video/mp4')
+      expect(row.artifactDurationMs).toBe(task.durationMs)
+      const stored = await storage.get(row.artifactStorageRef!)
+      expect(stored).not.toBeNull()
+      expect(computeFileSha256(stored!)).toBe(computeFileSha256(mp4Bytes))
+      expect((await jobRow(jobId)).status).toBe('GENERATING_AUDIO')
+
+      // NOTHING SECRET PERSISTED: not the key, not the bearer header,
+      // not the signed artifact URL, not the compiled prompt.
+      const events = await getDb()
+        .select()
+        .from(prayerGenerationJobEvents)
+        .where(eq(prayerGenerationJobEvents.generationJobId, jobId))
+      const payload = JSON.stringify({
+        rows: await visualTaskRows(jobId),
+        events,
+        job: await jobRow(jobId),
+      })
+      expect(payload).not.toContain(KLING_TEST_CONFIG.apiKey)
+      expect(payload).not.toContain('Bearer')
+      expect(payload).not.toContain('E2E_SECRET_SIG')
+      expect(payload).not.toContain('kling-artifacts.test')
+      expect(payload).not.toContain('riverside at dawn')
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  }, 240_000)
+
+  it('an unsupported scene duration is refused NOT_SENT with ZERO provider contact', async () => {
+    const { manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    let networkCalls = 0
+    setVisualGenerationProviderForTests(
+      createKlingVisualGenerationProvider(
+        KLING_TEST_CONFIG,
+        {
+          async requestJson() {
+            networkCalls += 1
+            throw new Error('the network must never be reached')
+          },
+          async downloadArtifact() {
+            networkCalls += 1
+            throw new Error('the network must never be reached')
+          },
+        },
+        async () => ({
+          ok: true,
+          durationMs: 1,
+          hasAudio: false,
+          hasVideo: true,
+        }),
+      ),
+    )
+    try {
+      // Kling takes whole seconds 3–15; nothing is EVER rounded to
+      // fit, so each of these is a recorded, freely-retryable refusal
+      // decided before the network.
+      for (const durationMs of [2_000, 16_000, 10_500]) {
+        const result = await submitScene(
+          { ...task, durationMs },
+          { expectedProviderCode: 'KLING' },
+        )
+        expect(result.status).toBe('FAILED')
+        if (result.status !== 'FAILED') continue
+        expect(result.errorCode).toBe('duration_unsupported_by_provider')
+        expect(result.spendState).toBe('NOT_SENT')
+      }
+      expect(networkCalls).toBe(0)
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
   }, 240_000)
 })

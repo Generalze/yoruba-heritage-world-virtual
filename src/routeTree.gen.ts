@@ -19,6 +19,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as AdminGenerationJobsRouteImport } from './routes/admin.generation-jobs'
 import { Route as AdminVideoRecipesRouteImport } from './routes/admin.video-recipes'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
+import { Route as ApiReadyRouteImport } from './routes/api.ready'
 import { Route as AppointmentsIndexRouteImport } from './routes/appointments.index'
 import { Route as AppointmentsPublicIdRouteImport } from './routes/appointments.$publicId'
 import { Route as BookServiceSlugRouteImport } from './routes/book.$serviceSlug'
@@ -122,6 +123,11 @@ const AdminVideoRecipesRoute = AdminVideoRecipesRouteImport.update({
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiReadyRoute = ApiReadyRouteImport.update({
+  id: '/api/ready',
+  path: '/api/ready',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppointmentsIndexRoute = AppointmentsIndexRouteImport.update({
@@ -423,6 +429,7 @@ export interface FileRoutesByFullPath {
   '/admin/generation-jobs': typeof AdminGenerationJobsRoute
   '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/ready': typeof ApiReadyRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
   '/book/$serviceSlug': typeof BookServiceSlugRoute
   '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
@@ -488,6 +495,7 @@ export interface FileRoutesByTo {
   '/admin/generation-jobs': typeof AdminGenerationJobsRoute
   '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/ready': typeof ApiReadyRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
   '/book/$serviceSlug': typeof BookServiceSlugRoute
   '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
@@ -555,6 +563,7 @@ export interface FileRoutesById {
   '/admin/generation-jobs': typeof AdminGenerationJobsRoute
   '/admin/video-recipes': typeof AdminVideoRecipesRoute
   '/api/health': typeof ApiHealthRoute
+  '/api/ready': typeof ApiReadyRoute
   '/appointments/$publicId': typeof AppointmentsPublicIdRoute
   '/book/$serviceSlug': typeof BookServiceSlugRoute
   '/checkout/$appointmentPublicId': typeof CheckoutAppointmentPublicIdRoute
@@ -623,6 +632,7 @@ export interface FileRouteTypes {
     | '/admin/generation-jobs'
     | '/admin/video-recipes'
     | '/api/health'
+    | '/api/ready'
     | '/appointments/$publicId'
     | '/book/$serviceSlug'
     | '/checkout/$appointmentPublicId'
@@ -688,6 +698,7 @@ export interface FileRouteTypes {
     | '/admin/generation-jobs'
     | '/admin/video-recipes'
     | '/api/health'
+    | '/api/ready'
     | '/appointments/$publicId'
     | '/book/$serviceSlug'
     | '/checkout/$appointmentPublicId'
@@ -754,6 +765,7 @@ export interface FileRouteTypes {
     | '/admin/generation-jobs'
     | '/admin/video-recipes'
     | '/api/health'
+    | '/api/ready'
     | '/appointments/$publicId'
     | '/book/$serviceSlug'
     | '/checkout/$appointmentPublicId'
@@ -819,6 +831,7 @@ export interface RootRouteChildren {
   OlodumareRoute: typeof OlodumareRoute
   RegisterRoute: typeof RegisterRoute
   ApiHealthRoute: typeof ApiHealthRoute
+  ApiReadyRoute: typeof ApiReadyRoute
   AppointmentsPublicIdRoute: typeof AppointmentsPublicIdRoute
   BookServiceSlugRoute: typeof BookServiceSlugRoute
   CheckoutAppointmentPublicIdRoute: typeof CheckoutAppointmentPublicIdRoute
@@ -911,6 +924,13 @@ declare module '@tanstack/react-router' {
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/ready': {
+      id: '/api/ready'
+      path: '/api/ready'
+      fullPath: '/api/ready'
+      preLoaderRoute: typeof ApiReadyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/appointments/': {
@@ -1384,6 +1404,7 @@ const rootRouteChildren: RootRouteChildren = {
   OlodumareRoute: OlodumareRoute,
   RegisterRoute: RegisterRoute,
   ApiHealthRoute: ApiHealthRoute,
+  ApiReadyRoute: ApiReadyRoute,
   AppointmentsPublicIdRoute: AppointmentsPublicIdRoute,
   BookServiceSlugRoute: BookServiceSlugRoute,
   CheckoutAppointmentPublicIdRoute: CheckoutAppointmentPublicIdRoute,

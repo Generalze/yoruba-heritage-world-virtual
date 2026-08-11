@@ -4,11 +4,11 @@
  *
  * Provider-specific code lives ONLY in this directory. The Step 15
  * executor service (`src/services/audio-generation.ts`) talks to the
- * TtsProvider interface only — never to ElevenLabs/any paid speech API
- * directly, and never through provider conditionals scattered across
- * the codebase. Only a deterministic MockTtsProvider exists at this
- * stage; a real provider adapter is future work and must implement this
- * exact interface.
+ * TtsProvider interface only — never to any paid speech API directly,
+ * and never through provider conditionals scattered across the
+ * codebase. Three implementations exist: the deterministic mock, the
+ * disabled refusal, and the approved 9jaLingo adapter (Step 20,
+ * synchronous, Yoruba only) — all behind this exact interface.
  *
  * A SpeechSynthesisRequest is a PURELY IN-MEMORY compiled object. It is
  * built fresh for every submission from CURRENT authority, is never
@@ -52,10 +52,27 @@ export interface SpeechSynthesisRequest {
 
 export type SpeechSynthesisJobStatus = 'PENDING' | 'COMPLETED' | 'FAILED'
 
-export interface SpeechSynthesisSubmission {
-  providerJobId: string
-  status: SpeechSynthesisJobStatus
-}
+/**
+ * What ONE submission produced. Two real shapes exist because two real
+ * provider architectures exist:
+ *
+ * - ASYNCHRONOUS (`PENDING` + providerJobId): the provider accepted a
+ *   job it will finish later; the executor persists the id and polls.
+ * - SYNCHRONOUS (`COMPLETED` + artifact): the provider synthesized in
+ *   the request itself — 9jaLingo's /v1/audio/speech returns the WAV
+ *   bytes directly. There is no provider job id and never will be:
+ *   nothing exists to poll, and inventing an id to satisfy the async
+ *   shape would fake a continuation handle nobody can use.
+ *
+ * A `FAILED` answer is the provider's OWN explicit rejection, reported
+ * as a bounded machine code. Transport failures still THROW
+ * TtsProviderError — an explicit "no" and a ripped socket are different
+ * facts and the executor treats them differently.
+ */
+export type SpeechSynthesisSubmission =
+  | { status: 'PENDING'; providerJobId: string }
+  | { status: 'COMPLETED'; artifact: SpeechArtifact }
+  | { status: 'FAILED'; failureCode: string }
 
 /** Raw provider artifact bytes — verified by the executor service
  * (mime/type, bounded duration, non-empty, fresh SHA-256) before
@@ -94,10 +111,30 @@ export class TtsProviderError extends Error {
 export interface TtsProvider {
   readonly code: string
   readonly displayName: string
+  /**
+   * The languages this provider is approved to speak, or null for no
+   * declared restriction (the deterministic mock). The EXECUTOR checks
+   * this BEFORE compiling a request — and therefore before the sacred
+   * body is ever read — so an unsupported language is a provably
+   * NOT_SENT refusal with zero provider contact. The text itself is
+   * NEVER translated, shortened or padded to fit a provider; the
+   * refusal is the correct outcome. An adapter that omits the field
+   * declares nothing and must enforce its own limits before the
+   * network, which fails closed (quarantine), never open.
+   */
+  readonly supportedLanguages?: ReadonlyArray<string> | null
   isEnabled: () => boolean
-  /** ONE submission per idempotencyKey — a provider MUST treat a
-   * repeated submitSpeech() for the same idempotencyKey as the SAME
-   * job, never a duplicate paid synthesis. */
+  /**
+   * ONE submission per idempotencyKey.
+   *
+   * The EXECUTOR now guarantees that, not the adapter: a durable
+   * pre-call reservation means this is called at most once per
+   * requirement, and an unresolved submission is quarantined rather
+   * than repeated. An adapter that is ALSO idempotent is welcome to
+   * be, but nothing depends on it — no real speech vendor examined for
+   * this platform documents idempotent submission, and a guarantee
+   * nobody makes is not a guarantee.
+   */
   submitSpeech: (
     request: SpeechSynthesisRequest,
   ) => Promise<SpeechSynthesisSubmission>

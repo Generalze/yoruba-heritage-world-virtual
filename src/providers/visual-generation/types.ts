@@ -3,11 +3,12 @@
  *
  * Provider-specific code lives ONLY in this directory. The Step 14
  * executor service (`src/services/visual-generation.ts`) talks to the
- * VisualGenerationProvider interface only — never to Kling/OpenArt/any
- * paid API directly, and never through provider conditionals scattered
- * across the codebase. Only a deterministic MockVisualGenerationProvider
- * exists at this stage; a real provider adapter is future work and must
- * implement this exact interface.
+ * VisualGenerationProvider interface only — never to any paid API
+ * directly, and never through provider conditionals scattered across
+ * the codebase. Three implementations exist: the deterministic mock,
+ * the disabled refusal, and the approved Kling adapter (Step 20,
+ * Kling API 2.0 text-to-video, visuals only) — all behind this exact
+ * interface.
  *
  * A VisualGenerationRequest is a PURELY IN-MEMORY compiled object. It is
  * built fresh for every submission from CURRENT authority, is never
@@ -49,10 +50,16 @@ export interface VisualGenerationRequest {
 
 export type VisualGenerationJobStatus = 'PENDING' | 'COMPLETED' | 'FAILED'
 
-export interface VisualGenerationSubmission {
-  providerJobId: string
-  status: VisualGenerationJobStatus
-}
+/**
+ * What ONE submission produced. `PENDING` + providerJobId is the
+ * asynchronous acceptance every video vendor answers with; `FAILED` is
+ * the provider's OWN explicit rejection, as a bounded machine code.
+ * Transport failures still THROW VisualGenerationProviderError — an
+ * explicit "no" and a ripped socket are different facts.
+ */
+export type VisualGenerationSubmission =
+  | { status: 'PENDING'; providerJobId: string }
+  | { status: 'FAILED'; failureCode: string }
 
 /** Raw provider artifact bytes — verified by the executor service
  * (mime/type, bounded duration, non-empty, fresh SHA-256) before
@@ -92,9 +99,29 @@ export interface VisualGenerationProvider {
   readonly code: string
   readonly displayName: string
   isEnabled: () => boolean
-  /** ONE submission per idempotencyKey — a provider MUST treat a
-   * repeated submitScene() for the same idempotencyKey as the SAME
-   * job, never a duplicate paid execution. */
+  /**
+   * PURE, NETWORK-FREE admission check for the provider's own declared
+   * limits (an unsupported duration, a compiled prompt that cannot
+   * fit). The EXECUTOR calls this after compilation and BEFORE the
+   * provider is invoked, so a refusal here is provably NOT_SENT — a
+   * recorded, freely-retryable task failure with zero provider contact
+   * and zero spend. Approved content is NEVER rewritten, truncated,
+   * padded or rounded to fit a vendor; this refusal is the correct
+   * outcome. Deterministic and side-effect-free by contract.
+   */
+  readonly validateRequest?: (
+    request: VisualGenerationRequest,
+  ) => { ok: true } | { ok: false; reasonCode: string }
+  /**
+   * ONE submission per idempotencyKey.
+   *
+   * The EXECUTOR now guarantees that, not the adapter: a durable
+   * pre-call reservation means this is called at most once per task,
+   * and an unresolved submission is quarantined rather than repeated.
+   * An adapter that is ALSO idempotent is welcome to be, but nothing
+   * depends on it — no real generation vendor examined for this
+   * platform documents idempotent submission.
+   */
   submitScene: (
     request: VisualGenerationRequest,
   ) => Promise<VisualGenerationSubmission>
