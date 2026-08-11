@@ -6,7 +6,6 @@ import {
   listServicesFn,
 } from '@/services/catalogue-actions'
 import { SiteFooter, SiteHeader } from '@/components/site-chrome'
-import { HeroBackdrop } from '@/components/hero-scene'
 import {
   EmblemMedallion,
   InitialMedallion,
@@ -74,11 +73,23 @@ function Home() {
       <SiteHeader />
 
       <main id="main-content">
-        {/* 1 — Hero: full-bleed candle-lit backdrop, copy on a scrim */}
+        {/* 1 — Hero: full-bleed candle-lit photograph, copy on a scrim.
+            The image is APPROVED, rights-cleared platform artwork held
+            in public/ (same-origin, as the CSP requires). It is
+            decorative atmosphere — the headline carries the meaning —
+            so it is hidden from assistive technology. object-position
+            shifts right below lg, where the box turns portrait and a
+            centred crop would cut the subject out. */}
         <section className="relative isolate overflow-hidden bg-night">
-          <div aria-hidden="true" className="absolute inset-0 -z-20">
-            <HeroBackdrop className="h-full w-full" />
-          </div>
+          <img
+            src="/hero-sanctuary.jpg"
+            alt=""
+            aria-hidden="true"
+            width={1672}
+            height={941}
+            fetchPriority="high"
+            className="absolute inset-0 -z-20 h-full w-full object-cover object-[72%_center] lg:object-center"
+          />
           {/* Scrims: darken toward the copy so the headline holds
               contrast at every width, exactly as the reference does. */}
           <div

@@ -197,14 +197,17 @@ describe('landing page (src/routes/index.tsx)', () => {
     }
   })
 
-  it('keeps the skip-link target, page chrome and the full-bleed hero backdrop', () => {
+  it('keeps the skip-link target, page chrome and the full-bleed hero image', () => {
     expect(source).toContain('SkipLink')
     expect(source).toContain('id="main-content"')
     expect(source).toContain('SiteHeader')
     expect(source).toContain('SiteFooter')
-    // The reference-matching hero backdrop — original artwork, never a
-    // crop of the showcase screenshot.
-    expect(source).toContain('HeroBackdrop')
+    // The hero photograph is same-origin (the CSP allows no external
+    // image host), decorative, and covers the box at every width.
+    expect(code).toContain('src="/hero-sanctuary.jpg"')
+    expect(code).toContain('object-cover')
+    expect(code).toContain('alt=""')
+    expect(code).not.toMatch(/src="https?:/)
   })
 })
 
