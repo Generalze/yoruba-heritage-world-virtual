@@ -2237,6 +2237,110 @@ describe('red-team: spend classification decides retry or quarantine', () => {
     expect(row.status).toBe('CANCELLED')
     expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
   }, 240_000)
+
+  it('an in-seam provider SWITCH refusal — NOT_SENT under the NEW code — stays retryable', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runVisualGenerationOnce('w-switch-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        // The seam's own selection check caught a provider switch and
+        // refused BEFORE the network — reporting the NEW provider's
+        // code, because that is who it honestly saw. NOT_SENT must be
+        // honored BEFORE the provider-binding gate: gating first would
+        // quarantine this free refusal into a dead recording.
+        return {
+          status: 'FAILED',
+          providerCode: 'SWITCHED_MID_FLIGHT',
+          errorCode: 'provider_selection_changed',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await visualTaskRows(jobId))[0]
+    // TEETH: retryable, not quarantined — the DATABASE says so.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+    expect(afterFirst.lastErrorCode).toBe('provider_selection_changed')
+
+    const job = await jobRow(jobId)
+    expect(job.status).toBe('RETRYING')
+    clock.advance(
+      new Date(job.nextAttemptAt!).getTime() - clock.now().getTime() + 1_000,
+    )
+    const second = await runVisualGenerationOnce('w-switch-2', clock, {
+      submitScene: async (t) => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // The refusal cost nothing: the SAME task submits cleanly under
+    // the provider actually reserved.
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    expect((await visualTaskRows(jobId))[0].status).toBe('SUBMITTED')
+  }, 240_000)
+
+  it('a submitScene that THROWS after the reservation is quarantined, raw error dropped', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    const marker = `boom-${crypto.randomUUID()}`
+    let submits = 0
+    const outcome = await runVisualGenerationOnce('w-throw-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        // The reservation is durable and the call was in flight when
+        // this escaped — the request may already have been accepted.
+        throw new Error(marker)
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // Quarantined DETERMINISTICALLY — never handed to the generic
+    // error path, which would burn the budget as a retry and leave
+    // the row waiting to go stale.
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // Submission evidence retained — the NOT_SENT reset can never
+    // touch this row.
+    expect(row.submittedAt).not.toBeNull()
+    // The exception itself was DROPPED, not recorded: raw provider
+    // errors reach neither rows nor events.
+    const events = await getDb()
+      .select()
+      .from(prayerGenerationJobEvents)
+      .where(eq(prayerGenerationJobEvents.generationJobId, jobId))
+    expect(
+      JSON.stringify({ rows: await visualTaskRows(jobId), events }),
+    ).not.toContain(marker)
+    const job = await jobRow(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+    const again = await runVisualGenerationOnce('w-throw-2', clock, {
+      submitScene: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
 })
 
 describe('red-team: admin retry refuses unresolved provider spend (DB-driven)', () => {
@@ -2311,5 +2415,186 @@ describe('red-team: admin retry refuses unresolved provider spend (DB-driven)', 
       refused = error
     }
     expect(String((refused as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a MAX-ATTEMPT STRANDED reservation — still SUBMITTED, no operation id — blocks it', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    // Spend the whole budget beforehand, so the next lease recovery is
+    // the LAST: the job dies with its reservation still open, and no
+    // later worker cycle ever exists to normalize the row.
+    const fresh = await jobRow(jobId)
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({ attemptCount: fresh.maxAttempts - 1 })
+      .where(eq(prayerGenerationJobs.id, jobId))
+
+    let refusedWhileStranded: unknown
+    const outcome = await runVisualGenerationOnce('w-adm-strand', clock, {
+      submitScene: async () => {
+        // The durable reservation exists NOW. This worker "dies": its
+        // lease expires and recovery — budget exhausted — fails the
+        // job terminally, stranding the reservation.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        const dead = await jobRow(jobId)
+        expect(dead.status).toBe('FAILED')
+        expect(dead.lastErrorCode).toBe('LEASE_EXPIRED')
+        expect(dead.nextAttemptAt).toBeNull()
+        const stranded = (await visualTaskRows(jobId))[0]
+        // THE SHAPE A NARROWER GUARD MISSES: not a quarantine, not a
+        // legacy FAILED — literally SUBMITTED with no operation id,
+        // while the request may be executing right now.
+        expect(stranded.status).toBe('SUBMITTED')
+        expect(stranded.providerOperationId).toBeNull()
+        expect(stranded.submittedAt).not.toBeNull()
+        try {
+          await adminRetryGenerationJob(adminId, ctx, jobId)
+        } catch (error) {
+          refusedWhileStranded = error
+        }
+        throw new Error('worker dies without a provider verdict')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // Refused AT THE MOMENT the row was still a bare reservation.
+    expect(String((refusedWhileStranded as Error).message)).toContain(
+      'unresolved',
+    )
+    expect(outcome.status).toBe('LEASE_LOST')
+    // The dying worker's own throw then sealed the reservation, and
+    // the refusal holds for the sealed shape too.
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.submittedAt).not.toBeNull()
+    expect((await jobRow(jobId)).status).toBe('FAILED')
+    let refusedAfter: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refusedAfter = error
+    }
+    expect(String((refusedAfter as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a KNOWN OPERATION mid-poll — SUBMITTED with an operation id — blocks it', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-op', clock, {
+        submitScene: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          // Deliberately unnormalized: interior caps and surrounding
+          // whitespace, valid because it is non-empty after trimming.
+          providerOperationId: '  Op-Verbatim-001  ',
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    // BYTE-FOR-BYTE: the id was validated raw and persisted verbatim —
+    // never trimmed, lowercased or otherwise "tidied" — because the
+    // provider will be asked for it back exactly as issued.
+    const submitted = (await visualTaskRows(jobId))[0]
+    expect(submitted.providerOperationId).toBe('  Op-Verbatim-001  ')
+    // The job dies later for an unrelated reason; the paid operation
+    // itself is still out there.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        lastErrorCode: 'LEASE_EXPIRED',
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    // And the operation record is untouched — reconciliation, not
+    // amnesia.
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('SUBMITTED')
+    expect(row.providerOperationId).toBe('  Op-Verbatim-001  ')
+  }, 240_000)
+
+  it('even a SUCCEEDED task blocks it — paid output a restart would abandon and re-buy', async () => {
+    const { jobId, outcome, job } = await runFinalizeOnlyCycle(
+      'w-adm-succ',
+      async (task) => storeRealArtifact(task),
+    )
+    expect(outcome.status).toBe('COMPLETE')
+    expect(job.status).toBe('GENERATING_AUDIO')
+    // A LATER stage then fails the job; the visual spend is real and
+    // already delivered.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('SUCCEEDED')
+    expect(row.submittedAt).not.toBeNull()
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    // Restart-from-PREPARING would mint fresh task identities and buy
+    // this scene a second time while abandoning the artifact already
+    // paid for.
+    expect(String((refused as Error).message)).toContain('unresolved')
+  }, 240_000)
+
+  it('a provably-unsent failure (submittedAt NULL) remains retryable — the control', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-free', clock, {
+        submitScene: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('RETRY_SCHEDULED')
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('FAILED')
+    expect(row.submittedAt).toBeNull()
+    // The job's own budget then runs out on later, equally free
+    // failures — seeded directly; the row keeps its NOT_SENT shape.
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+        resumeStatus: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    // TEETH: the blunt rule does NOT overreach. No submission evidence
+    // exists, so the generic retry PROCEEDS.
+    await adminRetryGenerationJob(adminId, ctx, jobId)
+    const retried = await jobRow(jobId)
+    expect(retried.status).toBe('RETRYING')
+    expect(retried.resumeStatus).toBe('PREPARING')
+    expect(retried.attemptCount).toBe(0)
   }, 240_000)
 })

@@ -1381,15 +1381,19 @@ the platform's own:
   answering a question nobody asked, and is quarantined, never polled
   under the other identity. An operation id must be USABLE (a non-empty
   string within its column bound); provider contact has happened by
-  then, so an unusable id is an unknown outcome, never a NOT_SENT.
+  then, so an unusable id is an unknown outcome, never a NOT_SENT. A
+  usable id is persisted BYTE-FOR-BYTE — validated raw, never trimmed,
+  lowercased or otherwise normalized — because the provider will be
+  asked for it back verbatim, and "helpfully" tidied identifiers are
+  how continuations silently miss.
 - **LEGACY UNRESOLVED ROWS ARE NORMALIZED, NOT TOLERATED.** A FAILED
   task that still carries submission evidence (a non-null submittedAt)
   predates this rule and may hide a paid execution. When a worker
   encounters one it is CAS'd to the same terminal quarantine, and the
   job fails closed with the stage code — never resubmitted. Generic
-  admin retry refuses BOTH shapes, the quarantine and the un-normalized
-  legacy row, so an administrator is protected even before the worker
-  has visited it.
+  admin retry refuses these independently (see below), so an
+  administrator is protected even before the worker has visited such a
+  row.
 - **UNKNOWN OUTCOME IS QUARANTINED, NOT RETRIED.** A stale reservation
   becomes `CANCELLED` with `provider_outcome_unknown` — terminal, using
   the existing enum value and no migration. The job fails closed with
@@ -1405,7 +1409,15 @@ the platform's own:
   that forgets to answer must not thereby authorise a second charge.
   Only a failure proved `NOT_SENT` may return to `PENDING`, evidenced
   durably by a NULL `submittedAt`. Legacy rows that cannot prove it are
-  treated as UNKNOWN.
+  treated as UNKNOWN. A provably-unsent refusal is honored BEFORE the
+  provider-binding gate: the in-seam selection check reports the NEW
+  provider's code precisely because a switch was caught, and that
+  honest answer stays a free, budgeted retry instead of rotting into a
+  quarantine. An exception ESCAPING the submission seam after the
+  reservation is the same unknown outcome, quarantined
+  deterministically — never handed to the generic error path, which
+  would burn the budget as a retry — and the raw error is dropped,
+  reaching neither rows nor events.
 - **THE UNIQUE IDEMPOTENCY KEY IS AN IDENTITY, NOT A PAYMENT GUARD.** It
   makes a task recognisable across retries and is what an external
   request id would bind to; it does not by itself prevent a second paid
@@ -1413,12 +1425,19 @@ the platform's own:
 - **GENERIC ADMIN RETRY REFUSES AN UNRESOLVED OUTCOME.**
   `adminRetryGenerationJob` restarts from PREPARING, minting fresh
   snapshots and therefore fresh task identities — which would sail past
-  both the unique key and the reservation. It is refused, with a neutral
-  technical message, whenever any visual or audio task is quarantined.
-  There is deliberately no override flag, no bypass button and no extra
-  role: an operator reconciles the outcome with the provider first. A
-  deliberate re-spend, if ever needed, must be its own designed and
-  audited action.
+  both the unique key and the reservation. It is refused, with a
+  neutral technical message, under ONE deliberately blunt rule: any
+  visual or audio task showing external interaction evidence — a
+  non-null `submittedAt` — blocks it. That covers a live reservation, a
+  known operation mid-poll, a quarantined unknown, an un-normalized
+  legacy row, a max-attempt stranded reservation, and even SUCCEEDED
+  paid output a restart would abandon and re-buy; a NOT_SENT failure
+  clears `submittedAt`, so provably free failures (and jobs with no
+  provider tasks at all) remain retryable. There is deliberately no
+  override flag, no bypass button and no extra role: an operator
+  reconciles the outcome with the provider first. A deliberate
+  re-spend, if ever needed, must be its own designed and audited
+  action.
 
 Provider-side idempotency remains welcome as an OPTIONAL additional
 protection, and may be bound to the deterministic task key — but only

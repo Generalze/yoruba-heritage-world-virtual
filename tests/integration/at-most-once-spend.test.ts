@@ -60,10 +60,12 @@ describe('the staleness threshold', () => {
 describe('spend classification', () => {
   it('treats an ABSENT spendState as UNKNOWN, never as NOT_SENT', async () => {
     const source = await Bun.file('src/services/generation-jobs.ts').text()
-    // TEETH: the comparison is written so that undefined falls into the
-    // quarantine branch. `=== 'UNKNOWN'` would silently treat a
-    // forgetful adapter as safe to retry.
-    expect(source).toContain("submission.spendState !== 'NOT_SENT'")
+    // TEETH: the free-retry branch demands EXPLICIT POSITIVE PROOF
+    // (`=== 'NOT_SENT'`); everything else — including an adapter that
+    // said nothing at all — falls through to the quarantine. A
+    // `=== 'UNKNOWN'` comparison would silently treat a forgetful
+    // adapter as safe to retry, so it must not exist.
+    expect(source).toContain("submission.spendState === 'NOT_SENT'")
     expect(source).not.toContain("submission.spendState === 'UNKNOWN'")
   })
 
@@ -158,11 +160,11 @@ describe('admin retry refuses an unresolved provider outcome', () => {
     // and the check must come BEFORE the transition.
     expect(guard).toContain('prayerGenerationVisualTasks')
     expect(guard).toContain('prayerGenerationAudioTasks')
-    expect(guard).toContain('PROVIDER_OUTCOME_UNKNOWN')
     expect(guard).toContain('unresolved')
-    // And the LEGACY shape — FAILED with submission evidence — is
-    // refused too, protecting an administrator before the worker has
-    // had a chance to normalize the row.
+    // ONE deliberately blunt rule: ANY external-interaction evidence
+    // (submittedAt IS NOT NULL) blocks the generic restart — live
+    // reservations, known operations, quarantines, legacy rows and
+    // even SUCCEEDED paid work a restart would abandon and re-buy.
     expect(guard).toContain('isNotNull')
     expect(guard).toContain('submittedAt')
   })
