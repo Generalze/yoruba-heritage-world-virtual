@@ -105,6 +105,7 @@ import {
   verifyExistingHumanAudio,
 } from '@/services/audio-generation'
 import { TtsProviderError } from '@/providers/tts/types'
+import { createNaijalingoTtsProvider } from '@/providers/tts/naijalingo'
 import {
   resetTtsProviderForTests,
   setTtsProviderForTests,
@@ -130,6 +131,10 @@ import type {
   SpeechSynthesisSubmission,
   TtsProvider,
 } from '@/providers/tts/types'
+import type {
+  NaijalingoSpeechRequestBody,
+  NaijalingoTtsConfig,
+} from '@/providers/tts/naijalingo'
 import type { SacredProfileInput } from '@/services/sacred-content'
 import type { SlotInput } from '@/services/prayer-templates'
 
@@ -275,6 +280,7 @@ async function makeEligibleSacred(options: {
   contentType?: 'PRAYER' | 'CHANT' | 'BLESSING'
   voicePolicy?: 'TEXT_ONLY' | 'APPROVED_TTS_ALLOWED' | 'HUMAN_RECORDED_REQUIRED'
   durationHintSeconds?: number
+  language?: 'en' | 'yo'
 }): Promise<{ itemId: number; versionId: number; bodyMarker: string }> {
   const bodyMarker = `${SACRED_BODY_MARKER} ${crypto.randomUUID()}`
   const item = await createSacredContentItem(cmId, ctx, {
@@ -291,7 +297,7 @@ async function makeEligibleSacred(options: {
     ctx,
     item.id,
     {
-      language: 'en',
+      language: options.language ?? 'en',
       title: 'Red-team audio sacred block',
       body: bodyMarker,
     },
@@ -3142,5 +3148,358 @@ describe('red-team: admin retry refuses unresolved audio spend (DB-driven)', () 
     expect(retried.status).toBe('RETRYING')
     expect(retried.resumeStatus).toBe('PREPARING')
     expect(retried.attemptCount).toBe(0)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20: 9jaLingo — the synchronous production TTS provider
+// ----------------------------------------------------------------------------
+
+/** Test doubles ONLY: zero network, zero real API, zero spend. */
+const NAIJALINGO_TEST_CONFIG: NaijalingoTtsConfig = {
+  apiKey: 'rt-test-secret-key',
+  baseUrl: 'https://api.example-9jalingo.test/v1',
+  model: 'naijalingo-tts-1',
+  yorubaVoiceId: 'adeola_yo',
+}
+
+/** Minimal coherent PCM WAV (16 kHz mono 16-bit ⇒ byteRate 32000). */
+function buildTestWav(dataBytes: number): Uint8Array {
+  const data = new Uint8Array(dataBytes)
+  for (let i = 0; i < data.length; i += 1) data[i] = (i * 7) % 251
+  const bytes = new Uint8Array(44 + data.length)
+  const view = new DataView(bytes.buffer)
+  const writeTag = (offset: number, text: string): void => {
+    for (let i = 0; i < text.length; i += 1) {
+      bytes[offset + i] = text.charCodeAt(i)
+    }
+  }
+  writeTag(0, 'RIFF')
+  view.setUint32(4, 36 + data.length, true)
+  writeTag(8, 'WAVE')
+  writeTag(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, 16_000, true)
+  view.setUint32(28, 32_000, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeTag(36, 'data')
+  view.setUint32(40, data.length, true)
+  bytes.set(data, 44)
+  return bytes
+}
+
+/** A REAL yo-language sacred fixture plus the manifest-shaped
+ * requirement the executor would derive for it — no job or template
+ * plumbing needed for service-level proofs. */
+async function makeYorubaTtsRequirement(): Promise<{
+  requirement: ManifestAudioRequirement
+  bodyMarker: string
+  identity: { generationJobId: number; manifestSha256: string }
+}> {
+  const theme = `${CODE_PREFIX}_9JA_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+  const sacred = await makeEligibleSacred({
+    themeCode: theme,
+    contentType: 'PRAYER',
+    voicePolicy: 'APPROVED_TTS_ALLOWED',
+    language: 'yo',
+  })
+  const profile = (
+    await getDb()
+      .select({
+        contentSha256: sacredContentVersionProfiles.contentSha256,
+      })
+      .from(sacredContentVersionProfiles)
+      .where(eq(sacredContentVersionProfiles.contentVersionId, sacred.versionId))
+      .limit(1)
+  ).at(0)!
+  const requirement: ManifestAudioRequirement = {
+    mode: 'TTS_PENDING',
+    mediaAssetVersionId: null,
+    fileSha256: null,
+    contentVersionId: sacred.versionId,
+    contentSha256: profile.contentSha256!,
+    language: 'yo',
+    voicePolicy: 'APPROVED_TTS_ALLOWED',
+    requirementId: `req-9ja-${crypto.randomUUID().slice(0, 8)}`,
+    sceneId: 'scene-9ja-1',
+    startMs: 0,
+    endMs: 10_000,
+  }
+  return {
+    requirement,
+    bodyMarker: sacred.bodyMarker,
+    identity: {
+      generationJobId: 987_654,
+      manifestSha256: 'b'.repeat(64),
+    },
+  }
+}
+
+describe('red-team: 9jaLingo synchronous synthesis (fake client, ZERO network)', () => {
+  it('the REAL seam + REAL adapter sends the exact approved Yoruba text once and answers COMPLETED with stored, hashed bytes', async () => {
+    const { requirement, bodyMarker, identity: taskIdentity } =
+      await makeYorubaTtsRequirement()
+    const wav = buildTestWav(64_000) // 2000 ms at byteRate 32000
+    const calls: Array<NaijalingoSpeechRequestBody> = []
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech(body) {
+          calls.push(body)
+          return wav
+        },
+      }),
+    )
+    try {
+      const result = await submitSpeech({ requirement, ...taskIdentity })
+      // ONE call carrying the approved text VERBATIM — the fixture's
+      // exact body — under the operator-configured voice and model,
+      // as Yoruba, as WAV, and nothing else.
+      expect(calls).toHaveLength(1)
+      expect(calls[0].input).toBe(bodyMarker)
+      expect(calls[0].lang).toBe('yo')
+      expect(calls[0].response_format).toBe('wav')
+      expect(calls[0].voice).toBe(NAIJALINGO_TEST_CONFIG.yorubaVoiceId)
+      expect(calls[0].model).toBe(NAIJALINGO_TEST_CONFIG.model)
+      expect(Object.keys(calls[0]).sort()).toEqual([
+        'input',
+        'lang',
+        'model',
+        'response_format',
+        'voice',
+      ])
+
+      expect(result.status).toBe('COMPLETED')
+      if (result.status !== 'COMPLETED') return
+      expect(result.providerCode).toBe('9JALINGO')
+      // The ACTUAL returned bytes were hashed fresh and stored — the
+      // claim is provable against private storage right now.
+      expect(result.artifactSha256).toBe(computeFileSha256(wav))
+      expect(result.artifactMimeType).toBe('audio/wav')
+      expect(result.artifactDurationMs).toBe(2_000)
+      const stored = readFileSync(join(storageRoot, result.artifactStorageRef))
+      expect(new Uint8Array(stored)).toEqual(new Uint8Array(wav))
+      // And the result the pipeline would persist carries no text.
+      expect(JSON.stringify(result)).not.toContain(bodyMarker)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('an unsupported language is refused NOT_SENT, BEFORE compilation, with ZERO client calls', async () => {
+    let clientCalls = 0
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech() {
+          clientCalls += 1
+          throw new Error('the client must never be reached')
+        },
+      }),
+    )
+    try {
+      // The contentVersionId deliberately does NOT exist: if the
+      // language gate ran AFTER compilation, this would surface
+      // sacred_content_missing instead. Seeing the language refusal
+      // proves the gate fires before the body could even be looked up.
+      const requirement = {
+        mode: 'TTS_PENDING',
+        mediaAssetVersionId: null,
+        fileSha256: null,
+        contentVersionId: 999_999_999,
+        contentSha256: 'c'.repeat(64),
+        language: 'en',
+        voicePolicy: 'APPROVED_TTS_ALLOWED',
+        requirementId: 'req-9ja-en-refusal',
+        sceneId: 'scene-9ja-en',
+        startMs: 0,
+        endMs: 10_000,
+      } as ManifestAudioRequirement
+      const result = await submitSpeech({
+        requirement,
+        generationJobId: 987_655,
+        manifestSha256: 'b'.repeat(64),
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('language_unsupported_by_provider')
+      // PROVABLY not sent: freely retryable, never quarantined — and
+      // the prayer is NEVER translated to fit a provider.
+      expect(result.spendState).toBe('NOT_SENT')
+      expect(clientCalls).toBe(0)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('a thrown client call surfaces as a FIXED unknown-spend failure with no text or key in it', async () => {
+    const { requirement, bodyMarker, identity: taskIdentity } =
+      await makeYorubaTtsRequirement()
+    const marker = `leak-${crypto.randomUUID()}`
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech() {
+          throw new Error(
+            `transport blew up: ${marker} key=${NAIJALINGO_TEST_CONFIG.apiKey}`,
+          )
+        },
+      }),
+    )
+    try {
+      const result = await submitSpeech({ requirement, ...taskIdentity })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('provider_call_failed')
+      // NO spendState: the call was in flight, so the executor treats
+      // it as an unknown outcome and quarantines — the exact discipline
+      // every ambiguous submission already gets.
+      expect(result.spendState).toBeUndefined()
+      const serialized = JSON.stringify(result)
+      expect(serialized).not.toContain(marker)
+      expect(serialized).not.toContain(NAIJALINGO_TEST_CONFIG.apiKey)
+      expect(serialized).not.toContain(bodyMarker)
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('bytes that are not a coherent WAV are a failed synthesis with unknown spend — never an artifact', async () => {
+    const { requirement, identity: taskIdentity } =
+      await makeYorubaTtsRequirement()
+    setTtsProviderForTests(
+      createNaijalingoTtsProvider(NAIJALINGO_TEST_CONFIG, {
+        async createSpeech() {
+          return new TextEncoder().encode('<html>502 Bad Gateway</html>')
+        },
+      }),
+    )
+    try {
+      const result = await submitSpeech({ requirement, ...taskIdentity })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('artifact_wav_invalid')
+      expect(result.spendState).toBeUndefined()
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+describe('red-team: the synchronous COMPLETED path through the JOB LOOP (DB-driven)', () => {
+  it('a synchronous success resolves the reservation DIRECTLY to SUCCEEDED and finalizes in ONE cycle', async () => {
+    const { jobId, bodyMarker } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const wav = buildTestWav(64_000)
+    const outcome = await runAudioGenerationOnce('a-sync-ok', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // AT-MOST-ONCE IS PRESERVED: the durable reservation exists
+        // BEFORE the synchronous call, exactly as for async providers.
+        const reserved = (await audioTaskRows(jobId))[0]
+        expect(reserved.status).toBe('SUBMITTED')
+        expect(reserved.providerOperationId).toBeNull()
+        expect(reserved.submittedAt).not.toBeNull()
+        // The seam stores the verified bytes BEFORE answering — this
+        // fake does exactly what the real one does.
+        const { storageKey } = await storage.put(wav, 'wav')
+        return {
+          status: 'COMPLETED',
+          providerCode: 'MOCK_TTS',
+          artifactSha256: computeFileSha256(wav),
+          artifactMimeType: 'audio/wav',
+          artifactDurationMs: 2_000,
+          artifactStorageRef: storageKey,
+        }
+      },
+      pollSpeech: async () => {
+        throw new Error('a synchronous completion must never be polled')
+      },
+    })
+    // ONE cycle: submit → SUCCEEDED → finalization gate → RENDERING.
+    expect(outcome.status).toBe('COMPLETE')
+    expect(submits).toBe(1)
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('SUCCEEDED')
+    // No operation id ever existed and none was invented.
+    expect(row.providerOperationId).toBeNull()
+    // Submission evidence is RETAINED — the generic admin retry stays
+    // blocked for this paid, delivered work.
+    expect(row.submittedAt).not.toBeNull()
+    expect(row.artifactSha256).toBe(computeFileSha256(wav))
+    expect(row.artifactMimeType).toBe('audio/wav')
+    const stored = readFileSync(join(storageRoot, row.artifactStorageRef!))
+    expect(new Uint8Array(stored)).toEqual(new Uint8Array(wav))
+    expect((await readJob(jobId)).status).toBe('RENDERING')
+    // Nothing about the approved text survives anywhere.
+    const payload = JSON.stringify({
+      rows: await audioTaskRows(jobId),
+      events: await jobEventRows(jobId),
+      job: await readJob(jobId),
+    })
+    expect(payload).not.toContain(bodyMarker)
+  }, 240_000)
+
+  it('a LOST success CAS removes the freshly stored artifact and NEVER synthesizes again', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    let storedKey: string | null = null
+    const wav = buildTestWav(32_000)
+    const outcome = await runAudioGenerationOnce('a-sync-lost', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // While the (long) synchronous call is in flight, another
+        // worker judges the reservation stale and seals it — the same
+        // quarantine the stale-reservation sweep writes.
+        await getDb()
+          .update(prayerGenerationAudioTasks)
+          .set({
+            status: 'CANCELLED',
+            lastErrorCode: 'provider_outcome_unknown',
+            completedAt: new Date(),
+          })
+          .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+        const { storageKey } = await storage.put(wav, 'wav')
+        storedKey = storageKey
+        expect(await storage.exists(storageKey)).toBe(true)
+        return {
+          status: 'COMPLETED',
+          providerCode: 'MOCK_TTS',
+          artifactSha256: computeFileSha256(wav),
+          artifactMimeType: 'audio/wav',
+          artifactDurationMs: 1_000,
+          artifactStorageRef: storageKey,
+        }
+      },
+      pollSpeech: async () => {
+        throw new Error('nothing exists to poll')
+      },
+    })
+    // The job fails CLOSED on the unresolved spend…
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    // …the orphan bytes this cycle stored are GONE…
+    expect(storedKey).not.toBeNull()
+    expect(await storage.exists(storedKey!)).toBe(false)
+    // …the quarantine stands untouched…
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // …and there is NO automatic second synthesis, ever.
+    const again = await runAudioGenerationOnce('a-sync-lost-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a sealed spend must never be re-bought')
+      },
+      pollSpeech: async () => {
+        throw new Error('nothing exists to poll')
+      },
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
   }, 240_000)
 })

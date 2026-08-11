@@ -1,25 +1,26 @@
 import { env } from '@/lib/env'
 import { createDisabledTtsProvider } from './disabled'
 import { createMockTtsProvider } from './mock'
+import { createNaijalingoTtsProvider } from './naijalingo'
 import { TtsProviderError } from './types'
 import type { TtsProvider } from './types'
 
 /**
- * Speech-synthesis provider access point (Phase One, Step 15). The ONLY
- * way the executor service obtains a provider — mirrors the Step 14
- * visual-generation registry and the `src/providers/media/storage.ts`
- * single-active-provider pattern (there is exactly one real provider
- * slot, swappable for tests, rather than the multi-provider Map
- * registry payments uses for several simultaneously-enabled checkout
- * options).
+ * Speech-synthesis provider access point (Phase One, Step 15/20). The
+ * ONLY way the executor service obtains a provider — mirrors the
+ * Step 14 visual-generation registry and the
+ * `src/providers/media/storage.ts` single-active-provider pattern
+ * (there is exactly one real provider slot, swappable for tests,
+ * rather than the multi-provider Map registry payments uses for
+ * several simultaneously-enabled checkout options).
  *
- * TWO configurations exist, selected by TTS_DRIVER: the deterministic
- * MOCK (development and test only — refused in production) and
- * DISABLED, the honest production statement that no external speech
- * vendor has been approved. A real adapter plugs in here behind the
- * SAME TtsProvider interface with no change to the executor service,
- * once one is chosen — and choosing one is a decision for people, not
- * for this file.
+ * THREE configurations exist, selected by TTS_DRIVER: the
+ * deterministic MOCK (development and test only — refused in
+ * production), DISABLED (the honest statement that no speech backend
+ * is configured), and 9JALINGO — the approved production adapter,
+ * synchronous and Yoruba-only, configured entirely from server
+ * environment variables. There is no fallback among them: a selected
+ * driver either constructs completely or stops the process.
  */
 
 let overrideProvider: TtsProvider | null = null
@@ -41,6 +42,12 @@ export function getTtsProvider(): TtsProvider {
       break
     case 'DISABLED':
       defaultProvider = createDisabledTtsProvider()
+      break
+    case '9JALINGO':
+      // Constructed from server env only; an incomplete configuration
+      // throws here rather than producing a half-configured paid
+      // client. There is NO fallback to MOCK or DISABLED.
+      defaultProvider = createNaijalingoTtsProvider()
       break
     default:
       throw new TtsProviderError(

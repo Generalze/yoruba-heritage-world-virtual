@@ -193,7 +193,28 @@ const envObjectSchema = z
      * does not name one on its own initiative.
      */
     VISUAL_GENERATION_DRIVER: z.enum(['MOCK', 'DISABLED']).default('MOCK'),
-    TTS_DRIVER: z.enum(['MOCK', 'DISABLED']).default('MOCK'),
+    /** 9JALINGO is the approved production speech adapter (Step 20):
+     * 9jaLingo's OpenAI-compatible synchronous `/v1/audio/speech`,
+     * Yoruba only. Selecting it requires the NAIJALINGO_* variables
+     * below in EVERY environment — a half-configured paid client must
+     * not exist. */
+    TTS_DRIVER: z.enum(['MOCK', 'DISABLED', '9JALINGO']).default('MOCK'),
+
+    // --- 9jaLingo TTS (Phase One, Step 20) --------------------------------
+    //
+    // The API key lives ONLY in the server environment — never in Git,
+    // never in a row, never in a log line. The voice id is likewise
+    // operator-configured server env: the ONLY path to a voice choice
+    // is this trusted variable, never a request or a row.
+    NAIJALINGO_API_KEY: z.string().default(''),
+    /** HTTPS base URL of the OpenAI-compatible endpoint (e.g. the host
+     * serving POST /v1/audio/speech). Plain: no credentials, no query,
+     * no fragment. */
+    NAIJALINGO_API_BASE_URL: z.string().default(''),
+    /** The approved Yoruba voice id for this deployment. */
+    NAIJALINGO_YO_VOICE_ID: z.string().default(''),
+    /** The operator-selected 9jaLingo model id. */
+    NAIJALINGO_MODEL: z.string().default(''),
   })
   .superRefine((cfg, ctx) => {
     // A provider switched on without its credentials is a configuration
@@ -270,6 +291,41 @@ const envObjectSchema = z
             code: 'custom',
             path: [key],
             message: `OBJECT_STORAGE_DRIVER=S3 requires ${key}`,
+          })
+        }
+      }
+    }
+
+    // A 9jaLingo driver without its complete configuration is a
+    // configuration error EVERYWHERE, exactly like an S3 driver
+    // without a bucket: a developer who selects the paid adapter and
+    // forgets the voice id must be told at startup, not discover it
+    // when a reservation is already durable.
+    if (cfg.TTS_DRIVER === '9JALINGO') {
+      for (const key of [
+        'NAIJALINGO_API_KEY',
+        'NAIJALINGO_API_BASE_URL',
+        'NAIJALINGO_YO_VOICE_ID',
+        'NAIJALINGO_MODEL',
+      ] as const) {
+        if (cfg[key].trim().length === 0) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `TTS_DRIVER=9JALINGO requires ${key}`,
+          })
+        }
+      }
+      if (cfg.NAIJALINGO_API_BASE_URL.trim().length > 0) {
+        // The SAME plain-HTTPS discipline as the storage endpoint: the
+        // key travels as a bearer header to this URL, so it must be
+        // HTTPS and must carry no credentials, query or fragment.
+        const endpoint = validateStorageEndpoint(cfg.NAIJALINGO_API_BASE_URL)
+        if (!endpoint.ok) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['NAIJALINGO_API_BASE_URL'],
+            message: `NAIJALINGO_API_BASE_URL must be a plain HTTPS base URL (${endpoint.reasonCode})`,
           })
         }
       }

@@ -2401,6 +2401,22 @@ export async function runVisualGenerationOnce(
 export type AudioTaskSubmissionResult =
   | { status: 'SUBMITTED'; providerCode: string; providerOperationId: string }
   | {
+      /**
+       * A SYNCHRONOUS provider (9jaLingo) synthesized in the request
+       * itself: the spend has happened, the exact returned bytes have
+       * already been VERIFIED AND STORED by the submission seam, and
+       * this is the stored claim. There is no provider operation id
+       * and never will be — nothing exists to poll — so the loop
+       * resolves the reservation DIRECTLY to SUCCEEDED.
+       */
+      status: 'COMPLETED'
+      providerCode: string
+      artifactSha256: string
+      artifactMimeType: string
+      artifactDurationMs: number
+      artifactStorageRef: string
+    }
+  | {
       status: 'FAILED'
       providerCode: string
       errorCode: string
@@ -3106,6 +3122,12 @@ export async function runAudioGenerationOnce(
         // nobody asked: the operation is never persisted or polled
         // under the other identity, and never retried.
         if (submission.providerCode !== reservedProvider) {
+          if (submission.status === 'COMPLETED') {
+            // A synchronous answer under the wrong identity has ALREADY
+            // stored bytes this job will never reference — remove the
+            // orphan before sealing the row.
+            await discardGeneratedSpeechArtifact(submission.artifactStorageRef)
+          }
           const quarantined = await getDb()
             .update(prayerGenerationAudioTasks)
             .set({
@@ -3191,6 +3213,71 @@ export async function runAudioGenerationOnce(
               ),
             )
           anyOutstanding = true
+        } else if (submission.status === 'COMPLETED') {
+          // SYNCHRONOUS PROVIDER TRUTH (9jaLingo). The synthesis has
+          // ALREADY happened and its verified artifact is ALREADY in
+          // private storage — the submission seam verified and stored
+          // the exact returned bytes before answering. There is no
+          // operation id and never will be: nothing here is pollable,
+          // so the reservation resolves DIRECTLY to SUCCEEDED, CAS'd
+          // on the reserved state exactly like every other
+          // resolution, and — like the operation-id write above —
+          // deliberately NOT gated on the lease: provider truth stays
+          // true no matter who owns the job, and dropping it would
+          // abandon a real paid recording.
+          const updated = await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'SUCCEEDED',
+              artifactSha256: submission.artifactSha256,
+              artifactMimeType: submission.artifactMimeType,
+              artifactDurationMs: submission.artifactDurationMs,
+              artifactStorageRef: submission.artifactStorageRef,
+              lastErrorCode: null,
+              lastErrorMessage: null,
+              nextPollAt: null,
+              completedAt: freshNow,
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationAudioTasks.providerCode, reservedProvider),
+                isNull(prayerGenerationAudioTasks.providerOperationId),
+              ),
+            )
+          if (updated[0].affectedRows !== 1) {
+            // THE RESERVATION WAS SEALED WHILE THE SYNCHRONOUS CALL
+            // RAN — a long call can outlive the staleness threshold
+            // and another worker quarantines what it can only see as
+            // an abandoned reservation. The bytes THIS cycle stored
+            // are referenced by nothing and never will be: remove the
+            // orphan, and NEVER synthesize again — the row's terminal
+            // state already records an unresolved spend, and a second
+            // synthesis is exactly what the reservation exists to
+            // prevent.
+            await discardGeneratedSpeechArtifact(submission.artifactStorageRef)
+            const fresh = (
+              await getDb()
+                .select()
+                .from(prayerGenerationAudioTasks)
+                .where(eq(prayerGenerationAudioTasks.id, row.id))
+                .limit(1)
+            ).at(0)
+            if (
+              fresh?.status === 'CANCELLED' &&
+              fresh.lastErrorCode === PROVIDER_OUTCOME_UNKNOWN
+            ) {
+              anyOutcomeUnknown = true
+            } else {
+              anyOutstanding = true
+            }
+            continue
+          }
+          // SUCCEEDED — nothing outstanding for this task. The
+          // finalization gate below still re-proves the artifact
+          // against private storage before the job may leave the
+          // stage; a synchronous success earns no shortcut.
         } else {
           // A FAILURE WITHOUT PROOF OF NON-SPEND. A timeout, a reset,
           // a 5xx, a malformed response, an adapter that did not say —

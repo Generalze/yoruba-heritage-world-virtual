@@ -151,14 +151,15 @@ export function checkProductionPreflight(
     add('mock_renderer_forbidden_in_production', 'RENDER_DRIVER')
   }
 
-  // --- The two adapters nobody has approved yet --------------------------
+  // --- Generation adapters ------------------------------------------------
   //
-  // These are NOT oversights to be waved through. No external visual
-  // generation or speech vendor has been selected, so production has
-  // exactly two honest options: DISABLED, meaning a job that requires
-  // that work fails closed and says so; or a real adapter, which does
-  // not exist yet. MOCK — handing someone synthetic output as their
-  // prayer — is not among them.
+  // These are NOT oversights to be waved through. No external VISUAL
+  // generation vendor has been selected, so that stage has exactly two
+  // honest options: DISABLED, meaning a job that requires the work
+  // fails closed and says so; or a real adapter, which does not exist
+  // yet. Speech now HAS an approved adapter — 9JALINGO — but MOCK,
+  // handing someone synthetic output as their prayer, remains
+  // forbidden for both stages.
   if (cfg.VISUAL_GENERATION_DRIVER === 'MOCK') {
     add(
       'mock_visual_generation_forbidden_in_production',
@@ -167,6 +168,33 @@ export function checkProductionPreflight(
   }
   if (cfg.TTS_DRIVER === 'MOCK') {
     add('mock_tts_forbidden_in_production', 'TTS_DRIVER')
+  }
+  // The 9jaLingo adapter is a PAID client: selected, it must be
+  // completely configured — there is no fallback to MOCK or DISABLED,
+  // and a partially configured deployment refuses to start rather than
+  // discovering the gap when a reservation is already durable. The
+  // schema enforces the same rules in every environment; this repeats
+  // them as readiness codes an operator can act on.
+  if (cfg.TTS_DRIVER === '9JALINGO') {
+    for (const name of [
+      'NAIJALINGO_API_KEY',
+      'NAIJALINGO_API_BASE_URL',
+      'NAIJALINGO_YO_VOICE_ID',
+      'NAIJALINGO_MODEL',
+    ] as const) {
+      if (cfg[name].trim().length === 0) {
+        add('naijalingo_config_missing', name)
+      }
+    }
+    if (cfg.NAIJALINGO_API_BASE_URL.trim().length > 0) {
+      // The API key travels as a bearer header to this URL: plain
+      // HTTPS, no credentials, no query, no fragment — the same
+      // parsed-not-string-matched discipline as the storage endpoint.
+      const endpoint = validateStorageEndpoint(cfg.NAIJALINGO_API_BASE_URL)
+      if (!endpoint.ok) {
+        add(`naijalingo_${endpoint.reasonCode}`, 'NAIJALINGO_API_BASE_URL')
+      }
+    }
   }
 
   return { ok: issues.length === 0, environment: cfg.NODE_ENV, issues }

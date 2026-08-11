@@ -38,7 +38,8 @@ import type {
  *   eligibility, content hash currency, language, and an AUTHORITATIVE
  *   APPROVED_TTS_ALLOWED voice policy), then the EXACT approved body is
  *   retrieved server-side and compiled into an in-memory request
- * → provider-neutral submit/poll (mock only — no real provider exists yet)
+ * → provider-neutral submit/poll (the deterministic mock, or 9jaLingo's
+ *   synchronous /v1/audio/speech, which completes at submit time)
  * → verified artifact (mime/type, bounded duration, non-empty, fresh SHA-256)
  * → private storage (LocalMediaStorageProvider — no S3)
  * → re-verified against that storage before the job is ever allowed to
@@ -757,6 +758,28 @@ export async function submitSpeech(
       spendState: 'NOT_SENT',
     }
   }
+  // THE PROVIDER'S DECLARED LANGUAGES GATE THE REQUEST BEFORE IT IS
+  // COMPILED — and therefore before the approved body is ever read.
+  // Phase One's 9jaLingo adapter is approved for Yoruba (yo) only; a
+  // requirement in any other language is refused HERE, provably
+  // NOT_SENT, with zero provider contact. The text itself is NEVER
+  // translated, rewritten, shortened or padded to fit a provider —
+  // this recorded refusal is the correct outcome, exactly as a
+  // disabled adapter's is.
+  const requirementLanguage = input.requirement.language
+  if (
+    provider.supportedLanguages != null &&
+    (requirementLanguage == null ||
+      !provider.supportedLanguages.includes(requirementLanguage))
+  ) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'language_unsupported_by_provider',
+      errorMessage: null,
+      spendState: 'NOT_SENT',
+    }
+  }
   const compiled = await compileSpeechSynthesisRequest(input.requirement, input)
   if (compiled.status !== 'OK') {
     // A compile refusal happens strictly before the provider is
@@ -778,6 +801,34 @@ export async function submitSpeech(
         providerCode: provider.code,
         errorCode: 'provider_submit_failed',
         errorMessage: null,
+      }
+    }
+    if (submission.status === 'COMPLETED') {
+      // SYNCHRONOUS PROVIDER (9jaLingo): the spend has happened and
+      // the bytes are HERE. They pass the same verification every
+      // asynchronous poll result passes — allowlisted mime, bounded
+      // duration, non-empty, fresh server-side SHA-256 — and are
+      // stored in private storage BEFORE this returns, so the caller
+      // receives a durable claim, never raw bytes. A completed
+      // synthesis whose artifact fails verification is paid work we
+      // cannot use: an UNKNOWN outcome (no spendState), never a
+      // NOT_SENT, and never retried automatically.
+      const verified = await verifyAndStoreSpeechArtifact(submission.artifact)
+      if (!verified.ok) {
+        return {
+          status: 'FAILED',
+          providerCode: provider.code,
+          errorCode: verified.reasonCode,
+          errorMessage: null,
+        }
+      }
+      return {
+        status: 'COMPLETED',
+        providerCode: provider.code,
+        artifactSha256: verified.fileSha256,
+        artifactMimeType: verified.mimeType,
+        artifactDurationMs: verified.durationMs,
+        artifactStorageRef: verified.storageKey,
       }
     }
     return {

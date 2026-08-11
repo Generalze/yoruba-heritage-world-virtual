@@ -1443,16 +1443,52 @@ Provider-side idempotency remains welcome as an OPTIONAL additional
 protection, and may be bound to the deterministic task key — but only
 when officially documented and verified.
 
-**THE TWO UNAPPROVED ADAPTERS ARE NAMED, NOT INVENTED.** No external
-visual-generation or speech vendor has been chosen, and this codebase
-does not choose one. Production therefore has two honest settings:
-`MOCK` — refused outright — and `DISABLED`, under which a job that
+**THE UNAPPROVED ADAPTER IS NAMED, NOT INVENTED.** No external
+visual-generation vendor has been chosen, and this codebase does not
+choose one. That stage has two honest settings: `MOCK` — refused
+outright in production — and `DISABLED`, under which a job that
 REQUIRES that work fails closed as a recorded task failure and is NEVER
 silently skipped. The refusal happens BEFORE the approved sacred body is
 read, preserving the Step 15 rule that the body is retrieved only when
 synthesis is currently authorized. A manifest needing neither —
 approved media for every scene, approved human recordings for every
 voice — runs normally, and startup logs the reduced capability.
+
+**SPEECH HAS ONE APPROVED ADAPTER: 9JALINGO (Step 20).** 9jaLingo's
+officially documented OpenAI-compatible `POST /v1/audio/speech`, spoken
+to through the official `openai` client (`baseURL` + `apiKey` — auth is
+the client's documented job, never hand-rolled), with transport retries
+at ZERO (a retried synthesis is a second spend) and a timeout bounded
+below the reservation staleness threshold. The vendor synthesizes
+SYNCHRONOUSLY — WAV bytes in the response — so the TtsProvider contract
+gained a second honest submission shape, `COMPLETED` + artifact,
+alongside the async `PENDING` + providerJobId. Nothing is faked to
+bridge the two: no invented provider job id, no pretend polling, no
+in-memory artifact stash. The executor's at-most-once lifecycle is
+UNCHANGED: the durable reservation still precedes the call; a
+synchronous success verifies and stores the exact returned bytes (mime
+allowlist, bounded MEASURED WAV duration, fresh server-side SHA-256)
+and CASes the reservation directly to SUCCEEDED; a throw or ambiguous
+outcome after the reservation is quarantined
+`provider_outcome_unknown`; a success whose CAS loses removes the
+just-stored orphan bytes and NEVER synthesizes again. Governance:
+Phase-One Yoruba (`yo`) ONLY — any other language is refused NOT_SENT
+before the network via the provider's declared `supportedLanguages`,
+checked before the request is even compiled, so the body is never read
+for it and the prayer is never translated, rewritten, shortened or
+padded; the approved text is sent VERBATIM exactly once; the request
+body is a CLOSED five-field allowlist (`model`, `voice`, `input`,
+`lang`, `response_format`) — no `targetDurationMs` as a synthesis
+instruction, and no reference-audio or likeness field anywhere in the
+contract, so voice cloning remains structurally impossible; the voice
+id and model come ONLY from trusted server environment
+(`NAIJALINGO_YO_VOICE_ID`, `NAIJALINGO_MODEL`), and the API key lives
+ONLY in server env, outside Git, never in a row, an event or a log.
+Selecting `TTS_DRIVER=9JALINGO` requires the four `NAIJALINGO_*`
+variables in EVERY environment (base URL plain HTTPS: no credentials,
+query or fragment); production preflight reports gaps as codes naming
+the variable, and there is NO fallback to MOCK or DISABLED. Approved
+human recordings remain preferred and are never synthesized.
 
 **LIVENESS IS NOT READINESS.** `/api/health` says the process is alive;
 a container that is alive but misconfigured must be left for an operator

@@ -74,15 +74,46 @@ Production requires, at minimum:
   refused.
 - `RENDER_DRIVER=REMOTION` — `MOCK` is refused
 - `VISUAL_GENERATION_DRIVER` and `TTS_DRIVER` — `MOCK` is refused
+- `TTS_DRIVER=9JALINGO` additionally requires **all four** of
+  `NAIJALINGO_API_KEY`, `NAIJALINGO_API_BASE_URL` (plain HTTPS — no
+  credentials, query or fragment), `NAIJALINGO_YO_VOICE_ID` and
+  `NAIJALINGO_MODEL`. A gap is a startup refusal
+  (`naijalingo_config_missing` / `naijalingo_endpoint_…` naming the
+  variable) — never a silent fallback to `MOCK` or `DISABLED`. The API
+  key is a secret: server environment only, outside Git.
 
 Sessions need **no** `SESSION_SECRET`: they are 256-bit random bearer
 tokens stored hashed, so there is nothing to leak or rotate.
 
+### Speech synthesis: 9jaLingo (`TTS_DRIVER=9JALINGO`)
+
+The one approved speech adapter (Step 20). 9jaLingo's OpenAI-compatible
+`POST /v1/audio/speech` synthesizes **synchronously** — the WAV bytes
+come back in the request itself; there is no provider job to poll — and
+the platform's at-most-once reservation still applies unchanged: the
+task row is durably reserved before the call, a success is recorded
+directly as SUCCEEDED, and an ambiguous outcome is quarantined as
+`provider_outcome_unknown`, never retried automatically.
+
+Governance facts an operator should know:
+
+- **Yoruba only.** A requirement in any other language is refused
+  before the network as a recorded, retryable task failure — the prayer
+  is never translated to fit a vendor.
+- The approved text is sent **verbatim, exactly once**; the voice and
+  model come only from `NAIJALINGO_YO_VOICE_ID` / `NAIJALINGO_MODEL`.
+  No reference audio or likeness input exists anywhere in the contract
+  — voice cloning is structurally impossible, not merely forbidden.
+- Approved **human recordings remain preferred** and are never
+  synthesized; a manifest built entirely from them never touches this
+  adapter.
+
 ### Deliberately reduced capability
 
-`VISUAL_GENERATION_DRIVER=DISABLED` and `TTS_DRIVER=DISABLED` are valid
-production settings, and today they are the only honest ones — no
-external image-generation or speech vendor has been approved. They mean:
+`VISUAL_GENERATION_DRIVER=DISABLED` and `TTS_DRIVER=DISABLED` remain
+valid production settings — for visual generation, DISABLED is still
+the only honest one, as no external image-generation vendor has been
+approved. They mean:
 
 - a job that REQUIRES that work **fails closed** and is recorded as
   failed. It is never silently skipped, because a recording assembled
@@ -373,8 +404,10 @@ Named here rather than quietly assumed:
 1. **Visual generation vendor.** None approved. Production runs
    `VISUAL_GENERATION_DRIVER=DISABLED` and fails closed on jobs that need
    generated imagery.
-2. **Speech synthesis vendor.** None approved. Production runs
-   `TTS_DRIVER=DISABLED`; approved human recordings are unaffected.
+2. ~~Speech synthesis vendor~~ — SETTLED (Step 20): **9jaLingo**,
+   Yoruba only, `TTS_DRIVER=9JALINGO` with the `NAIJALINGO_*`
+   variables. `DISABLED` remains valid where synthesis is not wanted;
+   approved human recordings are unaffected either way.
 3. ~~Remotion browser provisioning~~ — SETTLED. ffmpeg and chromium are
    installed at image build and named explicitly; nothing is fetched at
    render time. The cost is image SIZE, which is now the open question:

@@ -46,15 +46,17 @@ import {
  *   RENDER_DRIVER              MOCK (development/test) | REMOTION
  *   OBJECT_STORAGE_DRIVER      LOCAL (development/test) | S3
  *   VISUAL_GENERATION_DRIVER   MOCK (development/test) | DISABLED
- *   TTS_DRIVER                 MOCK (development/test) | DISABLED
+ *   TTS_DRIVER                 MOCK (development/test) | DISABLED |
+ *                              9JALINGO (approved; synchronous, Yoruba
+ *                              only, requires the NAIJALINGO_* vars)
  *
  * PRODUCTION REFUSES EVERY MOCK AND THE LOCAL FINAL STORE. It also
  * refuses to start at all when the configuration is incomplete — see
- * the preflight below. No external visual-generation or speech vendor
- * has been approved, so DISABLED is the honest production setting for
- * those two: work that REQUIRES them fails closed as a recorded task
- * failure and is never silently skipped, while a manifest built from
- * approved media and approved human recordings runs normally.
+ * the preflight below. No external visual-generation vendor has been
+ * approved, so DISABLED is that stage's honest production setting:
+ * work that REQUIRES it fails closed as a recorded task failure and is
+ * never silently skipped, while a manifest built from approved media
+ * and approved human recordings runs normally.
  *
  * From a confirmed, paid appointment to a READY private recording there
  * is NO human step: no approval, no queue to review, no operator

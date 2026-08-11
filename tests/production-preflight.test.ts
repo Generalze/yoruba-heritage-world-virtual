@@ -242,6 +242,116 @@ describe('production preflight', () => {
   })
 })
 
+describe('9jaLingo TTS selection (Step 20)', () => {
+  /** The complete, valid 9jaLingo overlay — each case below breaks it
+   * in exactly one way. */
+  const NAIJALINGO_SOURCE: Record<string, string> = {
+    TTS_DRIVER: '9JALINGO',
+    NAIJALINGO_API_KEY: 'test-key-placeholder',
+    NAIJALINGO_API_BASE_URL: 'https://api.example-9jalingo.test/v1',
+    NAIJALINGO_YO_VOICE_ID: 'adeola_yo',
+    NAIJALINGO_MODEL: 'naijalingo-tts-1',
+  }
+
+  it('accepts a completely configured 9JALINGO production environment', () => {
+    const cfg = parse(NAIJALINGO_SOURCE)
+    expect(cfg.TTS_DRIVER).toBe('9JALINGO')
+    const result = preflight(NAIJALINGO_SOURCE)
+    expect(result.ok).toBe(true)
+    expect(result.issues).toEqual([])
+    // A REAL adapter is not reduced capability: only the visual stage
+    // remains disabled.
+    expect(describeUnavailableCapabilities(parse(NAIJALINGO_SOURCE))).toEqual([
+      'visual_generation_disabled',
+    ])
+  })
+
+  it('requires every NAIJALINGO variable whenever the driver is selected, in ANY environment', () => {
+    // Same discipline as the S3 driver: a paid client with a missing
+    // credential must stop a developer's process too, not only prod.
+    for (const name of [
+      'NAIJALINGO_API_KEY',
+      'NAIJALINGO_API_BASE_URL',
+      'NAIJALINGO_YO_VOICE_ID',
+      'NAIJALINGO_MODEL',
+    ]) {
+      for (const nodeEnv of ['development', 'test', 'production']) {
+        expect(() =>
+          envSchema.parse({
+            ...PRODUCTION_SOURCE,
+            ...NAIJALINGO_SOURCE,
+            NODE_ENV: nodeEnv,
+            [name]: '',
+          }),
+        ).toThrow()
+      }
+    }
+  })
+
+  it('requires a plain HTTPS base URL: no http, no credentials, no query, no fragment', () => {
+    for (const badUrl of [
+      'http://api.example-9jalingo.test/v1',
+      'https://user:pass@api.example-9jalingo.test/v1',
+      'https://api.example-9jalingo.test/v1?key=abc',
+      'https://api.example-9jalingo.test/v1#frag',
+      'not a url',
+    ]) {
+      expect(() =>
+        envSchema.parse({
+          ...PRODUCTION_SOURCE,
+          ...NAIJALINGO_SOURCE,
+          NAIJALINGO_API_BASE_URL: badUrl,
+        }),
+      ).toThrow()
+    }
+  })
+
+  it('reports preflight codes and variable NAMES for a broken 9jaLingo config — never values', () => {
+    // The preflight is exercised directly with a hand-built cfg (the
+    // schema would refuse to construct one) — exactly the split-lock
+    // design: either lock alone must hold.
+    const cfg = {
+      ...parse(),
+      TTS_DRIVER: '9JALINGO' as const,
+      NAIJALINGO_API_KEY: '',
+      NAIJALINGO_API_BASE_URL: 'http://insecure.example',
+      NAIJALINGO_YO_VOICE_ID: '',
+      NAIJALINGO_MODEL: 'naijalingo-tts-1',
+    }
+    const result = checkProductionPreflight(
+      { ...PRODUCTION_SOURCE, ...NAIJALINGO_SOURCE },
+      cfg,
+    )
+    expect(result.ok).toBe(false)
+    const byCode = new Map(
+      result.issues.map((issue) => [`${issue.code}|${issue.envName}`, issue]),
+    )
+    expect(byCode.has('naijalingo_config_missing|NAIJALINGO_API_KEY')).toBe(true)
+    expect(byCode.has('naijalingo_config_missing|NAIJALINGO_YO_VOICE_ID')).toBe(
+      true,
+    )
+    expect(byCode.has('naijalingo_endpoint_not_https|NAIJALINGO_API_BASE_URL')).toBe(
+      true,
+    )
+    // No value — and in particular no key — anywhere in the output.
+    const serialized =
+      JSON.stringify(result) + formatPreflightIssues(result).join('|')
+    expect(serialized).not.toContain(NAIJALINGO_SOURCE.NAIJALINGO_API_KEY)
+    expect(serialized).not.toContain('insecure.example')
+  })
+
+  it('never falls back: the registry wires 9JALINGO to the real adapter and unknown drivers still throw', async () => {
+    const source = await Bun.file('src/providers/tts/registry.ts').text()
+    expect(source).toContain("case '9JALINGO':")
+    expect(source).toContain('createNaijalingoTtsProvider()')
+    // The default branch still throws — a driver name that resolves to
+    // MOCK or DISABLED silently is the failure this registry exists to
+    // prevent.
+    expect(source).toContain('default:')
+    expect(source).toContain('throw new')
+  })
+})
+
 describe('the two processes share one gate', () => {
   it('the web entry and the worker both call assertProductionPreflight', async () => {
     // A worker that started while the app knew the configuration was

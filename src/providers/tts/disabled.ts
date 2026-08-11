@@ -38,6 +38,9 @@ export function createDisabledTtsProvider(): TtsProvider {
   return {
     code: DISABLED_TTS_CODE,
     displayName: 'Speech synthesis unavailable',
+    // No language is "supported" here, but null is still correct: the
+    // isEnabled() refusal fires first and is the honest reason.
+    supportedLanguages: null,
     isEnabled() {
       return false
     },

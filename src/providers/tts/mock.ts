@@ -115,6 +115,9 @@ export function createMockTtsProvider(): TtsProvider {
   return {
     code: 'MOCK_TTS',
     displayName: 'Mock speech synthesis provider (development)',
+    // No declared restriction: the mock speaks any GUIDANCE_LANGUAGE the
+    // pipeline hands it — determinism, not linguistics, is its contract.
+    supportedLanguages: null,
 
     isEnabled() {
       return true
