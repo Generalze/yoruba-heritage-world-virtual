@@ -1,5 +1,66 @@
 @import 'tailwindcss';
 
+/*
+ * Yorùbá Heritage World Virtual — design tokens (Step 21A).
+ *
+ * Semantic palette from docs/design/UI_VISUAL_DIRECTION.md §3: warm
+ * cream/ivory grounds, deep near-black brown for immersive surfaces,
+ * restrained muted gold as the accent, soft sand/taupe structure.
+ * Gold stays an ACCENT — large areas never turn gold.
+ *
+ * Every color is defined here once and consumed as a Tailwind utility
+ * (bg-canvas, text-ink, border-line, …). Raw hex values do not belong
+ * in components.
+ *
+ * TYPOGRAPHY: the display serif and interface sans are SYSTEM stacks
+ * by deliberate constraint — the production CSP is `font-src 'self'
+ * data:` with no third-party origin anywhere, so webfont CDNs are
+ * impossible and no font binaries ship in this pass. Both stacks are
+ * chosen for correct Yorùbá diacritic rendering (full Latin Extended
+ * coverage); diacritics are never stripped for visual convenience.
+ */
+@theme {
+  /* Warm light grounds */
+  --color-canvas: #faf6ec; /* primary page background — warm ivory   */
+  --color-surface: #f4ecdb; /* quiet cream section / muted card      */
+  --color-surface-raised: #fdfaf2; /* elevated card on cream         */
+
+  /* Foreground on light */
+  --color-ink: #2b2018; /* deep brown text                           */
+  --color-ink-soft: #6d5c4b; /* warm gray-brown secondary text       */
+
+  /* Deep brown immersive surfaces */
+  --color-night: #191009; /* near-black brown — nav, hero, footer    */
+  --color-night-raised: #241811; /* elevated panel on night          */
+  --color-night-line: #3a2a1d; /* hairline on night                  */
+  --color-cream-on-night: #f2e9d8; /* primary text on night          */
+  --color-cream-soft-on-night: #c9b9a2; /* secondary text on night   */
+
+  /* Restrained gold accent */
+  --color-gold: #c2913f; /* accents, primary CTA fill, active states */
+  --color-gold-bright: #d9ad5c; /* hover/active lift                 */
+  --color-gold-deep: #8a6220; /* gold-toned TEXT on light grounds
+                                 (meets 4.5:1 on canvas; the brighter
+                                 golds are for fills and dark grounds) */
+
+  /* Structure */
+  --color-line: #e2d6bd; /* soft sand border on light                */
+  --color-line-strong: #cdbc9c; /* emphasised border on light        */
+
+  /* Status — restrained, never neon */
+  --color-affirm: #3f6b46; /* restrained green                       */
+  --color-caution: #8a5a12; /* warm amber, readable on light         */
+  --color-alert: #8c3a30; /* muted deep red                          */
+
+  /* Typography */
+  --font-display:
+    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua',
+    Georgia, 'Times New Roman', serif;
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans',
+    sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -12,12 +73,63 @@ body,
 
 body {
   margin: 0;
-  font-family:
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    Roboto,
-    'Noto Sans',
-    sans-serif;
+  font-family: var(--font-sans);
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+/*
+ * Visible keyboard focus everywhere (UI direction §9). The default
+ * ring is the DEEP gold — the only gold that clears the 3:1 non-text
+ * contrast minimum (WCAG 1.4.11) against the cream grounds; on the
+ * deep-brown surfaces the brighter gold takes over via the ancestor
+ * overrides below. Components may refine this, never remove it.
+ */
+:focus-visible {
+  outline: 2px solid var(--color-gold-deep);
+  outline-offset: 2px;
+}
+
+.bg-night :focus-visible,
+.bg-night-raised :focus-visible,
+.texture-night :focus-visible {
+  outline-color: var(--color-gold-bright);
+}
+
+::selection {
+  background-color: var(--color-gold);
+  color: var(--color-night);
+}
+
+/*
+ * Yorùbá-inspired geometric texture (UI direction §5) — a quiet
+ * diamond-and-line lattice used as an atmospheric layer only. It is
+ * decorative geometry: it carries no sacred meaning and must never be
+ * described as an authentic spiritual symbol. Inline data: URI keeps
+ * it inside the CSP (`img-src 'self' data: blob:`).
+ */
+.texture-night {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56' viewBox='0 0 56 56'%3E%3Cg fill='none' stroke='%23c2913f' stroke-opacity='0.07'%3E%3Cpath d='M28 4 52 28 28 52 4 28Z'/%3E%3Cpath d='M28 16 40 28 28 40 16 28Z'/%3E%3Cpath d='M0 0h56v56H0z' stroke-opacity='0.045'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 56px 56px;
+}
+
+.texture-cream {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='56' viewBox='0 0 56 56'%3E%3Cg fill='none' stroke='%238a6220' stroke-opacity='0.055'%3E%3Cpath d='M28 4 52 28 28 52 4 28Z'/%3E%3Cpath d='M28 16 40 28 28 40 16 28Z'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 56px 56px;
+}
+
+/*
+ * Reduced motion (UI direction §9/§12): all movement collapses to
+ * near-instant state changes. Nothing on this platform may depend on
+ * animation to be understood.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
