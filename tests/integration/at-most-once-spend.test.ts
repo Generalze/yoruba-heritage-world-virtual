@@ -4,6 +4,18 @@ import {
   DEFAULT_LEASE_MS,
   RESERVATION_STALE_AFTER_MS,
 } from '@/services/generation-jobs'
+import { submitScene } from '@/services/visual-generation'
+import { submitSpeech } from '@/services/audio-generation'
+import { createDisabledVisualGenerationProvider } from '@/providers/visual-generation/disabled'
+import { createDisabledTtsProvider } from '@/providers/tts/disabled'
+import {
+  resetVisualGenerationProviderForTests,
+  setVisualGenerationProviderForTests,
+} from '@/providers/visual-generation/registry'
+import {
+  resetTtsProviderForTests,
+  setTtsProviderForTests,
+} from '@/providers/tts/registry'
 
 /**
  * ============================================================================
@@ -55,16 +67,70 @@ describe('spend classification', () => {
     expect(source).not.toContain("submission.spendState === 'UNKNOWN'")
   })
 
-  it('never infers NOT_SENT from a timeout, reset, 5xx or generic error', async () => {
-    const visual = await Bun.file('src/services/visual-generation.ts').text()
-    const audio = await Bun.file('src/services/audio-generation.ts').text()
-    for (const source of [visual, audio]) {
-      // A NOT_SENT claim may only accompany a pre-network refusal.
-      for (const line of source.split('\n')) {
-        if (!line.includes("spendState: 'NOT_SENT'")) continue
-        expect(line).not.toContain('timeout')
-        expect(line).not.toContain('ECONN')
-      }
+  // BEHAVIORAL, not a source scan: these would FAIL if zero NOT_SENT
+  // classifications existed, because they call the REAL submit
+  // functions and read the answer. Every case here is decided strictly
+  // before any network write, which is what NOT_SENT means.
+
+  it('a DISABLED visual adapter is provably NOT_SENT', async () => {
+    setVisualGenerationProviderForTests(createDisabledVisualGenerationProvider())
+    try {
+      const result = await submitScene({} as never)
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('visual_generation_unavailable')
+      expect(result.spendState).toBe('NOT_SENT')
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  })
+
+  it('a visual compile refusal is provably NOT_SENT', async () => {
+    // A garbage task fails the compiler's own trust-boundary guard
+    // (unsupported task kind) before anything else runs.
+    const result = await submitScene({} as never)
+    expect(result.status).toBe('FAILED')
+    if (result.status !== 'FAILED') return
+    expect(result.errorCode).toBe('unsupported_task_kind')
+    expect(result.spendState).toBe('NOT_SENT')
+  })
+
+  it('a DISABLED speech adapter is provably NOT_SENT', async () => {
+    setTtsProviderForTests(createDisabledTtsProvider())
+    try {
+      const result = await submitSpeech({ requirement: {} } as never)
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('tts_unavailable')
+      expect(result.spendState).toBe('NOT_SENT')
+    } finally {
+      resetTtsProviderForTests()
+    }
+  })
+
+  it('a speech compile refusal is provably NOT_SENT', async () => {
+    const result = await submitSpeech({ requirement: {} } as never)
+    expect(result.status).toBe('FAILED')
+    if (result.status !== 'FAILED') return
+    expect(result.spendState).toBe('NOT_SENT')
+  })
+
+  it('a provider-selection change is refused before the network, on both stages', async () => {
+    const visual = await submitScene({} as never, {
+      expectedProviderCode: 'SOMEBODY_ELSE',
+    })
+    expect(visual.status).toBe('FAILED')
+    if (visual.status === 'FAILED') {
+      expect(visual.errorCode).toBe('provider_selection_changed')
+      expect(visual.spendState).toBe('NOT_SENT')
+    }
+    const audio = await submitSpeech({ requirement: {} } as never, {
+      expectedProviderCode: 'SOMEBODY_ELSE',
+    })
+    expect(audio.status).toBe('FAILED')
+    if (audio.status === 'FAILED') {
+      expect(audio.errorCode).toBe('provider_selection_changed')
+      expect(audio.spendState).toBe('NOT_SENT')
     }
   })
 })
@@ -94,6 +160,11 @@ describe('admin retry refuses an unresolved provider outcome', () => {
     expect(guard).toContain('prayerGenerationAudioTasks')
     expect(guard).toContain('PROVIDER_OUTCOME_UNKNOWN')
     expect(guard).toContain('unresolved')
+    // And the LEGACY shape — FAILED with submission evidence — is
+    // refused too, protecting an administrator before the worker has
+    // had a chance to normalize the row.
+    expect(guard).toContain('isNotNull')
+    expect(guard).toContain('submittedAt')
   })
 
   it('offers no bypass of any kind', async () => {

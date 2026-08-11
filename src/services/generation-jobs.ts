@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { and, asc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm'
 
 import { getDb } from '@/db'
 import {
@@ -1253,7 +1253,10 @@ export interface VisualGenerationDependencies {
    * happens to be idempotent is welcome to be, but nothing depends
    * on it — real vendors do not document one.
    */
-  submitScene?: (task: ManifestVisualTask) => Promise<VisualTaskSubmissionResult>
+  submitScene?: (
+    task: ManifestVisualTask,
+    options?: { expectedProviderCode?: string },
+  ) => Promise<VisualTaskSubmissionResult>
   /** The ACTIVE provider's code, read BEFORE the call so the
    * reservation records who is about to be paid, and read again
    * immediately before the call so a selection change fails closed
@@ -1642,6 +1645,55 @@ export async function runVisualGenerationOnce(
       // UNKNOWN and is never resubmitted. Safety over retry
       // convenience, deliberately.
       if (row.status === 'FAILED') {
+        if (row.submittedAt != null) {
+          // LEGACY / UNRESOLVED: this failure carries submission
+          // evidence, so the request may have reached the provider.
+          // Older code left such rows as FAILED — a RESETTABLE state,
+          // one worker restart away from a second charge. They are
+          // NORMALIZED here to the terminal quarantine the rest of the
+          // lifecycle already understands, and the job fails closed
+          // exactly as if the quarantine had happened at submit time.
+          const normalized = await getDb()
+            .update(prayerGenerationVisualTasks)
+            .set({
+              status: 'CANCELLED',
+              lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
+              completedAt: clock.now(),
+            })
+            .where(
+              and(
+                eq(prayerGenerationVisualTasks.id, row.id),
+                eq(prayerGenerationVisualTasks.status, 'FAILED'),
+                isNotNull(prayerGenerationVisualTasks.submittedAt),
+              ),
+            )
+          if (normalized[0].affectedRows === 1) {
+            anyOutcomeUnknown = true
+          } else {
+            // The CAS lost: re-read and fail closed on the row’s
+            // ACTUAL state. Never assume it became safely retryable.
+            const fresh = (
+              await getDb()
+                .select()
+                .from(prayerGenerationVisualTasks)
+                .where(eq(prayerGenerationVisualTasks.id, row.id))
+                .limit(1)
+            ).at(0)
+            if (
+              fresh?.status === 'CANCELLED' &&
+              fresh.lastErrorCode === PROVIDER_OUTCOME_UNKNOWN
+            ) {
+              anyOutcomeUnknown = true
+            } else {
+              anyOutstanding = true
+            }
+          }
+          continue
+        }
+        // PROVABLY NOT SENT — no submission evidence, so one more
+        // shot each time the JOB ITSELF is freshly (re)claimed. The
+        // job’s own bounded maxAttempts is what ultimately bounds
+        // how many times this can happen.
         const reset = await getDb()
           .update(prayerGenerationVisualTasks)
           .set({
@@ -1660,23 +1712,10 @@ export async function runVisualGenerationOnce(
             ),
           )
         if (reset[0].affectedRows !== 1) {
-          // EITHER another worker moved this row on since we read it,
-          // OR it carries a submission time and is therefore not
-          // provably unsent. The second case is terminal for the job:
-          // a failure we cannot prove was never sent is an unknown
-          // outcome, not a retry.
-          const fresh = (
-            await getDb()
-              .select()
-              .from(prayerGenerationVisualTasks)
-              .where(eq(prayerGenerationVisualTasks.id, row.id))
-              .limit(1)
-          ).at(0)
-          if (fresh?.status === 'FAILED' && fresh.submittedAt != null) {
-            anyOutcomeUnknown = true
-          } else {
-            anyOutstanding = true
-          }
+          // Another worker moved this row on since we read it — it is
+          // no longer ours to redecide. A later cycle re-reads the
+          // truth.
+          anyOutstanding = true
           continue
         }
         row = { ...row, status: 'PENDING' }
@@ -1737,47 +1776,84 @@ export async function runVisualGenerationOnce(
           continue
         }
 
-        // The provider recorded in the reservation must be the one
-        // actually invoked. A selection change between the two fails
-        // closed WITHOUT touching the network, so it is provably
-        // NOT_SENT.
-        if (activeProviderCode() !== reservedProvider) {
-          await getDb()
+        const submission = await doSubmit(task, {
+          expectedProviderCode: reservedProvider,
+        })
+        const freshNow = clock.now()
+
+        // THE ANSWER MUST NAME THE PROVIDER WE RESERVED. An adapter
+        // answering for some other provider is answering a question
+        // nobody asked: external contact may already have happened,
+        // under an identity nothing downstream can vouch for. The
+        // operation is never persisted or polled under the other
+        // provider, and never retried.
+        if (submission.providerCode !== reservedProvider) {
+          const quarantined = await getDb()
             .update(prayerGenerationVisualTasks)
             .set({
-              status: 'FAILED',
-              submittedAt: null,
-              lastErrorCode: 'provider_selection_changed',
-              completedAt: clock.now(),
+              status: 'CANCELLED',
+              lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
+              lastErrorMessage: null,
+              completedAt: freshNow,
             })
             .where(
               and(
                 eq(prayerGenerationVisualTasks.id, row.id),
                 eq(prayerGenerationVisualTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationVisualTasks.providerCode, reservedProvider),
                 isNull(prayerGenerationVisualTasks.providerOperationId),
               ),
             )
-          anyFailed = true
+          if (quarantined[0].affectedRows === 1) anyOutcomeUnknown = true
+          else anyOutstanding = true
           continue
         }
 
-        const submission = await doSubmit(task)
-        const freshNow = clock.now()
         if (submission.status === 'SUBMITTED') {
+          // AN OPERATION ID IS ONLY USEFUL IF IT IS USABLE. The value
+          // is opaque — never parsed for meaning — but it must be a
+          // non-empty string that fits the column it lives in, or no
+          // later worker could ever continue it. Provider contact HAS
+          // happened by now, so an unusable id is an unknown outcome,
+          // never a NOT_SENT.
+          const rawOperationId: unknown = submission.providerOperationId
+          const operationId =
+            typeof rawOperationId === 'string' ? rawOperationId.trim() : ''
+          if (operationId === '' || operationId.length > 200) {
+            const quarantined = await getDb()
+              .update(prayerGenerationVisualTasks)
+              .set({
+                status: 'CANCELLED',
+                lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
+                lastErrorMessage: null,
+                completedAt: freshNow,
+              })
+              .where(
+                and(
+                  eq(prayerGenerationVisualTasks.id, row.id),
+                  eq(prayerGenerationVisualTasks.status, 'SUBMITTED'),
+                  eq(prayerGenerationVisualTasks.providerCode, reservedProvider),
+                  isNull(prayerGenerationVisualTasks.providerOperationId),
+                ),
+              )
+            if (quarantined[0].affectedRows === 1) anyOutcomeUnknown = true
+            else anyOutstanding = true
+            continue
+          }
           // PROVIDER TRUTH IS PERSISTED EVEN IF THIS WORKER LOST THE
-          // JOB LEASE MID-CALL. The operation id is the only thing
-          // that lets any later worker CONTINUE this submission
-          // instead of paying for a new one, so it is written on the
-          // reservation we still own — CAS'd on the reserved state and
-          // the reserved provider, never on PENDING. If the row was
-          // already quarantined, this write simply loses and does not
-          // resurrect it.
+          // JOB LEASE MID-CALL. The operation id is the only thing that
+          // lets any later worker CONTINUE this submission instead of
+          // paying for a new one, so it is written on the reservation
+          // we made — CAS’d on the reserved state and the reserved
+          // provider, never on PENDING. If the row was already
+          // quarantined, this write simply loses and does not resurrect
+          // it.
           await getDb()
             .update(prayerGenerationVisualTasks)
             .set({
               status: 'SUBMITTED',
               providerCode: submission.providerCode,
-              providerOperationId: submission.providerOperationId,
+              providerOperationId: operationId,
               submittedAt: freshNow,
               lastErrorCode: null,
               nextPollAt: new Date(
@@ -1795,10 +1871,10 @@ export async function runVisualGenerationOnce(
           anyOutstanding = true
         } else if (submission.spendState !== 'NOT_SENT') {
           // AMBIGUOUS FAILURE — a timeout, a reset, a 5xx, a generic
-          // exception, or an adapter that did not say. The request
-          // may have crossed the boundary, so this is quarantined
-          // exactly like a crashed reservation, never marked FAILED
-          // (which would be resettable) and never retried.
+          // exception, or an adapter that did not say. The request may
+          // have crossed the boundary, so this is quarantined exactly
+          // like a crashed reservation, never marked FAILED (which
+          // would be resettable) and never retried.
           const quarantined = await getDb()
             .update(prayerGenerationVisualTasks)
             .set({
@@ -1811,6 +1887,7 @@ export async function runVisualGenerationOnce(
               and(
                 eq(prayerGenerationVisualTasks.id, row.id),
                 eq(prayerGenerationVisualTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationVisualTasks.providerCode, reservedProvider),
                 isNull(prayerGenerationVisualTasks.providerOperationId),
               ),
             )
@@ -1818,15 +1895,20 @@ export async function runVisualGenerationOnce(
           else anyOutstanding = true
           continue
         } else {
-          // PROVABLY NOT SENT. `submittedAt` is cleared, which is the
-          // durable proof that lets this row — and only rows like it —
-          // return to PENDING later.
+          // PROVABLY NOT SENT — and the CAS targets the RESERVED state
+          // (SUBMITTED, our provider, no operation id), because that is
+          // what this row IS now. The first version of this branch
+          // still CASed on PENDING, which the reservation had already
+          // left behind, so a provably-free refusal could never land
+          // and rotted into a quarantine instead. Clearing submittedAt
+          // is the durable proof that lets this row — and only rows
+          // like it — return to PENDING later.
           const updated = await getDb()
             .update(prayerGenerationVisualTasks)
             .set({
               status: 'FAILED',
               submittedAt: null,
-              providerCode: submission.providerCode,
+              providerOperationId: null,
               lastErrorCode: submission.errorCode.slice(0, 60),
               lastErrorMessage: submission.errorMessage?.slice(0, 500) ?? null,
               completedAt: freshNow,
@@ -1834,16 +1916,32 @@ export async function runVisualGenerationOnce(
             .where(
               and(
                 eq(prayerGenerationVisualTasks.id, row.id),
-                eq(prayerGenerationVisualTasks.status, statusAtRead),
+                eq(prayerGenerationVisualTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationVisualTasks.providerCode, reservedProvider),
+                isNull(prayerGenerationVisualTasks.providerOperationId),
               ),
             )
           if (updated[0].affectedRows === 1) {
             anyFailed = true
           } else {
-            // Another worker already advanced this row past PENDING
-            // while our submit was in flight — do not assert OUR stale
-            // failure over whatever they already recorded.
-            anyOutstanding = true
+            // The reservation is no longer ours. Re-read and fail
+            // closed on the row’s ACTUAL state — never assume it
+            // became safely retryable.
+            const fresh = (
+              await getDb()
+                .select()
+                .from(prayerGenerationVisualTasks)
+                .where(eq(prayerGenerationVisualTasks.id, row.id))
+                .limit(1)
+            ).at(0)
+            if (
+              fresh?.status === 'CANCELLED' &&
+              fresh.lastErrorCode === PROVIDER_OUTCOME_UNKNOWN
+            ) {
+              anyOutcomeUnknown = true
+            } else {
+              anyOutstanding = true
+            }
           }
         }
         // The provider round-trip above is unbounded, so the lease may
@@ -2299,6 +2397,7 @@ export interface AudioGenerationDependencies {
    */
   submitSpeech?: (
     input: AudioTaskIdentityInput,
+    options?: { expectedProviderCode?: string },
   ) => Promise<AudioTaskSubmissionResult>
   /** The ACTIVE provider's code, read before the call so the
    * reservation records who is about to be paid. */
@@ -2743,6 +2842,55 @@ export async function runAudioGenerationOnce(
       // row that still carries a submission time — including a legacy
       // row written before this rule — is UNKNOWN and never resent.
       if (row.status === 'FAILED') {
+        if (row.submittedAt != null) {
+          // LEGACY / UNRESOLVED: this failure carries submission
+          // evidence, so the request may have reached the provider.
+          // Older code left such rows as FAILED — a RESETTABLE state,
+          // one worker restart away from a second charge. They are
+          // NORMALIZED here to the terminal quarantine the rest of the
+          // lifecycle already understands, and the job fails closed
+          // exactly as if the quarantine had happened at submit time.
+          const normalized = await getDb()
+            .update(prayerGenerationAudioTasks)
+            .set({
+              status: 'CANCELLED',
+              lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
+              completedAt: clock.now(),
+            })
+            .where(
+              and(
+                eq(prayerGenerationAudioTasks.id, row.id),
+                eq(prayerGenerationAudioTasks.status, 'FAILED'),
+                isNotNull(prayerGenerationAudioTasks.submittedAt),
+              ),
+            )
+          if (normalized[0].affectedRows === 1) {
+            anyOutcomeUnknown = true
+          } else {
+            // The CAS lost: re-read and fail closed on the row’s
+            // ACTUAL state. Never assume it became safely retryable.
+            const fresh = (
+              await getDb()
+                .select()
+                .from(prayerGenerationAudioTasks)
+                .where(eq(prayerGenerationAudioTasks.id, row.id))
+                .limit(1)
+            ).at(0)
+            if (
+              fresh?.status === 'CANCELLED' &&
+              fresh.lastErrorCode === PROVIDER_OUTCOME_UNKNOWN
+            ) {
+              anyOutcomeUnknown = true
+            } else {
+              anyOutstanding = true
+            }
+          }
+          continue
+        }
+        // PROVABLY NOT SENT — no submission evidence, so one more
+        // shot each time the JOB ITSELF is freshly (re)claimed. The
+        // job’s own bounded maxAttempts is what ultimately bounds
+        // how many times this can happen.
         const reset = await getDb()
           .update(prayerGenerationAudioTasks)
           .set({
@@ -2761,20 +2909,10 @@ export async function runAudioGenerationOnce(
             ),
           )
         if (reset[0].affectedRows !== 1) {
-          // Either another worker moved it on, or it is not provably
-          // unsent — and the second case is terminal for the job.
-          const fresh = (
-            await getDb()
-              .select()
-              .from(prayerGenerationAudioTasks)
-              .where(eq(prayerGenerationAudioTasks.id, row.id))
-              .limit(1)
-          ).at(0)
-          if (fresh?.status === 'FAILED' && fresh.submittedAt != null) {
-            anyOutcomeUnknown = true
-          } else {
-            anyOutstanding = true
-          }
+          // Another worker moved this row on since we read it — it is
+          // no longer ours to redecide. A later cycle re-reads the
+          // truth.
+          anyOutstanding = true
           continue
         }
         row = { ...row, status: 'PENDING' }
@@ -2816,47 +2954,90 @@ export async function runAudioGenerationOnce(
           continue
         }
 
-        // A selection change between reservation and execution fails
-        // closed WITHOUT touching the network — provably NOT_SENT.
-        if (activeProviderCode() !== reservedProvider) {
-          await getDb()
+        const submission = await doSubmit(
+          {
+            requirement,
+            generationJobId: job.id,
+            manifestSha256,
+            idempotencyKey,
+          },
+          { expectedProviderCode: reservedProvider },
+        )
+        const freshNow = clock.now()
+
+        // THE ANSWER MUST NAME THE PROVIDER WE RESERVED. An adapter
+        // answering for some other provider is answering a question
+        // nobody asked: external contact may already have happened,
+        // under an identity nothing downstream can vouch for. The
+        // operation is never persisted or polled under the other
+        // provider, and never retried.
+        if (submission.providerCode !== reservedProvider) {
+          const quarantined = await getDb()
             .update(prayerGenerationAudioTasks)
             .set({
-              status: 'FAILED',
-              submittedAt: null,
-              lastErrorCode: 'provider_selection_changed',
-              completedAt: clock.now(),
+              status: 'CANCELLED',
+              lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
+              lastErrorMessage: null,
+              completedAt: freshNow,
             })
             .where(
               and(
                 eq(prayerGenerationAudioTasks.id, row.id),
                 eq(prayerGenerationAudioTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationAudioTasks.providerCode, reservedProvider),
                 isNull(prayerGenerationAudioTasks.providerOperationId),
               ),
             )
-          anyFailed = true
+          if (quarantined[0].affectedRows === 1) anyOutcomeUnknown = true
+          else anyOutstanding = true
           continue
         }
 
-        const submission = await doSubmit({
-          requirement,
-          generationJobId: job.id,
-          manifestSha256,
-          idempotencyKey,
-        })
-        const freshNow = clock.now()
         if (submission.status === 'SUBMITTED') {
-          // Provider truth is persisted even if this worker lost the
-          // job lease mid-call: the operation id is the only thing
-          // that lets a later worker CONTINUE this synthesis instead
-          // of paying for a new one. CAS'd on the reserved state, so
-          // a quarantined row is never resurrected.
+          // AN OPERATION ID IS ONLY USEFUL IF IT IS USABLE. The value
+          // is opaque — never parsed for meaning — but it must be a
+          // non-empty string that fits the column it lives in, or no
+          // later worker could ever continue it. Provider contact HAS
+          // happened by now, so an unusable id is an unknown outcome,
+          // never a NOT_SENT.
+          const rawOperationId: unknown = submission.providerOperationId
+          const operationId =
+            typeof rawOperationId === 'string' ? rawOperationId.trim() : ''
+          if (operationId === '' || operationId.length > 200) {
+            const quarantined = await getDb()
+              .update(prayerGenerationAudioTasks)
+              .set({
+                status: 'CANCELLED',
+                lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
+                lastErrorMessage: null,
+                completedAt: freshNow,
+              })
+              .where(
+                and(
+                  eq(prayerGenerationAudioTasks.id, row.id),
+                  eq(prayerGenerationAudioTasks.status, 'SUBMITTED'),
+                  eq(prayerGenerationAudioTasks.providerCode, reservedProvider),
+                  isNull(prayerGenerationAudioTasks.providerOperationId),
+                ),
+              )
+            if (quarantined[0].affectedRows === 1) anyOutcomeUnknown = true
+            else anyOutstanding = true
+            continue
+          }
+          // PROVIDER TRUTH IS PERSISTED EVEN IF THIS WORKER LOST THE
+          // JOB LEASE MID-CALL. The operation id is the only thing that
+          // lets any later worker CONTINUE this submission instead of
+          // paying for a new one, so it is written on the reservation
+          // we made — CAS’d on the reserved state and the reserved
+          // provider, never on PENDING. If the row was already
+          // quarantined, this write simply loses and does not resurrect
+          // it.
           await getDb()
             .update(prayerGenerationAudioTasks)
             .set({
               status: 'SUBMITTED',
               providerCode: submission.providerCode,
-              providerOperationId: submission.providerOperationId,
+              providerOperationId: operationId,
               submittedAt: freshNow,
               lastErrorCode: null,
               nextPollAt: new Date(
@@ -2873,21 +3054,24 @@ export async function runAudioGenerationOnce(
             )
           anyOutstanding = true
         } else if (submission.spendState !== 'NOT_SENT') {
-          // AMBIGUOUS FAILURE — quarantined exactly like a crashed
-          // reservation. Never FAILED (which is resettable), never
-          // retried.
+          // AMBIGUOUS FAILURE — a timeout, a reset, a 5xx, a generic
+          // exception, or an adapter that did not say. The request may
+          // have crossed the boundary, so this is quarantined exactly
+          // like a crashed reservation, never marked FAILED (which
+          // would be resettable) and never retried.
           const quarantined = await getDb()
             .update(prayerGenerationAudioTasks)
             .set({
               status: 'CANCELLED',
               lastErrorCode: PROVIDER_OUTCOME_UNKNOWN,
               lastErrorMessage: null,
-              completedAt: clock.now(),
+              completedAt: freshNow,
             })
             .where(
               and(
                 eq(prayerGenerationAudioTasks.id, row.id),
                 eq(prayerGenerationAudioTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationAudioTasks.providerCode, reservedProvider),
                 isNull(prayerGenerationAudioTasks.providerOperationId),
               ),
             )
@@ -2895,14 +3079,20 @@ export async function runAudioGenerationOnce(
           else anyOutstanding = true
           continue
         } else {
-          // PROVABLY NOT SENT — `submittedAt` cleared, so this row
-          // (and only rows like it) may return to PENDING later.
+          // PROVABLY NOT SENT — and the CAS targets the RESERVED state
+          // (SUBMITTED, our provider, no operation id), because that is
+          // what this row IS now. The first version of this branch
+          // still CASed on PENDING, which the reservation had already
+          // left behind, so a provably-free refusal could never land
+          // and rotted into a quarantine instead. Clearing submittedAt
+          // is the durable proof that lets this row — and only rows
+          // like it — return to PENDING later.
           const updated = await getDb()
             .update(prayerGenerationAudioTasks)
             .set({
               status: 'FAILED',
               submittedAt: null,
-              providerCode: submission.providerCode,
+              providerOperationId: null,
               lastErrorCode: submission.errorCode.slice(0, 60),
               lastErrorMessage: submission.errorMessage?.slice(0, 500) ?? null,
               completedAt: freshNow,
@@ -2910,13 +3100,32 @@ export async function runAudioGenerationOnce(
             .where(
               and(
                 eq(prayerGenerationAudioTasks.id, row.id),
-                eq(prayerGenerationAudioTasks.status, statusAtRead),
+                eq(prayerGenerationAudioTasks.status, 'SUBMITTED'),
+                eq(prayerGenerationAudioTasks.providerCode, reservedProvider),
+                isNull(prayerGenerationAudioTasks.providerOperationId),
               ),
             )
           if (updated[0].affectedRows === 1) {
             anyFailed = true
           } else {
-            anyOutstanding = true
+            // The reservation is no longer ours. Re-read and fail
+            // closed on the row’s ACTUAL state — never assume it
+            // became safely retryable.
+            const fresh = (
+              await getDb()
+                .select()
+                .from(prayerGenerationAudioTasks)
+                .where(eq(prayerGenerationAudioTasks.id, row.id))
+                .limit(1)
+            ).at(0)
+            if (
+              fresh?.status === 'CANCELLED' &&
+              fresh.lastErrorCode === PROVIDER_OUTCOME_UNKNOWN
+            ) {
+              anyOutcomeUnknown = true
+            } else {
+              anyOutstanding = true
+            }
           }
         }
         // Same reasoning as the visual stage: the status-CAS'd write is
@@ -3510,14 +3719,31 @@ export async function adminRetryGenerationJob(
     // extra role: an operator must reconcile the outcome with the
     // provider first. A future deliberate re-spend, if it is ever
     // needed, has to be its own designed and audited action.
+    // Two shapes are refused, for the same reason:
+    //   - the QUARANTINE the worker writes (CANCELLED + unknown), and
+    //   - the LEGACY shape it may not have visited yet — FAILED but
+    //     carrying submission evidence. The worker normalizes those to
+    //     the quarantine when it next sees them, but an administrator
+    //     must be protected even before that happens.
     const quarantined = await tx
       .select({ id: prayerGenerationVisualTasks.id })
       .from(prayerGenerationVisualTasks)
       .where(
         and(
           eq(prayerGenerationVisualTasks.generationJobId, jobId),
-          eq(prayerGenerationVisualTasks.status, 'CANCELLED'),
-          eq(prayerGenerationVisualTasks.lastErrorCode, PROVIDER_OUTCOME_UNKNOWN),
+          or(
+            and(
+              eq(prayerGenerationVisualTasks.status, 'CANCELLED'),
+              eq(
+                prayerGenerationVisualTasks.lastErrorCode,
+                PROVIDER_OUTCOME_UNKNOWN,
+              ),
+            ),
+            and(
+              eq(prayerGenerationVisualTasks.status, 'FAILED'),
+              isNotNull(prayerGenerationVisualTasks.submittedAt),
+            ),
+          ),
         ),
       )
       .limit(1)
@@ -3527,8 +3753,19 @@ export async function adminRetryGenerationJob(
       .where(
         and(
           eq(prayerGenerationAudioTasks.generationJobId, jobId),
-          eq(prayerGenerationAudioTasks.status, 'CANCELLED'),
-          eq(prayerGenerationAudioTasks.lastErrorCode, PROVIDER_OUTCOME_UNKNOWN),
+          or(
+            and(
+              eq(prayerGenerationAudioTasks.status, 'CANCELLED'),
+              eq(
+                prayerGenerationAudioTasks.lastErrorCode,
+                PROVIDER_OUTCOME_UNKNOWN,
+              ),
+            ),
+            and(
+              eq(prayerGenerationAudioTasks.status, 'FAILED'),
+              isNotNull(prayerGenerationAudioTasks.submittedAt),
+            ),
+          ),
         ),
       )
       .limit(1)

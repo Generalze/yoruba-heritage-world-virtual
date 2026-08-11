@@ -32,11 +32,14 @@ import { prayerGenerationManifestSnapshots } from './storyboards'
  * synthesized and never re-generated. Only a TTS_PENDING requirement
  * whose CURRENT authority still permits synthesis ever becomes a task.
  *
- * A row is the SAME durable anti-duplicate-submission guard the visual
- * task table provides: `(generation_job_id, manifest_snapshot_id,
- * requirement_id)` and `idempotency_key` are BOTH unique at the DB
- * level, so a re-claimed/re-run job can never submit the same paid
- * synthesis twice. NEVER contains the sacred body, the spoken text, a
+ * A row is a STABLE IDENTITY, exactly like its visual twin:
+ * `(generation_job_id, manifest_snapshot_id, requirement_id)` and
+ * `idempotency_key` are BOTH unique at the DB level, so one requirement
+ * maps to one row across every retry. The uniqueness alone does NOT
+ * prevent a second paid synthesis — what does is the executor's durable
+ * pre-call reservation on this row (PENDING → SUBMITTED before any
+ * network write) and the unknown-outcome quarantine that follows it.
+ * NEVER contains the sacred body, the spoken text, a
  * raw provider request or response payload, a voice sample or any
  * provider credential — only ids, an opaque provider operation id,
  * status/attempts, safe artifact metadata (hash/mime/duration), a

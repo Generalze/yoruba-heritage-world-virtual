@@ -1371,10 +1371,25 @@ the platform's own:
   lease model (two full lease windows); any provider submission timeout
   added later MUST be shorter than that.
 - **KNOWN OPERATION, CONTINUED — NEVER REPEATED.** Once an operation id
-  is durably recorded, later workers poll that same operation. The
-  operation id is written CAS'd on the reserved state, so provider truth
-  survives even a lease lost mid-call, and a late response can never
-  resurrect or overwrite a row that was already quarantined.
+  is durably recorded, later workers poll that same operation — even
+  long past the staleness threshold, a known operation is continued,
+  never quarantined and never resubmitted. The operation id is written
+  CAS'd on the reserved state, so provider truth survives even a lease
+  lost mid-call, and a late response can never resurrect or overwrite a
+  row that was already quarantined. The answer must also NAME THE
+  RESERVED PROVIDER — an adapter answering for a different provider is
+  answering a question nobody asked, and is quarantined, never polled
+  under the other identity. An operation id must be USABLE (a non-empty
+  string within its column bound); provider contact has happened by
+  then, so an unusable id is an unknown outcome, never a NOT_SENT.
+- **LEGACY UNRESOLVED ROWS ARE NORMALIZED, NOT TOLERATED.** A FAILED
+  task that still carries submission evidence (a non-null submittedAt)
+  predates this rule and may hide a paid execution. When a worker
+  encounters one it is CAS'd to the same terminal quarantine, and the
+  job fails closed with the stage code — never resubmitted. Generic
+  admin retry refuses BOTH shapes, the quarantine and the un-normalized
+  legacy row, so an administrator is protected even before the worker
+  has visited it.
 - **UNKNOWN OUTCOME IS QUARANTINED, NOT RETRIED.** A stale reservation
   becomes `CANCELLED` with `provider_outcome_unknown` — terminal, using
   the existing enum value and no migration. The job fails closed with

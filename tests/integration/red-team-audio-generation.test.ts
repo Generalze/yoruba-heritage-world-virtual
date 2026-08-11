@@ -85,6 +85,9 @@ import {
 import {
   AUDIO_TASK_POLL_DELAY_MS,
   DEFAULT_LEASE_MS,
+  PROVIDER_OUTCOME_UNKNOWN,
+  RESERVATION_STALE_AFTER_MS,
+  adminRetryGenerationJob,
   GENERATION_TRANSITIONS,
   claimNextAudioGenerationJob,
   isLegalTransition,
@@ -101,6 +104,7 @@ import {
   submitSpeech,
   verifyExistingHumanAudio,
 } from '@/services/audio-generation'
+import { TtsProviderError } from '@/providers/tts/types'
 import {
   resetTtsProviderForTests,
   setTtsProviderForTests,
@@ -726,7 +730,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 48; i += 1) {
+  for (let i = 0; i < 60; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTAS${i}_${key}`.toUpperCase(),
@@ -2399,5 +2403,458 @@ describe('red-team: a tampered task row never reaches a provider', () => {
     expect(spy.pollCalls).toBe(0)
     expect(outcome.status).not.toBe('COMPLETE')
     expect(job.status).not.toBe('RENDERING')
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20 follow-up: the audio stage gets the SAME adversarial choreography
+// the visual stage has — reclaimed workers, live vs stale reservations, late
+// responses, spend classification and the admin gate. DB-driven throughout.
+// ----------------------------------------------------------------------------
+
+async function readJob(jobId: number) {
+  return (
+    await getDb()
+      .select()
+      .from(prayerGenerationJobs)
+      .where(eq(prayerGenerationJobs.id, jobId))
+      .limit(1)
+  ).at(0)!
+}
+
+async function advanceToNextAttempt(
+  jobId: number,
+  clock: ReturnType<typeof makeFakeClock>,
+): Promise<void> {
+  const job = await readJob(jobId)
+  if (job.nextAttemptAt != null) {
+    const dueMs = new Date(job.nextAttemptAt).getTime()
+    if (dueMs > clock.now().getTime()) {
+      clock.advance(dueMs - clock.now().getTime() + 1_000)
+    }
+  }
+}
+
+describe('red-team: a reclaimed audio worker never submits a second time', () => {
+  it('a fresh reservation makes B WAIT; a stale one is quarantined; a late FAILED cannot overwrite', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    let freshSubmits = 0
+    let staleSubmits = 0
+
+    const zombie: AudioGenerationDependencies = {
+      submitSpeech: async () => {
+        submits += 1
+        // A's heartbeat stalls; its job lease is reclaimed while it
+        // waits on the provider.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        expect(
+          await recoverExpiredGenerationLeases(clock),
+        ).toBeGreaterThanOrEqual(1)
+        await advanceToNextAttempt(jobId, clock)
+
+        // --- B, while the reservation is FRESH ---------------------
+        const bFresh = await runAudioGenerationOnce('b-fresh', clock, {
+          submitSpeech: async () => {
+            freshSubmits += 1
+            throw new Error('B must not submit while a reservation is live')
+          },
+          pollSpeech: async () => ({ status: 'PROCESSING' }),
+        })
+        // TEETH: B waits. Zero submissions, zero quarantines of a
+        // request that may still be in flight.
+        expect(bFresh.status).toBe('WAITING')
+        expect(freshSubmits).toBe(0)
+        const live = (await audioTaskRows(jobId))[0]
+        expect(live.status).toBe('SUBMITTED')
+        expect(live.providerOperationId).toBeNull()
+
+        // --- B, once it is genuinely STALE -------------------------
+        clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        await advanceToNextAttempt(jobId, clock)
+        const bStale = await runAudioGenerationOnce('b-stale', clock, {
+          submitSpeech: async () => {
+            staleSubmits += 1
+            throw new Error('B must never resubmit')
+          },
+          pollSpeech: async () => ({ status: 'PROCESSING' }),
+        })
+        expect(bStale.status).toBe('FAILED')
+        expect(staleSubmits).toBe(0)
+        const quarantined = (await audioTaskRows(jobId))[0]
+        expect(quarantined.status).toBe('CANCELLED')
+        expect(quarantined.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+
+        // ONLY NOW does A's late verdict come back.
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'late_zombie_failure',
+          errorMessage: null,
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    }
+
+    const a = await runAudioGenerationOnce('worker-A', clock, zombie)
+    expect(a.status).toBe('LEASE_LOST')
+
+    // TEETH: A's late FAILED cannot replace the quarantine, and the
+    // whole episode cost exactly ONE provider submission.
+    const final = (await audioTaskRows(jobId))[0]
+    expect(final.status).toBe('CANCELLED')
+    expect(final.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(submits).toBe(1)
+
+    const job = await readJob(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+  }, 240_000)
+
+  it('a late operation id cannot resurrect a quarantined reservation', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+
+    const zombie: AudioGenerationDependencies = {
+      submitSpeech: async () => {
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        await advanceToNextAttempt(jobId, clock)
+        const bStale = await runAudioGenerationOnce('b-stale-2', clock, {
+          submitSpeech: async () => {
+            throw new Error('B must never resubmit')
+          },
+          pollSpeech: async () => ({ status: 'PROCESSING' }),
+        })
+        expect(bStale.status).toBe('FAILED')
+        // A's answer arrives AFTER the quarantine — with a perfectly
+        // valid operation id.
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-arrived-too-late',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    }
+
+    const a = await runAudioGenerationOnce('worker-A2', clock, zombie)
+    expect(a.status).toBe('LEASE_LOST')
+    // TEETH: the success write CASes on the reserved state, so it
+    // loses against CANCELLED — the operation id is never recorded and
+    // the quarantine stands.
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.providerOperationId).toBeNull()
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+  }, 240_000)
+
+  it('a durably recorded operation id is POLLED by the next worker, never resubmitted', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runAudioGenerationOnce('w-op-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-continue-me',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('WAITING')
+
+    // Long past the staleness threshold: a KNOWN operation is still
+    // continued, never quarantined and never resubmitted.
+    clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+    await recoverExpiredGenerationLeases(clock)
+    await advanceToNextAttempt(jobId, clock)
+
+    const polls: Array<string> = []
+    const second = await runAudioGenerationOnce('w-op-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a known operation must be polled, never resubmitted')
+      },
+      pollSpeech: async (input) => {
+        polls.push(input.providerOperationId)
+        return { status: 'PROCESSING' }
+      },
+    })
+    expect(second.status).toBe('WAITING')
+    expect(polls).toEqual(['op-continue-me'])
+    expect(submits).toBe(1)
+  }, 240_000)
+
+  it('a late stale poll verdict cannot overwrite a genuine SUCCEEDED result', async () => {
+    const { jobId, requirement } = await makeTtsJob()
+    const windowMs = requirement.endMs - requirement.startMs
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('w-succ-seed', clock, {
+        submitSpeech: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-to-finish',
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    clock.advance(AUDIO_TASK_POLL_DELAY_MS + 1_000)
+    const artifact = await storeRealArtifact(windowMs)
+
+    const zombiePoll: AudioGenerationDependencies = {
+      submitSpeech: async () => {
+        throw new Error('no submission expected')
+      },
+      pollSpeech: async () => {
+        // A's poll stalls; B reclaims and finishes the SAME operation.
+        clock.advance(DEFAULT_LEASE_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        await advanceToNextAttempt(jobId, clock)
+        const b = await runAudioGenerationOnce('b-finishes', clock, {
+          submitSpeech: async () => {
+            throw new Error('B polls, it does not resubmit')
+          },
+          pollSpeech: async () => artifact,
+        })
+        expect(b.status).not.toBe('IDLE')
+        const succeeded = (await audioTaskRows(jobId))[0]
+        expect(succeeded.status).toBe('SUCCEEDED')
+        // A's own stale verdict lands only now.
+        return {
+          status: 'FAILED',
+          errorCode: 'late_stale_poll_verdict',
+          errorMessage: null,
+        }
+      },
+    }
+    const a = await runAudioGenerationOnce('worker-A3', clock, zombiePoll)
+    expect(a.status).toBe('LEASE_LOST')
+    // TEETH: the row still holds the genuine result, byte for byte.
+    const final = (await audioTaskRows(jobId))[0]
+    expect(final.status).toBe('SUCCEEDED')
+    expect(final.artifactSha256).toBe(artifact.artifactSha256)
+  }, 240_000)
+})
+
+describe('red-team: audio spend classification decides retry or quarantine', () => {
+  it('a NOT_SENT refusal lands on the RESERVED row and is retryable', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runAudioGenerationOnce('a-ns-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await audioTaskRows(jobId))[0]
+    // TEETH for the reserved-state CAS: the DATABASE changed.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+
+    await advanceToNextAttempt(jobId, clock)
+    const second = await runAudioGenerationOnce('a-ns-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-after-free-retry',
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    expect((await audioTaskRows(jobId))[0].status).toBe('SUBMITTED')
+  }, 240_000)
+
+  it('an UNKNOWN failure quarantines and can NEVER take the retry path', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const outcome = await runAudioGenerationOnce('a-unk-1', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        // NO spendState: absence is UNKNOWN, and UNKNOWN never retries.
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'ambiguous_transport_failure',
+          errorMessage: null,
+        }
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('TTS_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.submittedAt).not.toBeNull()
+    const job = await readJob(jobId)
+    expect(job.status).toBe('FAILED')
+    expect(job.nextAttemptAt).toBeNull()
+    const again = await runAudioGenerationOnce('a-unk-2', clock, {
+      submitSpeech: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
+
+  it('an operation id too long for its column is quarantined after contact', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runAudioGenerationOnce('a-long-op', clock, {
+      submitSpeech: async () => ({
+        status: 'SUBMITTED',
+        providerCode: 'MOCK_TTS',
+        providerOperationId: 'x'.repeat(201),
+      }),
+      pollSpeech: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    const row = (await audioTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.providerOperationId).toBeNull()
+  }, 240_000)
+
+  it('a compile refusal in the REAL submitSpeech is provably NOT_SENT', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    // A wrong caller-supplied idempotency key is refused during
+    // compilation, strictly before any provider work.
+    const result = await submitSpeech({
+      requirement,
+      generationJobId: jobId,
+      manifestSha256: manifest.manifestSha256,
+      idempotencyKey: 'deliberately-wrong',
+    })
+    expect(result.status).toBe('FAILED')
+    if (result.status !== 'FAILED') return
+    expect(result.errorCode).toBe('idempotency_key_mismatch')
+    expect(result.spendState).toBe('NOT_SENT')
+  }, 240_000)
+
+  it('a provider-boundary failure in the REAL submitSpeech is never NOT_SENT', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    setTtsProviderForTests({
+      code: 'MOCK_TTS',
+      displayName: 'throwing test provider',
+      isEnabled: () => true,
+      submitSpeech: async () => {
+        throw new TtsProviderError(
+          'provider_unreachable',
+          'synthetic transport failure',
+          true,
+        )
+      },
+      pollSpeech: async () => {
+        throw new TtsProviderError('unused', 'unused', false)
+      },
+    })
+    try {
+      const result = await submitSpeech({
+        requirement,
+        generationJobId: jobId,
+        manifestSha256: manifest.manifestSha256,
+      })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('provider_unreachable')
+      // The request may have crossed the boundary before the throw.
+      expect(result.spendState).toBeUndefined()
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+})
+
+describe('red-team: admin retry refuses unresolved audio spend (DB-driven)', () => {
+  it('a quarantined audio task blocks the generic admin retry', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-1', clock, {
+        submitSpeech: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK_TTS',
+          errorCode: 'ambiguous',
+          errorMessage: null,
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('FAILED')
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    expect((await readJob(jobId)).status).toBe('FAILED')
+  }, 240_000)
+
+  it('a LEGACY failed-with-evidence audio row blocks it too', async () => {
+    const { jobId } = await makeTtsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runAudioGenerationOnce('a-adm-2', clock, {
+        submitSpeech: async () => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK_TTS',
+          providerOperationId: 'op-legacy',
+        }),
+        pollSpeech: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    await getDb()
+      .update(prayerGenerationAudioTasks)
+      .set({
+        status: 'FAILED',
+        providerOperationId: null,
+        lastErrorCode: 'legacy_provider_error',
+      })
+      .where(eq(prayerGenerationAudioTasks.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
   }, 240_000)
 })

@@ -86,10 +86,18 @@ import {
   VISUAL_TASK_POLL_DELAY_MS,
   claimNextVisualGenerationJob,
   isLegalTransition,
+  PROVIDER_OUTCOME_UNKNOWN,
+  adminRetryGenerationJob,
   recoverExpiredGenerationLeases,
   runGenerationPreparationOnce,
   runVisualGenerationOnce,
 } from '@/services/generation-jobs'
+import { submitScene } from '@/services/visual-generation'
+import {
+  resetVisualGenerationProviderForTests,
+  setVisualGenerationProviderForTests,
+} from '@/providers/visual-generation/registry'
+import { VisualGenerationProviderError } from '@/providers/visual-generation/types'
 import { runStoryboardPlanningOnce } from '@/services/generation-storyboards'
 import {
   addDays,
@@ -670,7 +678,7 @@ beforeAll(async () => {
   })
   houseId = houseInsert[0].insertId
   servicePool = []
-  for (let i = 0; i < 32; i += 1) {
+  for (let i = 0; i < 44; i += 1) {
     const inserted = await db.insert(services).values({
       sacredHouseId: houseId,
       code: `RTVS${i}_${key}`.toUpperCase(),
@@ -1963,5 +1971,345 @@ describe('red-team: a worker that has lost its lease starts no further provider 
     // TEETH 3: and the bytes that result had already written are gone —
     // no row references them and none ever will.
     expect(await storage.exists(stranded.artifactStorageRef)).toBe(false)
+  }, 240_000)
+})
+
+// ----------------------------------------------------------------------------
+// Step 20 follow-up: spend classification, reservation persistence and the
+// admin gate — every property proven against the DATABASE, not source text.
+// ----------------------------------------------------------------------------
+
+describe('red-team: spend classification decides retry or quarantine', () => {
+  it('a NOT_SENT refusal lands on the RESERVED row and is retryable', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const first = await runVisualGenerationOnce('w-ns-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'synthetic_pre_network_refusal',
+          errorMessage: null,
+          spendState: 'NOT_SENT',
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    // A refusal proved free of spend is a KNOWN failure: budgeted
+    // retry, not quarantine.
+    expect(first.status).toBe('RETRY_SCHEDULED')
+    const afterFirst = (await visualTaskRows(jobId))[0]
+    // TEETH for the CAS itself. The row was SUBMITTED (reserved) when
+    // this refusal came back; the first implementation CASed on
+    // PENDING, which could never match, so the refusal never landed.
+    // These assertions are about the DATABASE having changed.
+    expect(afterFirst.status).toBe('FAILED')
+    expect(afterFirst.submittedAt).toBeNull()
+    expect(afterFirst.providerOperationId).toBeNull()
+    expect(afterFirst.lastErrorCode).toBe('synthetic_pre_network_refusal')
+
+    const job = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    expect(job.status).toBe('RETRYING')
+    clock.advance(
+      new Date(job.nextAttemptAt!).getTime() - clock.now().getTime() + 1_000,
+    )
+    const second = await runVisualGenerationOnce('w-ns-2', clock, {
+      submitScene: async (t) => {
+        submits += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(second.status).toBe('WAITING')
+    expect(submits).toBe(2)
+    const afterSecond = (await visualTaskRows(jobId))[0]
+    expect(afterSecond.status).toBe('SUBMITTED')
+    expect(afterSecond.providerOperationId).toMatch(/^op-/)
+  }, 240_000)
+
+  it('an UNKNOWN failure quarantines the task and can NEVER take the retry path', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submits = 0
+    const outcome = await runVisualGenerationOnce('w-unk-1', clock, {
+      submitScene: async () => {
+        submits += 1
+        // NO spendState: an adapter that does not say is treated as
+        // UNKNOWN — absence must never authorise a second charge.
+        return {
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'ambiguous_transport_failure',
+          errorMessage: null,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    // The submission evidence is RETAINED — precisely what bars the
+    // NOT_SENT retry path forever.
+    expect(row.submittedAt).not.toBeNull()
+    const job = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    expect(job.status).toBe('FAILED')
+    expect(job.lastErrorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    expect(job.nextAttemptAt).toBeNull()
+    // And nothing ever submits again: the job is terminal.
+    const again = await runVisualGenerationOnce('w-unk-2', clock, {
+      submitScene: async () => {
+        submits += 1
+        throw new Error('a quarantined job must never resubmit')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(again.status).toBe('IDLE')
+    expect(submits).toBe(1)
+  }, 240_000)
+
+  it('an answer naming a DIFFERENT provider is quarantined, never polled', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runVisualGenerationOnce('w-impostor', clock, {
+      submitScene: async () => ({
+        status: 'SUBMITTED',
+        providerCode: 'IMPOSTOR',
+        providerOperationId: 'op-under-the-wrong-roof',
+      }),
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    const row = (await visualTaskRows(jobId))[0]
+    // External contact may already have happened, under an identity
+    // nothing downstream can vouch for — so the operation is never
+    // recorded, never polled under the other provider, never retried.
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.providerOperationId).toBeNull()
+    expect(row.providerCode).toBe('MOCK')
+  }, 240_000)
+
+  it('an unusable operation id after provider contact is quarantined', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    const outcome = await runVisualGenerationOnce('w-blank-op', clock, {
+      submitScene: async () => ({
+        status: 'SUBMITTED',
+        providerCode: 'MOCK',
+        // Whitespace-only: empty after trimming, unusable forever.
+        providerOperationId: '   ',
+      }),
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    const row = (await visualTaskRows(jobId))[0]
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+    expect(row.providerOperationId).toBeNull()
+  }, 240_000)
+
+  it('the reservation hands the reserved provider to the submission seam', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let seen: string | undefined
+    const outcome = await runVisualGenerationOnce('w-seam', clock, {
+      submitScene: async (t, options) => {
+        seen = options?.expectedProviderCode
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('WAITING')
+    // The seam receives the code recorded in the durable reservation,
+    // so the check happens immediately before invocation — not only
+    // in outer registry reads with a gap between them.
+    expect(seen).toBe('MOCK')
+    void jobId
+  }, 240_000)
+
+  it('a provider-boundary failure in the real submitScene is never NOT_SENT', async () => {
+    const { manifest } = await makeGeneratingVisualsJob()
+    const task = manifest.visualTasks[0]
+    setVisualGenerationProviderForTests({
+      code: 'MOCK',
+      displayName: 'throwing test provider',
+      isEnabled: () => true,
+      submitScene: async () => {
+        throw new VisualGenerationProviderError(
+          'provider_unreachable',
+          'synthetic transport failure',
+          true,
+        )
+      },
+      pollScene: async () => {
+        throw new VisualGenerationProviderError('unused', 'unused', false)
+      },
+    })
+    try {
+      const result = await submitScene(task, { expectedProviderCode: 'MOCK' })
+      expect(result.status).toBe('FAILED')
+      if (result.status !== 'FAILED') return
+      expect(result.errorCode).toBe('provider_unreachable')
+      // The request may have crossed the boundary before the throw —
+      // the adapter must NOT claim otherwise.
+      expect(result.spendState).toBeUndefined()
+    } finally {
+      resetVisualGenerationProviderForTests()
+    }
+  }, 240_000)
+
+  it('a legacy FAILED row carrying submission evidence is normalized to quarantine', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    // Seed a genuinely submitted row, then rewrite it to the LEGACY
+    // shape older code produced: FAILED, but with submission evidence.
+    expect(
+      (await runVisualGenerationOnce('w-legacy-seed', clock, {
+        submitScene: async (t) => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    await getDb()
+      .update(prayerGenerationVisualTasks)
+      .set({
+        status: 'FAILED',
+        providerOperationId: null,
+        lastErrorCode: 'legacy_provider_error',
+      })
+      .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'GENERATING_VISUALS',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+
+    let submits = 0
+    const outcome = await runVisualGenerationOnce('w-legacy', clock, {
+      submitScene: async () => {
+        submits += 1
+        throw new Error('a legacy unresolved row must never resubmit')
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(outcome.status).toBe('FAILED')
+    if (outcome.status === 'FAILED') {
+      expect(outcome.errorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    }
+    expect(submits).toBe(0)
+    const row = (await visualTaskRows(jobId))[0]
+    // Normalized, not merely tolerated: the resettable FAILED shape is
+    // gone, replaced by the terminal quarantine the whole lifecycle
+    // already understands.
+    expect(row.status).toBe('CANCELLED')
+    expect(row.lastErrorCode).toBe(PROVIDER_OUTCOME_UNKNOWN)
+  }, 240_000)
+})
+
+describe('red-team: admin retry refuses unresolved provider spend (DB-driven)', () => {
+  it('a quarantined visual task blocks the generic admin retry', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-1', clock, {
+        submitScene: async () => ({
+          status: 'FAILED',
+          providerCode: 'MOCK',
+          errorCode: 'ambiguous',
+          errorMessage: null,
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('FAILED')
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
+    const job = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    expect(job.status).toBe('FAILED')
+  }, 240_000)
+
+  it('a LEGACY failed-with-evidence row blocks it too, before normalization', async () => {
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    expect(
+      (await runVisualGenerationOnce('w-adm-2', clock, {
+        submitScene: async (t) => ({
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }),
+        pollScene: async () => ({ status: 'PROCESSING' }),
+      })).status,
+    ).toBe('WAITING')
+    // The legacy shape, still un-normalized (no worker has run), with
+    // the job already FAILED — the administrator must be protected
+    // even before the worker gets a chance to normalize.
+    await getDb()
+      .update(prayerGenerationVisualTasks)
+      .set({
+        status: 'FAILED',
+        providerOperationId: null,
+        lastErrorCode: 'legacy_provider_error',
+      })
+      .where(eq(prayerGenerationVisualTasks.generationJobId, jobId))
+    await getDb()
+      .update(prayerGenerationJobs)
+      .set({
+        status: 'FAILED',
+        leaseToken: null,
+        leaseExpiresAt: null,
+        nextAttemptAt: null,
+      })
+      .where(eq(prayerGenerationJobs.id, jobId))
+    let refused: unknown
+    try {
+      await adminRetryGenerationJob(adminId, ctx, jobId)
+    } catch (error) {
+      refused = error
+    }
+    expect(String((refused as Error).message)).toContain('unresolved')
   }, 240_000)
 })

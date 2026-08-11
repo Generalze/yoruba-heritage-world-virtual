@@ -696,12 +696,22 @@ function reasonToErrorCode(
 }
 
 /**
- * Submits ONE TTS requirement. Called by `runAudioGenerationOnce` at
- * most once per PENDING row (a task that already SUCCEEDED never comes
- * back through here) — but is itself idempotent regardless, since the
- * provider is keyed on the AUTHORITATIVE idempotency key and a
- * re-submission of the SAME request is a no-op at the provider layer,
- * never a second paid synthesis.
+ * Submits ONE TTS requirement.
+ *
+ * AT MOST ONCE, and the EXECUTOR enforces that — a durable pre-call
+ * reservation in `runAudioGenerationOnce` means this is genuinely
+ * called at most once per requirement, and an unresolved submission is
+ * quarantined rather than repeated. No claim is made that a provider
+ * deduplicates on the idempotency key: no real speech vendor examined
+ * for this platform documents idempotent submission, and a guarantee
+ * nobody makes is not a guarantee. The key remains the requirement's
+ * STABLE IDENTITY, and is what an external request id would bind to
+ * for a provider that verifiably supports one.
+ *
+ * A failed result says WHETHER anything was sent (`spendState`):
+ * refusals decided before invocation are NOT_SENT and freely
+ * retryable; anything at or after invocation is UNKNOWN and never
+ * retried automatically.
  *
  * The key is recomputed here from manifest authority, never taken on
  * trust from the caller, and the approved body exists only for the
@@ -710,8 +720,26 @@ function reasonToErrorCode(
  */
 export async function submitSpeech(
   input: SpeechTaskIdentity & { requirement: ManifestAudioRequirement },
+  options: { expectedProviderCode?: string } = {},
 ): Promise<AudioTaskSubmissionResult> {
   const provider = getTtsProvider()
+  // THE RESERVED PROVIDER IS THE ONLY ONE THIS SUBMISSION MAY PAY.
+  // Checked HERE, immediately before any work — not merely by the
+  // caller's earlier registry reads, which leave a gap a selection
+  // change could slip through. Refused at this point, nothing has
+  // touched the network, so the failure is PROVABLY NOT_SENT.
+  if (
+    options.expectedProviderCode != null &&
+    provider.code !== options.expectedProviderCode
+  ) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'provider_selection_changed',
+      errorMessage: null,
+      spendState: 'NOT_SENT',
+    }
+  }
   // A DISABLED adapter is refused HERE — before compilation, and
   // therefore before the approved body is read at all. Step 15's rule
   // is that the sacred body is retrieved only when synthesis is
@@ -719,21 +747,27 @@ export async function submitSpeech(
   // deployment where it never is. The refusal is a recorded task
   // failure, never a silent skip: a TTS requirement that goes
   // unsatisfied must stop the recording, not quietly vanish from it.
+  // Decided BEFORE any invocation: provably NOT_SENT.
   if (!provider.isEnabled()) {
     return {
       status: 'FAILED',
       providerCode: provider.code,
       errorCode: 'tts_unavailable',
       errorMessage: null,
+      spendState: 'NOT_SENT',
     }
   }
   const compiled = await compileSpeechSynthesisRequest(input.requirement, input)
   if (compiled.status !== 'OK') {
+    // A compile refusal happens strictly before the provider is
+    // invoked — nothing has been sent, and saying so is what lets the
+    // executor retry it for free instead of quarantining it.
     return {
       status: 'FAILED',
       providerCode: provider.code,
       errorCode: reasonToErrorCode(compiled),
       errorMessage: null,
+      spendState: 'NOT_SENT',
     }
   }
   try {

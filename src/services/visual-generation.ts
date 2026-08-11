@@ -528,36 +528,70 @@ function reasonToErrorCode(
 }
 
 /**
- * Submits ONE manifest task. Called by `runVisualGenerationOnce` at
- * most once per PENDING row (a task that already SUCCEEDED never comes
- * back through here) — but is itself idempotent regardless, since the
- * provider is keyed on `task.idempotencyKey` and a re-submission of the
- * SAME task/request is a no-op at the provider layer, never a second
- * paid execution.
+ * Submits ONE manifest task.
+ *
+ * AT MOST ONCE, and the EXECUTOR enforces that — a durable pre-call
+ * reservation in `runVisualGenerationOnce` means this is genuinely
+ * called at most once per task, and an unresolved submission is
+ * quarantined rather than repeated. No claim is made that a provider
+ * deduplicates on `task.idempotencyKey`: no real generation vendor
+ * examined for this platform documents idempotent submission, and a
+ * guarantee nobody makes is not a guarantee. The key remains the task's
+ * STABLE IDENTITY, and is what an external request id would bind to for
+ * a provider that verifiably supports one.
+ *
+ * A failed result says WHETHER anything was sent (`spendState`):
+ * refusals decided before invocation are NOT_SENT and freely
+ * retryable; anything at or after invocation is UNKNOWN and never
+ * retried automatically.
  */
 export async function submitScene(
   task: ManifestVisualTask,
+  options: { expectedProviderCode?: string } = {},
 ): Promise<VisualTaskSubmissionResult> {
   const provider = getVisualGenerationProvider()
+  // THE RESERVED PROVIDER IS THE ONLY ONE THIS SUBMISSION MAY PAY.
+  // Checked HERE, immediately before any work — not merely by the
+  // caller's earlier registry reads, which leave a gap a selection
+  // change could slip through. Refused at this point, nothing has
+  // touched the network, so the failure is PROVABLY NOT_SENT.
+  if (
+    options.expectedProviderCode != null &&
+    provider.code !== options.expectedProviderCode
+  ) {
+    return {
+      status: 'FAILED',
+      providerCode: provider.code,
+      errorCode: 'provider_selection_changed',
+      errorMessage: null,
+      spendState: 'NOT_SENT',
+    }
+  }
   // A DISABLED adapter is refused here, as a recorded task failure. A
   // GENERATION_REQUIRED task means a scene has no approved picture, so
   // skipping it would ship a recording that is missing something a
   // person was promised — the one outcome that must be impossible.
+  // Decided BEFORE any invocation: provably NOT_SENT.
   if (!provider.isEnabled()) {
     return {
       status: 'FAILED',
       providerCode: provider.code,
       errorCode: 'visual_generation_unavailable',
       errorMessage: null,
+      spendState: 'NOT_SENT',
     }
   }
   const compiled = await compileVisualGenerationRequest(task)
   if (compiled.status !== 'OK') {
+    // A compile refusal happens strictly before the provider is
+    // invoked — nothing has been sent, and saying so is what lets the
+    // executor retry it for free instead of quarantining it.
     return {
       status: 'FAILED',
       providerCode: provider.code,
       errorCode: reasonToErrorCode(compiled),
       errorMessage: null,
+      spendState: 'NOT_SENT',
     }
   }
   try {
