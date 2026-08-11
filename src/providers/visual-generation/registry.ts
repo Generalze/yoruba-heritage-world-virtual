@@ -76,10 +76,11 @@ export function resetVisualGenerationDefaultForTests(): void {
  * CLOSED (null) on any mismatch rather than silently substituting the
  * active provider.
  *
- * With MOCK the only implementation, "resolution" is a code equality
- * check against the single active slot; when a second real adapter
- * lands, this becomes the lookup and every caller is already binding
- * correctly.
+ * There is ONE active slot (mock, disabled, or Kling — whichever the
+ * driver selected), so "resolution" is a code equality check against
+ * it: a persisted code from a different configuration fails closed
+ * rather than being answered by whichever backend happens to be
+ * active now.
  */
 export function resolveVisualGenerationProvider(
   providerCode: string,

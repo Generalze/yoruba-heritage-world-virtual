@@ -3,11 +3,12 @@
  *
  * Provider-specific code lives ONLY in this directory. The Step 14
  * executor service (`src/services/visual-generation.ts`) talks to the
- * VisualGenerationProvider interface only — never to Kling/OpenArt/any
- * paid API directly, and never through provider conditionals scattered
- * across the codebase. Only a deterministic MockVisualGenerationProvider
- * exists at this stage; a real provider adapter is future work and must
- * implement this exact interface.
+ * VisualGenerationProvider interface only — never to any paid API
+ * directly, and never through provider conditionals scattered across
+ * the codebase. Three implementations exist: the deterministic mock,
+ * the disabled refusal, and the approved Kling adapter (Step 20,
+ * Kling API 2.0 text-to-video, visuals only) — all behind this exact
+ * interface.
  *
  * A VisualGenerationRequest is a PURELY IN-MEMORY compiled object. It is
  * built fresh for every submission from CURRENT authority, is never

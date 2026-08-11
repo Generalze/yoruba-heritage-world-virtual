@@ -41,7 +41,9 @@ import type {
  * → provider-neutral submit/poll (the deterministic mock, or 9jaLingo's
  *   synchronous /v1/audio/speech, which completes at submit time)
  * → verified artifact (mime/type, bounded duration, non-empty, fresh SHA-256)
- * → private storage (LocalMediaStorageProvider — no S3)
+ * → private working media storage (the configured MediaStorageProvider;
+ *   the finished recording later reaches the private object store at
+ *   the upload stage)
  * → re-verified against that storage before the job is ever allowed to
  *   leave GENERATING_AUDIO (`verifyStoredAudioArtifact`)
  * ```

@@ -158,8 +158,9 @@ function configFromEnv(): KlingVisualConfig {
 }
 
 /** Production transport: plain fetch, redirects REFUSED, one attempt
- * per call, bounded read. No SDK exists for this API; the documented
- * contract is bare HTTPS + Bearer, implemented exactly. */
+ * per call, bounded read. The adapter deliberately speaks the
+ * documented API 2.0 contract directly — bare HTTPS + Bearer,
+ * implemented exactly — and makes no claim about SDK availability. */
 function createFetchKlingHttpClient(): KlingHttpClient {
   return {
     async requestJson({ method, url, headers, body }) {

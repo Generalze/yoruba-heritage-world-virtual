@@ -45,9 +45,12 @@ import type {
  *   WHOLE manifest before calling in here; this re-proves the SPECIFIC
  *   Visual Bible + sacred-content authority this one task depends on)
  * → in-memory request compilation (body-free unless APPROVED_TEXT_CONTEXT)
- * → provider-neutral submit/poll (mock only — no real provider exists yet)
+ * → provider-neutral submit/poll (the deterministic mock, or the
+ *   approved Kling API 2.0 adapter — Step 20 — behind the same seam)
  * → verified artifact (mime/type, bounded duration, non-empty, fresh SHA-256)
- * → private storage (LocalMediaStorageProvider — no S3)
+ * → private working media storage (the configured MediaStorageProvider;
+ *   the finished recording later reaches the private object store at
+ *   the upload stage)
  * → re-verified against that storage before the job is ever allowed to
  *   leave GENERATING_VISUALS (`verifyStoredArtifact`)
  * ```
