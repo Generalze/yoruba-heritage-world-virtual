@@ -1345,6 +1345,70 @@ the one injected seam, and everything around it is exercised with tiny
 deterministic non-sacred fixtures. Step 14's mock artifacts are left
 untouched and are never fed to a real compositor.
 
+**AT-MOST-ONCE EXTERNAL PAID SUBMISSION.** For any provider without a
+VERIFIED, officially documented server-side idempotency guarantee, a
+request that MAY have reached the provider is NEVER submitted again
+automatically. Avoiding a duplicate charge outranks automatic recovery.
+
+Until Step 20 the executors delegated this to the provider: both
+`VisualGenerationProvider` and `TtsProvider` required adapters to treat a
+repeated submission for the same idempotency key as the same job. That
+holds for the mock and for nobody else — no real generation or speech
+vendor examined for this platform documents it — so the guarantee is now
+the platform's own:
+
+- **DURABLE PRE-CALL RESERVATION.** Before any external submission, the
+  task row is CAS'd `PENDING → SUBMITTED` with the exact selected
+  provider code and a NULL operation id. Only the worker that wins that
+  CAS may cross the provider boundary, so two workers racing one task
+  produce exactly one call. A provider-selection change between
+  reservation and execution fails closed *before* the network.
+- **A NULL OPERATION ID IS NOT A LICENCE TO RESUBMIT.** It means
+  "reserved or in flight, outcome not yet durably known". A FRESH
+  reservation is simply outstanding — other workers wait and submit
+  nothing — because the reserving worker may still be inside the call.
+  It is protected for `RESERVATION_STALE_AFTER_MS`, derived from the
+  lease model (two full lease windows); any provider submission timeout
+  added later MUST be shorter than that.
+- **KNOWN OPERATION, CONTINUED — NEVER REPEATED.** Once an operation id
+  is durably recorded, later workers poll that same operation. The
+  operation id is written CAS'd on the reserved state, so provider truth
+  survives even a lease lost mid-call, and a late response can never
+  resurrect or overwrite a row that was already quarantined.
+- **UNKNOWN OUTCOME IS QUARANTINED, NOT RETRIED.** A stale reservation
+  becomes `CANCELLED` with `provider_outcome_unknown` — terminal, using
+  the existing enum value and no migration. The job fails closed with
+  `VISUAL_PROVIDER_OUTCOME_UNKNOWN` or `TTS_PROVIDER_OUTCOME_UNKNOWN`,
+  with no automatic retry and no fall-through to the "every task
+  succeeded" finalization path.
+- **SPEND IS CLASSIFIED, NOT GUESSED.** A failed submission carries
+  `spendState: NOT_SENT | UNKNOWN`. `NOT_SENT` requires POSITIVE PROOF
+  that nothing was sent — a disabled adapter, a compile refusal, a
+  selection mismatch, a local validation rejection, all decided before
+  any network write. A timeout, a reset, a 5xx, a malformed response or
+  a generic exception is UNKNOWN, and **absent is UNKNOWN**: an adapter
+  that forgets to answer must not thereby authorise a second charge.
+  Only a failure proved `NOT_SENT` may return to `PENDING`, evidenced
+  durably by a NULL `submittedAt`. Legacy rows that cannot prove it are
+  treated as UNKNOWN.
+- **THE UNIQUE IDEMPOTENCY KEY IS AN IDENTITY, NOT A PAYMENT GUARD.** It
+  makes a task recognisable across retries and is what an external
+  request id would bind to; it does not by itself prevent a second paid
+  call, and the canon no longer claims it does.
+- **GENERIC ADMIN RETRY REFUSES AN UNRESOLVED OUTCOME.**
+  `adminRetryGenerationJob` restarts from PREPARING, minting fresh
+  snapshots and therefore fresh task identities — which would sail past
+  both the unique key and the reservation. It is refused, with a neutral
+  technical message, whenever any visual or audio task is quarantined.
+  There is deliberately no override flag, no bypass button and no extra
+  role: an operator reconciles the outcome with the provider first. A
+  deliberate re-spend, if ever needed, must be its own designed and
+  audited action.
+
+Provider-side idempotency remains welcome as an OPTIONAL additional
+protection, and may be bound to the deterministic task key — but only
+when officially documented and verified.
+
 **THE TWO UNAPPROVED ADAPTERS ARE NAMED, NOT INVENTED.** No external
 visual-generation or speech vendor has been chosen, and this codebase
 does not choose one. Production therefore has two honest settings:

@@ -92,9 +92,16 @@ export interface VisualGenerationProvider {
   readonly code: string
   readonly displayName: string
   isEnabled: () => boolean
-  /** ONE submission per idempotencyKey — a provider MUST treat a
-   * repeated submitScene() for the same idempotencyKey as the SAME
-   * job, never a duplicate paid execution. */
+  /**
+   * ONE submission per idempotencyKey.
+   *
+   * The EXECUTOR now guarantees that, not the adapter: a durable
+   * pre-call reservation means this is called at most once per task,
+   * and an unresolved submission is quarantined rather than repeated.
+   * An adapter that is ALSO idempotent is welcome to be, but nothing
+   * depends on it — no real generation vendor examined for this
+   * platform documents idempotent submission.
+   */
   submitScene: (
     request: VisualGenerationRequest,
   ) => Promise<VisualGenerationSubmission>

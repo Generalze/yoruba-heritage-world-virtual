@@ -95,9 +95,17 @@ export interface TtsProvider {
   readonly code: string
   readonly displayName: string
   isEnabled: () => boolean
-  /** ONE submission per idempotencyKey — a provider MUST treat a
-   * repeated submitSpeech() for the same idempotencyKey as the SAME
-   * job, never a duplicate paid synthesis. */
+  /**
+   * ONE submission per idempotencyKey.
+   *
+   * The EXECUTOR now guarantees that, not the adapter: a durable
+   * pre-call reservation means this is called at most once per
+   * requirement, and an unresolved submission is quarantined rather
+   * than repeated. An adapter that is ALSO idempotent is welcome to
+   * be, but nothing depends on it — no real speech vendor examined for
+   * this platform documents idempotent submission, and a guarantee
+   * nobody makes is not a guarantee.
+   */
   submitSpeech: (
     request: SpeechSynthesisRequest,
   ) => Promise<SpeechSynthesisSubmission>

@@ -64,8 +64,13 @@ export const prayerGenerationVisualTasks = mysqlTable(
     // deterministic identifiers, never sacred content.
     taskId: varchar('task_id', { length: 100 }).notNull(),
     sceneId: varchar('scene_id', { length: 100 }).notNull(),
-    // Deterministic sha256 over (job, storyboardSha256, sceneId) — the
-    // provider-submission dedup key.
+    // Deterministic sha256 over (job, storyboardSha256, sceneId).
+    //
+    // This is a STABLE IDENTITY, not by itself a defence against a
+    // second paid call: it makes a task recognisable across retries and
+    // is offered to providers that support an external request id. What
+    // actually prevents duplicate spend is the durable pre-call
+    // reservation in runVisualGenerationOnce.
     idempotencyKey: varchar('idempotency_key', { length: 64 }).notNull(),
     status: mysqlEnum('status', VISUAL_TASK_STATUSES)
       .notNull()

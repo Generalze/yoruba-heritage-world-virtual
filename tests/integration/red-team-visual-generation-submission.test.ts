@@ -81,6 +81,7 @@ import {
 } from '@/services/visual-bibles'
 import {
   DEFAULT_LEASE_MS,
+  RESERVATION_STALE_AFTER_MS,
   GENERATION_TRANSITIONS,
   VISUAL_TASK_POLL_DELAY_MS,
   claimNextVisualGenerationJob,
@@ -1140,39 +1141,41 @@ describe('red-team: a job whose lease is reclaimed mid-cycle never finalizes for
 // ----------------------------------------------------------------------------
 
 describe('red-team: task-row status-CAS prevents a zombie worker from clobbering a newer SUCCEEDED result', () => {
-  it('a late write from a reclaimed worker cannot overwrite a fresher SUCCEEDED result with a stale FAILED', async () => {
-    const { jobId, manifest } = await makeGeneratingVisualsJob()
+  it('a reclaimed worker NEVER submits a second time, and a stale reservation is quarantined', async () => {
+    // THIS TEST REPLACES AN OBSOLETE ONE. Its predecessor asserted
+    // that worker B should RESUBMIT a task whose first worker lost its
+    // lease mid-call. Against a real paid provider that is a second
+    // charge for one scene, so the contract is now stronger:
+    //
+    //   A reserves and enters the provider call.
+    //   A loses the job lease.
+    //   B reclaims the job.
+    //     - while the reservation is FRESH, B submits NOTHING.
+    //     - once it is genuinely STALE, B quarantines it and still
+    //       submits NOTHING.
+    //   A late response can neither resurrect nor overwrite it.
+    //
+    // Both original safety properties are preserved: stale workers
+    // cannot overwrite newer truth, AND a reclaimed worker cannot
+    // cause duplicate spend.
+    const { jobId } = await makeGeneratingVisualsJob()
     const clock = makeFakeClock(Date.now())
-    // Worker B's result is a GENUINE one: real bytes in private storage,
-    // hashed from those exact bytes. Anything less would be rejected by
-    // the finalization gate and this test would be proving the wrong
-    // thing (a blocked finalize rather than a protected result).
-    const bArtifact = await storeRealArtifact(manifest.visualTasks[0])
-    const KNOWN_SHA = bArtifact.artifactSha256
-    const KNOWN_MIME = bArtifact.artifactMimeType
-    const KNOWN_DURATION = bArtifact.artifactDurationMs
 
-    let jobAttemptCountAfterGenuineSuccess = -1
+    let submitCalls = 0
+    let bSubmitCallsWhileFresh = 0
+    let bSubmitCallsWhenStale = 0
 
-    // Worker A's submitScene is called by runVisualGenerationOnce's loop
-    // AFTER it has already read this task row as PENDING. Everything
-    // below happens WHILE A is still "inside" that one call — exactly
-    // modeling a worker whose provider round-trip is slow enough that
-    // its lease gets reclaimed and a second worker fully completes the
-    // SAME task before A's own (stale) result ever comes back.
     const zombieDeps: VisualGenerationDependencies = {
       submitScene: async () => {
-        // A's heartbeat stalls: reclaim the job-level lease out from
-        // under it, exactly like item 4 above.
+        submitCalls += 1
+        // A's heartbeat stalls: its job lease is reclaimed out from
+        // under it while it waits on the provider.
         clock.advance(DEFAULT_LEASE_MS + 60_000)
         expect(
           await recoverExpiredGenerationLeases(clock),
         ).toBeGreaterThanOrEqual(1)
 
-        // Worker B claims the reclaimed job and drives the SAME task
-        // row all the way to a genuine SUCCEEDED with KNOWN artifact
-        // values — two cycles: submit, then (after the poll delay)
-        // poll-to-success, exactly like the real async lifecycle.
+        // --- B, while the reservation is still FRESH ---------------
         const afterRecovery = (
           await getDb()
             .select()
@@ -1186,48 +1189,64 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
             clock.now().getTime() +
             1_000,
         )
-        const bSubmitOutcome = await runVisualGenerationOnce(
-          'worker-B-submit',
+        const bFresh = await runVisualGenerationOnce(
+          'worker-B-fresh',
           clock,
           {
-            submitScene: async (t) => ({
-              status: 'SUBMITTED',
-              providerCode: 'MOCK',
-              providerOperationId: `op-${t.taskId}`,
-            }),
+            submitScene: async () => {
+              bSubmitCallsWhileFresh += 1
+              throw new Error(
+                'worker B must not submit while a reservation is live',
+              )
+            },
             pollScene: async () => ({ status: 'PROCESSING' }),
           },
         )
-        expect(bSubmitOutcome.status).toBe('WAITING')
-        clock.advance(VISUAL_TASK_POLL_DELAY_MS + 1_000)
-        const bPollOutcome = await runVisualGenerationOnce(
-          'worker-B-poll',
-          clock,
-          {
-            submitScene: async (t) => ({
-              status: 'SUBMITTED',
-              providerCode: 'MOCK',
-              providerOperationId: `op-${t.taskId}`,
-            }),
-            pollScene: async () => bArtifact,
-          },
-        )
-        expect(bPollOutcome.status).toBe('COMPLETE')
+        // TEETH: B waits. It does not submit, and it does not
+        // quarantine a reservation that may still be in flight.
+        expect(bFresh.status).toBe('WAITING')
+        expect(bSubmitCallsWhileFresh).toBe(0)
+        const stillReserved = (await visualTaskRows(jobId))[0]
+        expect(stillReserved.status).toBe('SUBMITTED')
+        expect(stillReserved.providerOperationId).toBeNull()
 
-        const succeededByB = (await visualTaskRows(jobId))[0]
-        expect(succeededByB.status).toBe('SUCCEEDED')
-        expect(succeededByB.artifactSha256).toBe(KNOWN_SHA)
-
-        const jobAfterB = (
+        // --- B, once the reservation is genuinely STALE ------------
+        clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+        await recoverExpiredGenerationLeases(clock)
+        const staleJob = (
           await getDb()
             .select()
             .from(prayerGenerationJobs)
             .where(eq(prayerGenerationJobs.id, jobId))
             .limit(1)
         ).at(0)!
-        jobAttemptCountAfterGenuineSuccess = jobAfterB.attemptCount
+        if (staleJob.nextAttemptAt != null) {
+          clock.advance(
+            new Date(staleJob.nextAttemptAt).getTime() -
+              clock.now().getTime() +
+              1_000,
+          )
+        }
+        const bStale = await runVisualGenerationOnce(
+          'worker-B-stale',
+          clock,
+          {
+            submitScene: async () => {
+              bSubmitCallsWhenStale += 1
+              throw new Error('worker B must never resubmit')
+            },
+            pollScene: async () => ({ status: 'PROCESSING' }),
+          },
+        )
+        // TEETH: the job fails CLOSED on an unknown outcome, and B
+        // still never crossed the provider boundary.
+        expect(bStale.status).toBe('FAILED')
+        expect(bSubmitCallsWhenStale).toBe(0)
+        const quarantined = (await visualTaskRows(jobId))[0]
+        expect(quarantined.status).toBe('CANCELLED')
+        expect(quarantined.lastErrorCode).toBe('provider_outcome_unknown')
 
-        // ONLY NOW does worker A's own (stale) verdict finally land.
+        // ONLY NOW does A's own late verdict come back.
         return {
           status: 'FAILED',
           providerCode: 'MOCK',
@@ -1239,31 +1258,17 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
     }
 
     const aOutcome = await runVisualGenerationOnce('worker-A', clock, zombieDeps)
-    // A's own job-level lease was reclaimed while it was stuck — its
-    // cycle can never finalize anything at the job level either (the
-    // pre-existing job-level lease CAS, proven in item 4, still holds).
     expect(aOutcome.status).toBe('LEASE_LOST')
 
-    // TEETH: the row must STILL hold B's EXACT SUCCEEDED values — none
-    // of A's stale verdict in ANY field. Checked immediately after A's
-    // cycle ends, before any further cycle could run and mask a real
-    // clobber (a FAILED row resets to PENDING and gets resubmitted on
-    // the next cycle, which would hide this bug behind a redundant
-    // provider call and an eventual, misleadingly-green "SUCCEEDED").
-    // TWO independent guards must both hold here: A's post-provider
-    // lease heartbeat refuses to accept a result on a lease it no longer
-    // holds, and the row-status CAS would reject the write even if it
-    // were attempted (proven directly, without any lease loss, by the
-    // late-poll CAS tests further below).
+    // TEETH: A's late FAILED cannot replace the quarantine, and the
+    // whole episode cost exactly ONE provider submission.
     const final = (await visualTaskRows(jobId))[0]
-    expect(final.status).toBe('SUCCEEDED')
-    expect(final.artifactSha256).toBe(KNOWN_SHA)
-    expect(final.artifactMimeType).toBe(KNOWN_MIME)
-    expect(final.artifactDurationMs).toBe(KNOWN_DURATION)
-    expect(final.lastErrorCode).toBeNull()
-    expect(final.lastErrorMessage).toBeNull()
+    expect(final.status).toBe('CANCELLED')
+    expect(final.lastErrorCode).toBe('provider_outcome_unknown')
+    expect(submitCalls).toBe(1)
 
-    // A's no-op must not corrupt job-level state either.
+    // And the job is terminally FAILED with the bounded stage code —
+    // never scheduled for an automatic retry that would re-spend.
     const finalJob = (
       await getDb()
         .select()
@@ -1271,8 +1276,64 @@ describe('red-team: task-row status-CAS prevents a zombie worker from clobbering
         .where(eq(prayerGenerationJobs.id, jobId))
         .limit(1)
     ).at(0)!
-    expect(finalJob.attemptCount).toBe(jobAttemptCountAfterGenuineSuccess)
-    expect(finalJob.status).not.toBe('FAILED')
+    expect(finalJob.status).toBe('FAILED')
+    expect(finalJob.lastErrorCode).toBe('VISUAL_PROVIDER_OUTCOME_UNKNOWN')
+    expect(finalJob.nextAttemptAt).toBeNull()
+  }, 240_000)
+
+  it('a durably recorded operation id is POLLED by the next worker, never resubmitted', async () => {
+    // The other half of the contract: when the operation id DID land
+    // before the lease was lost, the work is recoverable — a later
+    // worker continues that exact operation instead of paying again.
+    const { jobId } = await makeGeneratingVisualsJob()
+    const clock = makeFakeClock(Date.now())
+    let submitCalls = 0
+    const first = await runVisualGenerationOnce(`w1`, clock, {
+      submitScene: async (t) => {
+        submitCalls += 1
+        return {
+          status: 'SUBMITTED',
+          providerCode: 'MOCK',
+          providerOperationId: `op-${t.taskId}`,
+        }
+      },
+      pollScene: async () => ({ status: 'PROCESSING' }),
+    })
+    expect(first.status).toBe('WAITING')
+    expect(submitCalls).toBe(1)
+
+    // Lose the lease and let a different worker take over, well past
+    // the staleness threshold.
+    clock.advance(RESERVATION_STALE_AFTER_MS + 60_000)
+    await recoverExpiredGenerationLeases(clock)
+    const resumed = (
+      await getDb()
+        .select()
+        .from(prayerGenerationJobs)
+        .where(eq(prayerGenerationJobs.id, jobId))
+        .limit(1)
+    ).at(0)!
+    if (resumed.nextAttemptAt != null) {
+      clock.advance(
+        new Date(resumed.nextAttemptAt).getTime() - clock.now().getTime() + 1_000,
+      )
+    }
+
+    let polledOperationId: string | null = null
+    const second = await runVisualGenerationOnce(`w2`, clock, {
+      submitScene: async () => {
+        submitCalls += 1
+        throw new Error('a known operation must be polled, never resubmitted')
+      },
+      pollScene: async (input) => {
+        polledOperationId = input.providerOperationId
+        return { status: 'PROCESSING' }
+      },
+    })
+    expect(second.status).toBe('WAITING')
+    // TEETH: the SAME operation, and still exactly one submission.
+    expect(polledOperationId).toMatch(/^op-/)
+    expect(submitCalls).toBe(1)
   }, 240_000)
 })
 
