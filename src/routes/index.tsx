@@ -159,15 +159,7 @@ function Home() {
                   LORD JESUS, the one who made all things and by him all
                   things consist.
                 </p>
-                <p className="mt-8 text-base leading-relaxed text-cream-soft-on-night">
-                  Olódùmárè is presented separately and respectfully within
-                  the spiritual structure of the platform.
-                </p>
-                <p className="mt-3 text-base leading-relaxed text-cream-soft-on-night">
-                  Olódùmárè is not presented as one deity among a collection
-                  of equivalent spiritual profiles.
-                </p>
-                <div className="mt-8">
+                <div className="mt-10">
                   <Link
                     to="/olodumare"
                     className={buttonClass('secondary-on-dark', 'md')}

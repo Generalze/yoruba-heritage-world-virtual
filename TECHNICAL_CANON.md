@@ -29,9 +29,11 @@ The following product rules are locked:
   > LORD JESUS, the one who made all things and by him all things
   > consist.
 
-  It is presented ahead of every catalogue section, never inside the
-  deity collection, and always alongside the separateness statements
-  above. It is fixed platform wording, not editable content and not
+  It is presented ahead of every catalogue section and never inside the
+  deity collection. The separateness rule above is enforced
+  STRUCTURALLY — by where Olódùmárè appears and by never being a
+  catalogue record — rather than by printing that rule as on-screen
+  copy. It is fixed platform wording, not editable content and not
   AI-generated: no other doctrinal claim about Olódùmárè may be added,
   extended, paraphrased or inferred anywhere in the product without a
   further explicit authorisation recorded here.

@@ -165,26 +165,27 @@ describe('landing page (src/routes/index.tsx)', () => {
     expect(code).not.toMatch(/testimonial/i)
   })
 
-  it('presents Olódùmárè separately, respectfully, and BEFORE the deity profiles', () => {
-    // The separateness statements from canon §1, verbatim.
-    expect(code).toContain(
-      'Olódùmárè is presented separately and respectfully',
-    )
+  it('presents Olódùmárè separately and BEFORE the deity profiles', () => {
+    // Separateness is STRUCTURAL (canon §1): Olódùmárè has its own
+    // section ahead of the catalogue and is never an entry inside the
+    // deity map — not a sentence printed on screen.
     expect(code).toContain('to="/olodumare"')
-    // Olódùmárè is its own section ahead of the grid, never an entry
-    // inside the deity map.
-    const olodumareSection = code.indexOf('Olódùmárè is presented separately')
+    const olodumareSection = code.indexOf('God most high')
     const deityGrid = code.indexOf('deities.map')
     expect(olodumareSection).toBeGreaterThan(-1)
     expect(deityGrid).toBeGreaterThan(-1)
     expect(olodumareSection).toBeLessThan(deityGrid)
+    // …and it is never sourced from the deity catalogue.
+    const olodumareBlock = code.slice(olodumareSection, deityGrid)
+    expect(olodumareBlock).not.toContain('deities.map')
+    expect(olodumareBlock).not.toContain('to="/deities/$slug"')
   })
 
   it('follows the locked section order: Olódùmárè → services → houses → deities → trust', () => {
     // Olódùmárè comes FIRST after the hero, ahead of every catalogue
     // section (owner-locked order).
     const markers = [
-      'Olódùmárè is presented separately',
+      'God most high',
       'Featured Spiritual Services',
       '<EmblemMedallion',
       'deities.map',
@@ -248,14 +249,18 @@ describe('the approved Olódùmárè wording', () => {
       for (const line of APPROVED) {
         expect(surface).toContain(line)
       }
-      // Always accompanied by the separateness statements.
-      expect(surface).toContain(
-        'Olódùmárè is presented separately and respectfully',
-      )
-      expect(surface).toContain(
-        'Olódùmárè is not presented as one deity among a collection',
-      )
     }
+  })
+
+  it('keeps the canon-§1 separateness statements on the Olódùmárè page', () => {
+    // The landing card carries the devotional wording alone; the fuller
+    // policy statements live on the page the card links to.
+    expect(page).toContain(
+      'Olódùmárè is presented separately and respectfully',
+    )
+    expect(page).toContain(
+      'Olódùmárè is not presented as one deity among a collection',
+    )
   })
 
   it('is never rendered as a deity catalogue card', () => {
