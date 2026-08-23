@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import type { ReactNode } from 'react'
 
 /**
@@ -145,6 +146,66 @@ export function SectionHeading({
         </p>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Deep-brown page banner: the opening band of an interior page, giving
+ * every public surface the same dark/light rhythm as the landing.
+ * Carries the page's ONE h1.
+ */
+export function PageBanner({
+  kicker,
+  title,
+  intro,
+  children,
+}: {
+  kicker?: string
+  title: string
+  intro?: ReactNode
+  children?: ReactNode
+}) {
+  return (
+    <section className="texture-night bg-night">
+      <Container className="py-12 sm:py-16">
+        <div className="max-w-3xl">
+          {kicker ? (
+            <p className="text-xs font-semibold tracking-[0.28em] text-gold-bright uppercase">
+              {kicker}
+            </p>
+          ) : null}
+          <h1 className="font-display mt-3 text-4xl leading-tight text-balance text-cream-on-night sm:text-5xl">
+            {title}
+          </h1>
+          {intro ? (
+            <p className="mt-4 text-base leading-relaxed text-cream-soft-on-night">
+              {intro}
+            </p>
+          ) : null}
+          {children}
+        </div>
+      </Container>
+    </section>
+  )
+}
+
+/** "← Back" affordance for interior pages. The arrow is decorative;
+ * the label carries the destination. */
+export function BackLink({
+  to,
+  children,
+}: {
+  to: string
+  children: ReactNode
+}) {
+  return (
+    <Link
+      to={to}
+      className="inline-flex items-center gap-2 text-sm font-semibold text-gold-bright transition-colors hover:text-cream-on-night"
+    >
+      <span aria-hidden="true">←</span>
+      {children}
+    </Link>
   )
 }
 

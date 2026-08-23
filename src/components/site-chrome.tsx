@@ -1,8 +1,26 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 
 import { PUBLIC_NAV } from './navigation'
-import { BrandMark, IconClose, IconMenu, buttonClass } from './ui'
+import { BrandMark, IconClose, IconMenu, SkipLink, buttonClass } from './ui'
+
+/**
+ * The public page frame: skip link, header, the single <main> the skip
+ * link targets, and the footer. Every public route uses this so the
+ * chrome and the accessibility affordances cannot drift apart between
+ * pages.
+ */
+export function PublicPage({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-h-screen bg-canvas text-ink">
+      <SkipLink />
+      <SiteHeader />
+      <main id="main-content">{children}</main>
+      <SiteFooter />
+    </div>
+  )
+}
 
 /**
  * Public site chrome (Step 21A): the responsive header/navigation and

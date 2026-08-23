@@ -2,7 +2,28 @@ import { Link, createFileRoute, notFound } from '@tanstack/react-router'
 
 import { getServiceFn } from '@/services/catalogue-actions'
 import { getServiceBookableFn } from '@/services/booking-actions'
+import { PublicPage } from '@/components/site-chrome'
+import {
+  BackLink,
+  Card,
+  Container,
+  IconArrow,
+  Notice,
+  PageBanner,
+  buttonClass,
+} from '@/components/ui'
+import { formatAmountMinor } from '@/lib/display-time'
 
+/**
+ * Service profile (Step 21A.3) — the last public step before booking.
+ *
+ * Price and duration are shown ONLY when the stored record actually
+ * carries them, and the amount is formatted through the shared
+ * currency helper, which derives the minor-unit scale from the
+ * currency itself (a plain divide-by-100 is wrong for zero-decimal
+ * currencies). The Book affordance appears only when the SERVER says a
+ * genuine booking path exists.
+ */
 export const Route = createFileRoute('/services/$slug')({
   loader: async ({ params }) => {
     const service = await getServiceFn({ data: { slug: params.slug } })
@@ -15,91 +36,138 @@ export const Route = createFileRoute('/services/$slug')({
     })
     return { ...service, bookable }
   },
+  head: ({ loaderData }) => ({
+    meta: [
+      {
+        title: loaderData
+          ? `${loaderData.name} — Yorùbá Heritage World Virtual`
+          : 'Service — Yorùbá Heritage World Virtual',
+      },
+    ],
+  }),
   notFoundComponent: ServiceNotFound,
   component: ServicePage,
 })
 
 function ServiceNotFound() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-stone-950 px-6 text-stone-100">
-      <h1 className="text-2xl font-bold">Service not found</h1>
-      <Link to="/services" className="mt-4 text-amber-500 hover:text-amber-400">
-        Back to services
-      </Link>
-    </main>
+    <PublicPage>
+      <PageBanner
+        title="Service not found"
+        intro="This service is not available."
+      >
+        <div className="mt-6">
+          <Link to="/services" className={buttonClass('secondary-on-dark', 'md')}>
+            Back to services
+          </Link>
+        </div>
+      </PageBanner>
+    </PublicPage>
   )
 }
 
 function ServicePage() {
   const service = Route.useLoaderData()
-  // Prices/durations are shown only when real approved data exists —
-  // never fake placeholders.
-  const hasBookingDetails =
-    service.durationMinutes !== null || service.priceMinor !== null
+  const price =
+    service.priceMinor !== null && service.currency !== null
+      ? formatAmountMinor(service.priceMinor, service.currency)
+      : null
+  const duration =
+    service.durationMinutes !== null
+      ? `${service.durationMinutes} minutes`
+      : null
 
   return (
-    <main className="min-h-screen bg-stone-950 px-6 py-12 text-stone-100">
-      <div className="mx-auto w-full max-w-3xl">
-        <Link
-          to="/services"
-          className="text-sm text-stone-400 hover:text-amber-500"
-        >
-          ← All services
-        </Link>
-        <h1 className="mt-4 text-3xl font-bold">{service.name}</h1>
-        <p className="mt-2 text-sm text-stone-400">
+    <PublicPage>
+      <PageBanner kicker="Spiritual service" title={service.name}>
+        <p className="mt-4 text-sm text-cream-soft-on-night">
           Offered by{' '}
           <Link
             to="/sacred-houses/$slug"
             params={{ slug: service.sacredHouse.slug }}
-            className="text-amber-500 hover:text-amber-400"
+            className="font-semibold text-gold-bright underline-offset-4 hover:underline"
           >
             {service.sacredHouse.name}
           </Link>
         </p>
+        <div className="mt-6">
+          <BackLink to="/services">All services</BackLink>
+        </div>
+      </PageBanner>
 
-        {service.shortDescription ? (
-          <p className="mt-6 text-stone-300">{service.shortDescription}</p>
-        ) : null}
+      <Container className="py-12 sm:py-16">
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <Card>
+              <h2 className="text-sm font-semibold tracking-wide text-ink">
+                About this service
+              </h2>
+              {service.shortDescription ? (
+                <p className="mt-3 leading-relaxed text-ink-soft">
+                  {service.shortDescription}
+                </p>
+              ) : (
+                <p className="mt-3 text-sm text-ink-soft">
+                  A fuller description will be published with this service.
+                </p>
+              )}
+              <p className="mt-6 text-sm leading-relaxed text-ink-soft">
+                Appointments are booked with{' '}
+                {service.sacredHouse.name}, never with an individual member.
+                The Sacred House privately assigns the members responsible for
+                your appointment.
+              </p>
+            </Card>
+          </div>
 
-        {hasBookingDetails ? (
-          <dl className="mt-6 space-y-2 text-sm">
-            {service.durationMinutes !== null ? (
-              <div className="flex gap-3">
-                <dt className="text-stone-400">Duration</dt>
-                <dd>{service.durationMinutes} minutes</dd>
+          <div className="lg:content-start">
+            <Card>
+              <h2 className="text-sm font-semibold tracking-wide text-ink">
+                Booking
+              </h2>
+              {price || duration ? (
+                <dl className="mt-4 divide-y divide-line text-sm">
+                  {duration ? (
+                    <div className="flex justify-between gap-4 py-2.5">
+                      <dt className="text-ink-soft">Duration</dt>
+                      <dd className="text-ink">{duration}</dd>
+                    </div>
+                  ) : null}
+                  {price ? (
+                    <div className="flex justify-between gap-4 py-2.5">
+                      <dt className="text-ink-soft">Price</dt>
+                      <dd className="font-semibold text-ink">{price}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              ) : (
+                <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                  Details will be provided when this service is opened for
+                  booking.
+                </p>
+              )}
+
+              <div className="mt-5">
+                {service.bookable ? (
+                  <Link
+                    to="/book/$serviceSlug"
+                    params={{ serviceSlug: service.slug }}
+                    className={buttonClass('primary', 'md')}
+                  >
+                    Book appointment
+                    <IconArrow />
+                  </Link>
+                ) : (
+                  <Notice>
+                    Online booking is not available for this service at the
+                    moment.
+                  </Notice>
+                )}
               </div>
-            ) : null}
-            {service.priceMinor !== null && service.currency !== null ? (
-              <div className="flex gap-3">
-                <dt className="text-stone-400">Price</dt>
-                <dd>
-                  {(service.priceMinor / 100).toLocaleString()}{' '}
-                  {service.currency}
-                </dd>
-              </div>
-            ) : null}
-          </dl>
-        ) : (
-          <p className="mt-6 text-sm text-stone-500">
-            Details will be provided when this service is opened for booking.
-          </p>
-        )}
-
-        {service.bookable ? (
-          <Link
-            to="/book/$serviceSlug"
-            params={{ serviceSlug: service.slug }}
-            className="mt-8 inline-block rounded-md bg-amber-600 px-6 py-3 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-500"
-          >
-            Book Appointment
-          </Link>
-        ) : (
-          <p className="mt-8 text-sm text-stone-500">
-            Online booking is not available for this service at the moment.
-          </p>
-        )}
-      </div>
-    </main>
+            </Card>
+          </div>
+        </div>
+      </Container>
+    </PublicPage>
   )
 }

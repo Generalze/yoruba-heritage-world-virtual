@@ -198,11 +198,9 @@ describe('landing page (src/routes/index.tsx)', () => {
     }
   })
 
-  it('keeps the skip-link target, page chrome and the full-bleed hero image', () => {
-    expect(source).toContain('SkipLink')
-    expect(source).toContain('id="main-content"')
-    expect(source).toContain('SiteHeader')
-    expect(source).toContain('SiteFooter')
+  it('keeps the page chrome and the full-bleed hero image', () => {
+    // The frame lives in PublicPage so it cannot drift between pages.
+    expect(code).toContain('<PublicPage>')
     // The hero photograph is same-origin (the CSP allows no external
     // image host), decorative, and covers the box at every width.
     expect(code).toContain('src="/hero-sanctuary.jpg"')
@@ -308,6 +306,64 @@ describe('site chrome and authenticated shell', () => {
   it('drives navigation from the shared tested nav models', () => {
     expect(chrome).toContain('PUBLIC_NAV')
     expect(shell).toContain('APP_NAV')
+  })
+})
+
+// --- Public surface (Step 21A.3) -----------------------------------------------
+
+describe('public pages share one frame', () => {
+  const PUBLIC_ROUTES = [
+    'src/routes/index.tsx',
+    'src/routes/olodumare.tsx',
+    'src/routes/sacred-houses.index.tsx',
+    'src/routes/sacred-houses.$slug.tsx',
+    'src/routes/services.index.tsx',
+    'src/routes/services.$slug.tsx',
+    'src/routes/deities.index.tsx',
+    'src/routes/deities.$slug.tsx',
+  ] as const
+
+  it('every public route renders inside PublicPage', () => {
+    for (const file of PUBLIC_ROUTES) {
+      expect(withoutComments(read(file))).toContain('<PublicPage>')
+    }
+  })
+
+  it('PublicPage is the single owner of the chrome and the skip target', () => {
+    const chrome = withoutComments(read('src/components/site-chrome.tsx'))
+    expect(chrome).toContain('<SkipLink />')
+    expect(chrome).toContain('<SiteHeader />')
+    expect(chrome).toContain('<SiteFooter />')
+    expect(chrome).toContain('id="main-content"')
+    // Exactly one <main> in the public frame — a second landmark would
+    // make the skip link ambiguous.
+    expect(chrome.split('<main').length - 1).toBe(1)
+  })
+
+  it('carries no stale “later stage” copy for features that now exist', () => {
+    // Booking, appointments and the Prayer Room are all built. Copy
+    // that still promises them "in a later stage" is now untrue.
+    for (const file of PUBLIC_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).not.toMatch(/in a later stage/i)
+      expect(code).not.toMatch(/opens in a later stage/i)
+    }
+  })
+
+  it('formats money through the shared currency helper, never a bare divide', () => {
+    // A plain /100 is wrong for zero-decimal currencies; the helper
+    // derives the scale from the currency itself.
+    const service = withoutComments(read('src/routes/services.$slug.tsx'))
+    expect(service).toContain('formatAmountMinor')
+    expect(service).not.toMatch(/priceMinor\s*\/\s*100/)
+  })
+
+  it('never offers a booking affordance beside an individual member', () => {
+    const house = withoutComments(read('src/routes/sacred-houses.$slug.tsx'))
+    const membersBlock = house.slice(house.indexOf('house.members.map'))
+    expect(membersBlock).not.toContain('/book/$serviceSlug')
+    // …and the House page still states the rule in words.
+    expect(house).toContain('individual members cannot be booked')
   })
 })
 
