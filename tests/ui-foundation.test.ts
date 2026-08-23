@@ -545,6 +545,71 @@ describe('booking and payment surface', () => {
   })
 })
 
+// --- Recorded Prayer Room (Step 21A.5) -----------------------------------------
+
+describe('the Prayer Room stays RECORDED, not live', () => {
+  const page = withoutComments(read('src/routes/prayer-room.$publicId.tsx'))
+
+  it('implements no live-session control of any kind', () => {
+    // UI direction §10.4: the concept screen shows call controls, and
+    // Phase One has no live session. Copying them would promise a
+    // capability the platform does not have.
+    for (const forbidden of [
+      /microphone/i,
+      /\bmic\b/i,
+      /camera/i,
+      /getUserMedia/i,
+      /participant/i,
+      /end session/i,
+      /end call/i,
+      /hang ?up/i,
+      /screen ?share/i,
+      /\blive\b/i,
+      /webrtc/i,
+      /peer ?connection/i,
+    ]) {
+      expect(page).not.toMatch(forbidden)
+    }
+  })
+
+  it('plays only through the authenticated endpoint, with download suppressed', () => {
+    expect(page).toContain('/api/prayer-room/')
+    expect(page).toContain('controlsList="nodownload"')
+    expect(page).not.toMatch(/https?:\/\//)
+  })
+
+  it('reveals nothing about how the recording was made', () => {
+    for (const forbidden of [
+      'objectKey',
+      'sha256',
+      'provider',
+      'jobId',
+      'uploadId',
+      'privateRequestNote',
+    ]) {
+      expect(page).not.toContain(forbidden)
+    }
+  })
+
+  it('handles all four server states in words', () => {
+    for (const state of ['AVAILABLE', 'LOCKED', 'PREPARING', 'UNAVAILABLE']) {
+      expect(page).toContain(state)
+    }
+    expect(page).toContain('Not open yet')
+    expect(page).toContain('Being prepared')
+    expect(page).toContain('Not available')
+  })
+
+  it('keeps the guard, the way out and the skip target', () => {
+    expect(page).toContain('beforeLoad')
+    expect(page).toContain("redirect({ to: '/login' })")
+    expect(page).toContain('SkipLink')
+    expect(page).toContain('id="main-content"')
+    // Immersive never means trapped: navigation away stays on screen.
+    expect(page).toContain("to=\"/appointments/$publicId\"")
+  })
+})
+
 // --- Route hygiene (house rules extended to the new files) ----------------------
 
 describe('route hygiene', () => {
