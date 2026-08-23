@@ -311,6 +311,90 @@ describe('site chrome and authenticated shell', () => {
   })
 })
 
+// --- Authenticated surfaces (Step 21A.2) ---------------------------------------
+
+describe('authenticated shell and dashboard', () => {
+  const AUTHED_ROUTES = [
+    'src/routes/dashboard.tsx',
+    'src/routes/profile.index.tsx',
+    'src/routes/profile.edit.tsx',
+    'src/routes/profile.spiritual.tsx',
+    'src/routes/profile.consents.tsx',
+  ] as const
+
+  it('every signed-in page renders inside the shared shell', () => {
+    for (const file of AUTHED_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).toContain('AppShell')
+      expect(code).toContain('userName=')
+    }
+  })
+
+  it('KEEPS the server-side auth guard on every signed-in page', () => {
+    // The whole point of a restyle is that protection survives it. A
+    // page that lost its beforeLoad redirect would still LOOK right.
+    for (const file of AUTHED_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).toContain('beforeLoad')
+      expect(code).toContain('getCurrentUserFn()')
+      expect(code).toContain("redirect({ to: '/login' })")
+    }
+  })
+
+  it('reads only the acting user’s own server contracts', () => {
+    const dashboard = withoutComments(read('src/routes/dashboard.tsx'))
+    expect(dashboard).toContain('getMyCompletionFn')
+    expect(dashboard).toContain('getMyAppointmentsFn')
+    // Nothing admin-scoped may be pulled into a user surface.
+    for (const file of AUTHED_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).not.toMatch(/admin[A-Z]\w*Fn/)
+    }
+  })
+
+  it('fabricates no member id, location or statistic', () => {
+    const dashboard = withoutComments(read('src/routes/dashboard.tsx'))
+    // The showcase invents "Member ID YHWV-0004587" and a location.
+    // The platform issues neither, so neither may be rendered.
+    expect(dashboard).not.toMatch(/member\s*id/i)
+    expect(dashboard).not.toMatch(/YHWV-/)
+    expect(dashboard).not.toMatch(/Lagos, Nigeria/)
+    // Percentages must be COMPUTED from the server's own missing-field
+    // list, never written as a literal.
+    expect(dashboard).not.toMatch(/\d{1,3}\s*%/)
+    expect(dashboard).toContain('completion.missingFields')
+  })
+
+  it('measures completion against the fields the server actually returns', () => {
+    const dashboard = withoutComments(read('src/routes/dashboard.tsx'))
+    const service = read('src/services/profile.ts')
+    // Each field name the dashboard checks must be one the server can
+    // put in missingFields, or a step would silently never complete.
+    const fields = [...dashboard.matchAll(/field: '([a-zA-Z]+)'/g)].map(
+      (match) => match[1],
+    )
+    expect(fields.length).toBeGreaterThan(0)
+    for (const field of fields) {
+      expect(service).toContain(`missingFields.push('${field}')`)
+    }
+  })
+
+  it('states every status in words, never by colour alone', () => {
+    const ui = withoutComments(read('src/components/ui.tsx'))
+    // The completion dial prints its own figure, and each checklist row
+    // carries an explicit word beside the mark.
+    expect(ui).toContain('{percent}%')
+    expect(ui).toContain('Still needed')
+    expect(ui).toContain("done ? 'Added'")
+  })
+
+  it('keeps the sign-out action on the dashboard', () => {
+    const dashboard = withoutComments(read('src/routes/dashboard.tsx'))
+    expect(dashboard).toContain('logoutFn')
+    expect(dashboard).toContain('Sign out')
+  })
+})
+
 // --- Route hygiene (house rules extended to the new files) ----------------------
 
 describe('route hygiene', () => {

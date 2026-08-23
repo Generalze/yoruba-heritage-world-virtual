@@ -310,3 +310,162 @@ export function IconArrow({ className = 'h-4 w-4' }: { className?: string }) {
     </svg>
   )
 }
+
+// --- Forms -------------------------------------------------------------------
+
+/** Shared control styling for inputs and selects on light surfaces. */
+export const inputClass =
+  'w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink placeholder-ink-soft/70 focus:border-gold-deep focus:outline-none'
+
+/**
+ * Label + control. The label WRAPS its control, so the association
+ * needs no id plumbing and clicking the label always focuses the
+ * field — no placeholder-as-label anywhere (UI direction §6).
+ */
+export function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-sm font-medium text-ink">{label}</span>
+      {children}
+      {hint ? (
+        <span className="mt-1.5 block text-xs text-ink-soft">{hint}</span>
+      ) : null}
+    </label>
+  )
+}
+
+/** Bounded, announced error. Renders nothing when there is no message. */
+export function ErrorNotice({ message }: { message: string | null }) {
+  if (!message) return null
+  return (
+    <p
+      role="alert"
+      className="rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert"
+    >
+      {message}
+    </p>
+  )
+}
+
+export type NoticeTone = 'affirm' | 'caution' | 'neutral'
+
+const NOTICE_TONE_CLASSES: Record<NoticeTone, string> = {
+  affirm: 'border-affirm/40 bg-affirm/10 text-affirm',
+  caution: 'border-caution/40 bg-caution/10 text-caution',
+  neutral: 'border-line bg-surface text-ink-soft',
+}
+
+/**
+ * Status banner. The TONE never carries the meaning on its own — the
+ * message text always states it outright (UI direction §9).
+ */
+export function Notice({
+  tone = 'neutral',
+  children,
+}: {
+  tone?: NoticeTone
+  children: ReactNode
+}) {
+  return (
+    <div
+      className={`rounded-md border px-4 py-3 text-sm leading-relaxed ${NOTICE_TONE_CLASSES[tone]}`}
+    >
+      {children}
+    </div>
+  )
+}
+
+// --- Progress ----------------------------------------------------------------
+
+/**
+ * Completion dial. The ring is decoration: the same figure is printed
+ * inside it and restated in the surrounding copy, so nothing depends
+ * on reading an arc (or a colour). Static — no animation to suppress
+ * under reduced motion.
+ */
+export function ProgressRing({
+  done,
+  total,
+  className = 'h-24 w-24',
+}: {
+  done: number
+  total: number
+  className?: string
+}) {
+  const safeTotal = total > 0 ? total : 1
+  const ratio = Math.max(0, Math.min(1, done / safeTotal))
+  const percent = Math.round(ratio * 100)
+  const radius = 42
+  const circumference = 2 * Math.PI * radius
+  return (
+    <span className={`relative inline-flex shrink-0 ${className}`}>
+      <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+        <circle
+          cx="50"
+          cy="50"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="8"
+          className="text-line"
+        />
+        {/* Omitted entirely at zero: a round line cap with no length
+            still paints a dot, which would read as progress. */}
+        {ratio > 0 ? (
+          <circle
+            cx="50"
+            cy="50"
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="8"
+            strokeLinecap="round"
+            strokeDasharray={`${circumference * ratio} ${circumference}`}
+            transform="rotate(-90 50 50)"
+            className="text-gold"
+          />
+        ) : null}
+      </svg>
+      <span className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="font-display text-xl text-ink">{percent}%</span>
+      </span>
+    </span>
+  )
+}
+
+/**
+ * Checklist row. State is carried by an explicit word ("Added" /
+ * "Still needed") as well as the mark, never by colour alone.
+ */
+export function CheckItem({ label, done }: { label: string; done: boolean }) {
+  return (
+    <li className="flex items-center justify-between gap-4 py-1.5">
+      <span className="flex items-center gap-2.5 text-sm text-ink">
+        <span
+          aria-hidden="true"
+          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[0.7rem] ${
+            done
+              ? 'border-affirm bg-affirm/15 text-affirm'
+              : 'border-line-strong text-ink-soft'
+          }`}
+        >
+          {done ? '✓' : ''}
+        </span>
+        {label}
+      </span>
+      <span
+        className={`shrink-0 text-xs ${done ? 'text-affirm' : 'text-ink-soft'}`}
+      >
+        {done ? 'Added' : 'Still needed'}
+      </span>
+    </li>
+  )
+}
