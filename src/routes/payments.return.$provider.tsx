@@ -5,15 +5,8 @@ import { z } from 'zod'
 
 import { getCurrentUserFn } from '@/auth/actions'
 import { reconcilePaymentFn } from '@/services/booking-actions'
-import { SiteFooter, SiteHeader } from '@/components/site-chrome'
-import {
-  Card,
-  Container,
-  IconArrow,
-  Notice,
-  PatternDivider,
-  SkipLink,
-} from '@/components/ui'
+import { AppShell } from '@/components/app-shell'
+import { Card, IconArrow, Notice, PatternDivider } from '@/components/ui'
 
 /**
  * Provider return page (spec §26): USER EXPERIENCE ONLY. Query-string
@@ -36,6 +29,7 @@ export const Route = createFileRoute('/payments/return/$provider')({
     if (!user) throw redirect({ to: '/login' })
     return { user }
   },
+  loader: ({ context }) => ({ user: context.user }),
   head: () => ({
     meta: [{ title: 'Payment status — Yorùbá Heritage World Virtual' }],
   }),
@@ -50,6 +44,7 @@ type Verdict = {
 } | null
 
 function PaymentReturnPage() {
+  const { user } = Route.useLoaderData()
   const { attempt } = Route.useSearch()
   const reconcile = useServerFn(reconcilePaymentFn)
   const [verdict, setVerdict] = useState<Verdict>(null)
@@ -66,10 +61,10 @@ function PaymentReturnPage() {
 
   if (!attempt) {
     return (
-      <Shell title="Payment reference missing">
+      <Shell userName={user.preferredName} title="Payment reference missing">
         <Notice tone="caution">
-          This payment return link is incomplete. Check My appointments for
-          your booking status.
+          This payment return link is incomplete. Check My appointments for your
+          booking status.
         </Notice>
         <BackLinks />
       </Shell>
@@ -77,7 +72,7 @@ function PaymentReturnPage() {
   }
   if (failed) {
     return (
-      <Shell title="Checking payment failed">
+      <Shell userName={user.preferredName} title="Checking payment failed">
         <Notice tone="caution">
           We could not verify this payment right now. Your money is safe — the
           status will update automatically once the provider notifies us.
@@ -88,7 +83,7 @@ function PaymentReturnPage() {
   }
   if (!verdict) {
     return (
-      <Shell title="Checking payment…">
+      <Shell userName={user.preferredName} title="Checking payment…">
         <Notice>
           Verifying your payment with the provider. This takes a moment.
         </Notice>
@@ -105,6 +100,7 @@ function PaymentReturnPage() {
 
   return (
     <Shell
+      userName={user.preferredName}
       title={
         confirmed
           ? 'Payment confirmed'
@@ -135,8 +131,8 @@ function PaymentReturnPage() {
         </Notice>
       ) : (
         <Notice>
-          The provider has not finished processing this payment. The status
-          will update automatically.
+          The provider has not finished processing this payment. The status will
+          update automatically.
         </Notice>
       )}
       <div className="mt-6">
@@ -154,32 +150,29 @@ function PaymentReturnPage() {
   )
 }
 
+/** This route is owner-scoped, so it wears the SIGNED-IN chrome — the
+ * public header would offer "Log in" to someone already logged in. */
 function Shell({
+  userName,
   title,
   children,
 }: {
+  userName: string
   title: string
   children: React.ReactNode
 }) {
   return (
-    <div className="flex min-h-screen flex-col bg-canvas text-ink">
-      <SkipLink />
-      <SiteHeader />
-      <main id="main-content" className="flex flex-1 items-center">
-        <Container className="py-16">
-          <div className="mx-auto w-full max-w-xl">
-            <Card>
-              <PatternDivider />
-              <h1 className="font-display mt-6 text-center text-3xl text-ink">
-                {title}
-              </h1>
-              <div className="mt-6">{children}</div>
-            </Card>
-          </div>
-        </Container>
-      </main>
-      <SiteFooter />
-    </div>
+    <AppShell userName={userName}>
+      <div className="mx-auto w-full max-w-xl">
+        <Card>
+          <PatternDivider />
+          <h1 className="font-display mt-6 text-center text-3xl text-ink">
+            {title}
+          </h1>
+          <div className="mt-6">{children}</div>
+        </Card>
+      </div>
+    </AppShell>
   )
 }
 

@@ -23,7 +23,13 @@ import { BrandMark, IconClose, IconMenu, SkipLink } from './ui'
  * <main id="main-content"> so the SkipLink target is always present.
  */
 
-function ShellNavLinks({ onNavigate }: { onNavigate?: () => void }) {
+function ShellNavLinks({
+  idPrefix,
+  onNavigate,
+}: {
+  idPrefix: string
+  onNavigate?: () => void
+}) {
   return (
     <>
       <ul className="flex flex-col gap-1">
@@ -48,10 +54,16 @@ function ShellNavLinks({ onNavigate }: { onNavigate?: () => void }) {
           </li>
         ))}
       </ul>
-      <h2 className="mt-6 px-3 text-[0.65rem] font-semibold tracking-[0.28em] text-cream-soft-on-night uppercase">
+      <p
+        id={`${idPrefix}-discover`}
+        className="mt-6 px-3 text-[0.65rem] font-semibold tracking-[0.28em] text-cream-soft-on-night uppercase"
+      >
         Discover
-      </h2>
-      <ul className="mt-2 flex flex-col gap-1">
+      </p>
+      <ul
+        aria-labelledby={`${idPrefix}-discover`}
+        className="mt-2 flex flex-col gap-1"
+      >
         {APP_DISCOVER_NAV.map((item) => (
           <li key={item.to}>
             <Link
@@ -95,9 +107,7 @@ export function AppShell({
           <span className="text-gold">
             <BrandMark className="h-6 w-6" />
           </span>
-          <span className="font-display text-base">
-            Yorùbá Heritage World
-          </span>
+          <span className="font-display text-base">Yorùbá Heritage World</span>
         </Link>
         <button
           type="button"
@@ -120,7 +130,10 @@ export function AppShell({
           aria-label="Account"
           className="texture-night border-b border-night-line bg-night px-4 py-4 lg:hidden"
         >
-          <ShellNavLinks onNavigate={() => setMenuOpen(false)} />
+          <ShellNavLinks
+            idPrefix="app-menu"
+            onNavigate={() => setMenuOpen(false)}
+          />
         </nav>
       ) : null}
 
@@ -144,11 +157,8 @@ export function AppShell({
             </span>
           </Link>
         </div>
-        <nav
-          aria-label="Account"
-          className="flex-1 overflow-y-auto px-3 pb-6"
-        >
-          <ShellNavLinks />
+        <nav aria-label="Account" className="flex-1 overflow-y-auto px-3 pb-6">
+          <ShellNavLinks idPrefix="app-sidebar" />
         </nav>
         <div className="border-t border-night-line px-5 py-4">
           <p className="truncate text-sm text-cream-on-night">{userName}</p>
