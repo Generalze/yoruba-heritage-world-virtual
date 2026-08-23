@@ -15,6 +15,19 @@ import {
   getRescheduleSlotsFn,
   rescheduleMyAppointmentFn,
 } from '@/services/booking-actions'
+import { AppShell } from '@/components/app-shell'
+import {
+  Card,
+  ErrorNotice,
+  Field,
+  IconArrow,
+  Notice,
+  StatusChip,
+  buttonClass,
+  humanizeStatus,
+  inputClass,
+  statusTone,
+} from '@/components/ui'
 import {
   formatAmountMinor,
   formatUtcSqlInTimezone,
@@ -27,6 +40,11 @@ import { LANGUAGE_LABELS, contentTypeLabel } from '@/lib/guidance-labels'
  * public UUID + session user. Cancel/reschedule controls are UX hints —
  * Step 5 domain cutoffs remain the authority. Representative
  * assignments are internal and never displayed here.
+ *
+ * The clock reading is taken ONCE in the loader rather than at render
+ * time, so the server pass and the hydration pass cannot disagree
+ * about which controls to offer. The server re-checks every cutoff on
+ * the action itself regardless.
  */
 export const Route = createFileRoute('/appointments/$publicId')({
   beforeLoad: async () => {
@@ -34,13 +52,19 @@ export const Route = createFileRoute('/appointments/$publicId')({
     if (!user) throw redirect({ to: '/login' })
     return { user }
   },
-  loader: async ({ params }) =>
-    getMyAppointmentFn({ data: { publicId: params.publicId } }),
+  loader: async ({ params, context }) => ({
+    user: context.user,
+    data: await getMyAppointmentFn({ data: { publicId: params.publicId } }),
+    nowMs: Date.now(),
+  }),
+  head: () => ({
+    meta: [{ title: 'Appointment — Yorùbá Heritage World Virtual' }],
+  }),
   component: AppointmentDetailPage,
 })
 
 function AppointmentDetailPage() {
-  const data = Route.useLoaderData()
+  const { user, data, nowMs } = Route.useLoaderData()
   const router = useRouter()
   const cancel = useServerFn(cancelMyAppointmentFn)
   const reschedule = useServerFn(rescheduleMyAppointmentFn)
@@ -58,7 +82,6 @@ function AppointmentDetailPage() {
 
   const appointment = data.appointment
   const tz = appointment.userTimezone
-  const nowMs = Date.now()
   const startMs = new Date(
     `${appointment.startsAtUtc.replace(' ', 'T')}Z`,
   ).getTime()
@@ -139,191 +162,234 @@ function AppointmentDetailPage() {
   }
 
   return (
-    <main className="min-h-screen bg-stone-950 px-6 py-12 text-stone-100">
-      <div className="mx-auto w-full max-w-2xl">
+    <AppShell userName={user.preferredName}>
+      <header>
         <Link
           to="/appointments"
-          className="text-sm text-stone-400 hover:text-amber-500"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-gold-deep transition-colors hover:text-ink"
         >
-          ← My appointments
+          <span aria-hidden="true">←</span>
+          My appointments
         </Link>
-        <div className="mt-4 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold">
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3">
+          <h1 className="font-display text-3xl text-ink sm:text-4xl">
             {appointment.serviceNameSnapshot}
           </h1>
-          <span className="rounded-full bg-stone-800 px-3 py-1 text-xs text-stone-300">
-            {appointment.status.replaceAll('_', ' ')}
-          </span>
+          <StatusChip tone={statusTone(appointment.status)}>
+            {humanizeStatus(appointment.status)}
+          </StatusChip>
         </div>
+      </header>
 
-        <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-          <dl className="space-y-2 text-sm">
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Sacred House</dt>
-              <dd>{appointment.houseNameSnapshot}</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Date & time ({tz})</dt>
-              <dd>{formatUtcSqlInTimezone(appointment.startsAtUtc, tz)}</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Duration</dt>
-              <dd>{appointment.durationMinutesSnapshot} minutes</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Amount</dt>
-              <dd>
-                {formatAmountMinor(
-                  appointment.priceMinorSnapshot,
-                  appointment.currencySnapshot,
-                )}
-              </dd>
-            </div>
-            {data.attempts.length > 0 ? (
-              <div className="flex justify-between gap-4">
-                <dt className="text-stone-400">Payment</dt>
-                <dd>
-                  {data.settled
-                    ? 'settled'
-                    : data.attempts[0].status.toLowerCase()}
+      <div className="mt-8 grid items-start gap-6 lg:grid-cols-[1.4fr_1fr]">
+        <div className="grid gap-6">
+          <Card>
+            <h2 className="text-sm font-semibold tracking-wide text-ink">
+              Appointment details
+            </h2>
+            <dl className="mt-4 divide-y divide-line text-sm">
+              <div className="flex justify-between gap-4 py-2.5">
+                <dt className="text-ink-soft">Sacred House</dt>
+                <dd className="text-right text-ink">
+                  {appointment.houseNameSnapshot}
                 </dd>
               </div>
+              <div className="flex justify-between gap-4 py-2.5">
+                <dt className="text-ink-soft">Date and time</dt>
+                <dd className="text-right text-ink">
+                  {formatUtcSqlInTimezone(appointment.startsAtUtc, tz)}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4 py-2.5">
+                <dt className="text-ink-soft">Timezone</dt>
+                <dd className="text-right text-ink">{tz}</dd>
+              </div>
+              <div className="flex justify-between gap-4 py-2.5">
+                <dt className="text-ink-soft">Duration</dt>
+                <dd className="text-right text-ink">
+                  {appointment.durationMinutesSnapshot} minutes
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4 py-2.5">
+                <dt className="text-ink-soft">Amount</dt>
+                <dd className="text-right text-ink">
+                  {formatAmountMinor(
+                    appointment.priceMinorSnapshot,
+                    appointment.currencySnapshot,
+                  )}
+                </dd>
+              </div>
+              {data.attempts.length > 0 ? (
+                <div className="flex justify-between gap-4 py-2.5">
+                  <dt className="text-ink-soft">Payment</dt>
+                  <dd className="text-right text-ink">
+                    {data.settled
+                      ? 'Settled'
+                      : humanizeStatus(data.attempts[0].status)}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+
+            {appointment.privateRequestNote ? (
+              <div className="mt-5 border-t border-line pt-5">
+                <h3 className="text-xs font-semibold tracking-[0.28em] text-ink-soft uppercase">
+                  Your private request
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed whitespace-pre-wrap text-ink">
+                  {appointment.privateRequestNote}
+                </p>
+              </div>
             ) : null}
-          </dl>
-          {appointment.privateRequestNote ? (
-            <div className="mt-4 border-t border-stone-800 pt-4">
-              <h2 className="text-xs font-medium tracking-widest text-stone-500 uppercase">
-                Your private request
-              </h2>
-              <p className="mt-2 text-sm whitespace-pre-wrap text-stone-300">
-                {appointment.privateRequestNote}
-              </p>
-            </div>
-          ) : null}
-        </section>
+          </Card>
 
-        <PrayerRoomSection
-          publicId={appointment.publicId}
-          status={appointment.status}
-        />
+          <GuidanceSection
+            guidance={data.guidance}
+            publicId={appointment.publicId}
+          />
 
-        <GuidanceSection
-          guidance={data.guidance}
-          publicId={appointment.publicId}
-        />
-
-        {holdLive ? (
-          <Link
-            to="/checkout/$appointmentPublicId"
-            params={{ appointmentPublicId: appointment.publicId }}
-            className="mt-4 inline-block rounded-md bg-amber-600 px-5 py-2.5 text-sm font-medium text-stone-950 hover:bg-amber-500"
-          >
-            Complete payment
-          </Link>
-        ) : null}
-
-        {(canCancel || canReschedule) && !rescheduling ? (
-          <div className="mt-6 flex gap-3">
-            {canCancel ? (
-              confirmCancel ? (
-                <span className="flex items-center gap-2 text-sm">
-                  <span className="text-stone-400">
-                    Cancel this appointment?
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void handleCancel()}
-                    disabled={busy}
-                    className="rounded-md border border-red-800 px-3 py-1.5 text-red-400 hover:bg-red-950 disabled:opacity-60"
-                  >
-                    Yes, cancel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmCancel(false)}
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300"
-                  >
-                    Keep it
-                  </button>
-                </span>
-              ) : (
+          {rescheduling ? (
+            <Card>
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-sm font-semibold tracking-wide text-ink">
+                  Choose a new time
+                </h2>
                 <button
                   type="button"
-                  onClick={() => setConfirmCancel(true)}
-                  className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-red-700 hover:text-red-400"
+                  onClick={() => {
+                    setRescheduling(false)
+                    setSlots(null)
+                  }}
+                  className="text-xs font-semibold text-ink-soft transition-colors hover:text-ink"
                 >
-                  Cancel appointment
+                  Close
                 </button>
-              )
-            ) : null}
-            {canReschedule ? (
-              <button
-                type="button"
-                onClick={() => setRescheduling(true)}
-                className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 hover:text-amber-400"
-              >
-                Reschedule
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+              </div>
+              <div className="mt-4 max-w-xs">
+                <Field label="New date">
+                  <input
+                    type="date"
+                    value={date}
+                    onChange={(event) =>
+                      void handleLoadSlots(event.target.value)
+                    }
+                    className={inputClass}
+                  />
+                </Field>
+              </div>
+              {slots ? (
+                slots.length === 0 ? (
+                  <div className="mt-4">
+                    <Notice>No available times on this date.</Notice>
+                  </div>
+                ) : (
+                  <ul className="mt-4 flex flex-wrap gap-2">
+                    {slots.map((slot) => (
+                      <li key={slot.startsAtUtc}>
+                        <button
+                          type="button"
+                          onClick={() => void handleReschedule(slot.startsAtUtc)}
+                          disabled={busy}
+                          className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink transition-colors hover:border-gold-deep hover:text-gold-deep disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {formatUtcSqlInTimezone(slot.startsAtUtc, tz, {
+                            timeStyle: 'short',
+                          })}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )
+              ) : null}
+            </Card>
+          ) : null}
 
-        {rescheduling ? (
-          <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
-                Choose a new time
+          <ErrorNotice message={error} />
+        </div>
+
+        <div className="grid gap-6 lg:content-start">
+          {holdLive ? (
+            <Card>
+              <h2 className="text-sm font-semibold tracking-wide text-ink">
+                Payment required
               </h2>
-              <button
-                type="button"
-                onClick={() => {
-                  setRescheduling(false)
-                  setSlots(null)
-                }}
-                className="text-xs text-stone-400 hover:text-stone-200"
-              >
-                Close
-              </button>
-            </div>
-            <input
-              type="date"
-              value={date}
-              onChange={(event) => void handleLoadSlots(event.target.value)}
-              className="mt-4 rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
-            />
-            {slots ? (
-              slots.length === 0 ? (
-                <p className="mt-4 text-sm text-stone-500">
-                  No available times on this date.
-                </p>
-              ) : (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {slots.map((slot) => (
-                    <button
-                      key={slot.startsAtUtc}
-                      type="button"
-                      onClick={() => void handleReschedule(slot.startsAtUtc)}
-                      disabled={busy}
-                      className="rounded-md border border-stone-700 px-3 py-2 text-sm text-stone-300 hover:border-amber-500 disabled:opacity-60"
-                    >
-                      {formatUtcSqlInTimezone(slot.startsAtUtc, tz, {
-                        timeStyle: 'short',
-                      })}
-                    </button>
-                  ))}
-                </div>
-              )
-            ) : null}
-          </section>
-        ) : null}
+              <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+                Your time is held while you complete payment.
+              </p>
+              <div className="mt-4">
+                <Link
+                  to="/checkout/$appointmentPublicId"
+                  params={{ appointmentPublicId: appointment.publicId }}
+                  className={buttonClass('primary', 'md')}
+                >
+                  Complete payment
+                  <IconArrow />
+                </Link>
+              </div>
+            </Card>
+          ) : null}
 
-        {error ? (
-          <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-            {error}
-          </p>
-        ) : null}
+          <PrayerRoomSection
+            publicId={appointment.publicId}
+            status={appointment.status}
+          />
+
+          {canCancel || canReschedule ? (
+            <Card>
+              <h2 className="text-sm font-semibold tracking-wide text-ink">
+                Manage this appointment
+              </h2>
+              <div className="mt-4 flex flex-col gap-3">
+                {canReschedule && !rescheduling ? (
+                  <button
+                    type="button"
+                    onClick={() => setRescheduling(true)}
+                    className={buttonClass('secondary', 'md')}
+                  >
+                    Reschedule
+                  </button>
+                ) : null}
+
+                {canCancel ? (
+                  confirmCancel ? (
+                    <div className="rounded-md border border-alert/40 bg-alert/10 p-4">
+                      <p className="text-sm text-alert">
+                        Cancel this appointment?
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleCancel()}
+                          disabled={busy}
+                          className="rounded-md border border-alert px-4 py-2 text-sm font-semibold text-alert transition-colors hover:bg-alert/15 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {busy ? 'Cancelling…' : 'Yes, cancel'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmCancel(false)}
+                          className={buttonClass('secondary', 'md')}
+                        >
+                          Keep it
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setConfirmCancel(true)}
+                      className="inline-flex items-center justify-center rounded-md border border-line-strong px-5 py-2.5 text-sm font-semibold text-ink-soft transition-colors hover:border-alert hover:text-alert"
+                    >
+                      Cancel appointment
+                    </button>
+                  )
+                ) : null}
+              </div>
+            </Card>
+          ) : null}
+        </div>
       </div>
-    </main>
+    </AppShell>
   )
 }
 
@@ -348,22 +414,24 @@ function PrayerRoomSection({
 }) {
   if (status !== 'CONFIRMED' && status !== 'COMPLETED') return null
   return (
-    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-      <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+    <Card>
+      <h2 className="text-sm font-semibold tracking-wide text-ink">
         Prayer Room
       </h2>
-      <p className="mt-3 text-sm text-stone-300">
-        Your recorded Prayer Room opens at the time of your appointment,
-        once the recording is ready.
+      <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+        Your recorded Prayer Room opens at the time of your appointment, once
+        the recording is ready.
       </p>
-      <Link
-        to="/prayer-room/$publicId"
-        params={{ publicId }}
-        className="mt-4 inline-block rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 hover:text-amber-400"
-      >
-        View Prayer Room status
-      </Link>
-    </section>
+      <div className="mt-4">
+        <Link
+          to="/prayer-room/$publicId"
+          params={{ publicId }}
+          className={buttonClass('secondary', 'md')}
+        >
+          View Prayer Room status
+        </Link>
+      </div>
+    </Card>
   )
 }
 
@@ -409,28 +477,28 @@ function GuidanceSection({
   }
 
   return (
-    <section className="mt-6 space-y-4">
-      <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+    <section className="grid gap-4">
+      <h2 className="text-sm font-semibold tracking-wide text-ink">
         Spiritual guidance from your Sacred House
       </h2>
       {guidance.items.map((item) => (
         <article
           key={item.contentVersionId}
-          className="rounded-lg border border-stone-800 bg-stone-900 p-6"
+          className="rounded-lg border border-line bg-surface-raised p-6 shadow-[0_1px_3px_rgba(43,32,24,0.08)]"
         >
-          <p className="text-xs tracking-widest text-stone-500 uppercase">
+          <p className="text-xs font-semibold tracking-[0.28em] text-gold-deep uppercase">
             {contentTypeLabel(item.contentType)}
             {item.fallbackUsed
               ? ` · shown in ${LANGUAGE_LABELS[item.language] ?? item.language}`
               : ''}
           </p>
-          <h3 className="mt-1 text-lg font-semibold">{item.title}</h3>
-          <p className="mt-3 text-sm leading-relaxed whitespace-pre-wrap text-stone-200">
+          <h3 className="font-display mt-2 text-xl text-ink">{item.title}</h3>
+          <p className="mt-3 leading-relaxed whitespace-pre-wrap text-ink">
             {item.body}
           </p>
           {item.acknowledgementRequired ? (
             item.acknowledgedAt ? (
-              <p className="mt-4 text-xs text-emerald-400">
+              <p className="mt-4 text-xs font-medium text-affirm">
                 ✓ You confirmed reading this guidance.
               </p>
             ) : (
@@ -438,7 +506,7 @@ function GuidanceSection({
                 type="button"
                 disabled={busyVersion !== null}
                 onClick={() => void handleAcknowledge(item.contentVersionId)}
-                className="mt-4 rounded-md border border-amber-700 px-4 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+                className={`${buttonClass('secondary', 'md')} mt-4 disabled:cursor-not-allowed disabled:opacity-60`}
               >
                 {busyVersion === item.contentVersionId
                   ? 'Saving…'
@@ -448,11 +516,7 @@ function GuidanceSection({
           ) : null}
         </article>
       ))}
-      {ackError ? (
-        <p className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-          {ackError}
-        </p>
-      ) : null}
+      <ErrorNotice message={ackError} />
     </section>
   )
 }

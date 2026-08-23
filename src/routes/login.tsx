@@ -12,6 +12,8 @@ import { getCurrentUserFn, loginFn } from '@/auth/actions'
 import { authErrorMessage } from '@/auth/messages'
 import { loginInputSchema } from '@/auth/validation'
 import { FormError, SubmitButton, TextField } from '@/components/forms'
+import { SiteFooter, SiteHeader } from '@/components/site-chrome'
+import { Card, Container, SkipLink } from '@/components/ui'
 
 export const Route = createFileRoute('/login')({
   beforeLoad: async () => {
@@ -61,41 +63,55 @@ function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-stone-950 px-6 py-12 text-stone-100">
-      <div className="w-full max-w-md">
-        <h1 className="text-center text-3xl font-bold">Welcome back</h1>
-        <p className="mt-2 text-center text-sm text-stone-400">
-          Sign in to Yorùbá Heritage World Virtual
-        </p>
+    <div className="flex min-h-screen flex-col bg-canvas text-ink">
+      <SkipLink />
+      <SiteHeader />
+      <main id="main-content" className="flex flex-1 items-center">
+        <Container className="py-16">
+          <div className="mx-auto w-full max-w-md">
+            <Card>
+              <h1 className="font-display text-center text-3xl text-ink">
+                Welcome back
+              </h1>
+              <p className="mt-2 text-center text-sm text-ink-soft">
+                Sign in to Yorùbá Heritage World Virtual
+              </p>
 
-        <form onSubmit={handleSubmit} className="mt-8 space-y-4">
-          <TextField
-            label="Email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            maxLength={255}
-          />
-          <TextField
-            label="Password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            maxLength={128}
-          />
-          <FormError message={error} />
-          <SubmitButton label="Sign in" busy={busy} />
-        </form>
+              <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+                <TextField
+                  label="Email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  maxLength={255}
+                />
+                <TextField
+                  label="Password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  maxLength={128}
+                />
+                <FormError message={error} />
+                <SubmitButton label="Sign in" busy={busy} />
+              </form>
 
-        <p className="mt-6 text-center text-sm text-stone-400">
-          New here?{' '}
-          <Link to="/register" className="text-amber-500 hover:text-amber-400">
-            Create an account
-          </Link>
-        </p>
-      </div>
-    </main>
+              <p className="mt-6 text-center text-sm text-ink-soft">
+                New here?{' '}
+                <Link
+                  to="/register"
+                  className="font-semibold text-gold-deep underline-offset-4 hover:underline"
+                >
+                  Create an account
+                </Link>
+              </p>
+            </Card>
+          </div>
+        </Container>
+      </main>
+      <SiteFooter />
+    </div>
   )
 }

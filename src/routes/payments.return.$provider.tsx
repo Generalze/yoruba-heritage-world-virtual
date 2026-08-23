@@ -5,12 +5,24 @@ import { z } from 'zod'
 
 import { getCurrentUserFn } from '@/auth/actions'
 import { reconcilePaymentFn } from '@/services/booking-actions'
+import { SiteFooter, SiteHeader } from '@/components/site-chrome'
+import {
+  Card,
+  Container,
+  IconArrow,
+  Notice,
+  PatternDivider,
+  SkipLink,
+} from '@/components/ui'
 
 /**
  * Provider return page (spec §26): USER EXPERIENCE ONLY. Query-string
  * values are never proof of payment — the page triggers authenticated
  * server-side reconciliation (owner-checked; PayPal captures happen
  * server-side inside it) and displays the server's verdict.
+ *
+ * Every outcome states itself in words. The tone of the notice only
+ * reinforces the heading and the sentence beneath it.
  */
 export const Route = createFileRoute('/payments/return/$provider')({
   validateSearch: (search: Record<string, unknown>): { attempt?: string } => {
@@ -24,6 +36,9 @@ export const Route = createFileRoute('/payments/return/$provider')({
     if (!user) throw redirect({ to: '/login' })
     return { user }
   },
+  head: () => ({
+    meta: [{ title: 'Payment status — Yorùbá Heritage World Virtual' }],
+  }),
   component: PaymentReturnPage,
 })
 
@@ -52,10 +67,10 @@ function PaymentReturnPage() {
   if (!attempt) {
     return (
       <Shell title="Payment reference missing">
-        <p className="text-stone-400">
-          This payment return link is incomplete. Check My Appointments for your
-          booking status.
-        </p>
+        <Notice tone="caution">
+          This payment return link is incomplete. Check My appointments for
+          your booking status.
+        </Notice>
         <BackLinks />
       </Shell>
     )
@@ -63,10 +78,10 @@ function PaymentReturnPage() {
   if (failed) {
     return (
       <Shell title="Checking payment failed">
-        <p className="text-stone-400">
+        <Notice tone="caution">
           We could not verify this payment right now. Your money is safe — the
           status will update automatically once the provider notifies us.
-        </p>
+        </Notice>
         <BackLinks />
       </Shell>
     )
@@ -74,9 +89,9 @@ function PaymentReturnPage() {
   if (!verdict) {
     return (
       <Shell title="Checking payment…">
-        <p className="text-stone-400">
+        <Notice>
           Verifying your payment with the provider. This takes a moment.
-        </p>
+        </Notice>
       </Shell>
     )
   }
@@ -105,35 +120,36 @@ function PaymentReturnPage() {
       }
     >
       {confirmed ? (
-        <p className="text-emerald-300">
+        <Notice tone="affirm">
           Your payment was verified and your appointment is confirmed.
-        </p>
+        </Notice>
       ) : review ? (
-        <p className="text-amber-300">
+        <Notice tone="caution">
           Your payment arrived and has been recorded. Our team will review it
           and contact you — no money has been lost.
-        </p>
+        </Notice>
       ) : verdict.status === 'FAILED' || verdict.status === 'CANCELLED' ? (
-        <p className="text-stone-400">
+        <Notice>
           This payment did not complete. If your reservation is still held you
           can try again with another payment method.
-        </p>
+        </Notice>
       ) : (
-        <p className="text-stone-400">
-          The provider has not finished processing this payment. The status will
-          update automatically.
-        </p>
+        <Notice>
+          The provider has not finished processing this payment. The status
+          will update automatically.
+        </Notice>
       )}
-      <div className="mt-6 flex flex-col gap-2">
+      <div className="mt-6">
         <Link
           to="/appointments/$publicId"
           params={{ publicId: verdict.appointmentPublicId }}
-          className="text-amber-500 hover:text-amber-400"
+          className="inline-flex items-center gap-2 text-sm font-semibold text-gold-deep transition-colors hover:text-ink"
         >
           View appointment
+          <IconArrow />
         </Link>
-        <BackLinks />
       </div>
+      <BackLinks />
     </Shell>
   )
 }
@@ -146,22 +162,40 @@ function Shell({
   children: React.ReactNode
 }) {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-stone-950 px-6 text-stone-100">
-      <div className="w-full max-w-md text-center">
-        <h1 className="text-2xl font-bold">{title}</h1>
-        <div className="mt-4">{children}</div>
-      </div>
-    </main>
+    <div className="flex min-h-screen flex-col bg-canvas text-ink">
+      <SkipLink />
+      <SiteHeader />
+      <main id="main-content" className="flex flex-1 items-center">
+        <Container className="py-16">
+          <div className="mx-auto w-full max-w-xl">
+            <Card>
+              <PatternDivider />
+              <h1 className="font-display mt-6 text-center text-3xl text-ink">
+                {title}
+              </h1>
+              <div className="mt-6">{children}</div>
+            </Card>
+          </div>
+        </Container>
+      </main>
+      <SiteFooter />
+    </div>
   )
 }
 
 function BackLinks() {
   return (
-    <div className="mt-2 flex flex-col gap-1 text-sm">
-      <Link to="/appointments" className="text-stone-400 hover:text-amber-500">
+    <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm">
+      <Link
+        to="/appointments"
+        className="font-semibold text-ink-soft transition-colors hover:text-ink"
+      >
         My appointments
       </Link>
-      <Link to="/payments" className="text-stone-400 hover:text-amber-500">
+      <Link
+        to="/payments"
+        className="font-semibold text-ink-soft transition-colors hover:text-ink"
+      >
         Payment history
       </Link>
     </div>

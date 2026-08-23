@@ -15,6 +15,15 @@ import {
   reconcilePaymentFn,
   simulateMockPaymentFn,
 } from '@/services/booking-actions'
+import { AppShell } from '@/components/app-shell'
+import {
+  Card,
+  ErrorNotice,
+  IconArrow,
+  Notice,
+  StepIndicator,
+  buttonClass,
+} from '@/components/ui'
 import {
   formatAmountMinor,
   formatUtcSqlInTimezone,
@@ -22,10 +31,14 @@ import {
 } from '@/lib/display-time'
 
 /**
- * Checkout (spec §16): snapshot facts, informational countdown, and the
- * providers currently satisfying every server-side requirement. The
- * countdown is UX only — the server refuses initialization on expired
- * holds regardless of what this page shows.
+ * Checkout (Step 21A.4): snapshot facts, an informational countdown,
+ * and the providers currently satisfying every server-side
+ * requirement.
+ *
+ * The countdown is UX ONLY — the server refuses initialization on an
+ * expired hold regardless of what this page shows, and payment
+ * confirmation always comes from authoritative server settlement,
+ * never from the browser returning to a page.
  */
 export const Route = createFileRoute('/checkout/$appointmentPublicId')({
   beforeLoad: async () => {
@@ -33,12 +46,19 @@ export const Route = createFileRoute('/checkout/$appointmentPublicId')({
     if (!user) throw redirect({ to: '/login' })
     return { user }
   },
-  loader: async ({ params }) =>
-    getCheckoutFn({
+  loader: async ({ params, context }) => ({
+    user: context.user,
+    checkout: await getCheckoutFn({
       data: { appointmentPublicId: params.appointmentPublicId },
     }),
+  }),
+  head: () => ({
+    meta: [{ title: 'Checkout — Yorùbá Heritage World Virtual' }],
+  }),
   component: CheckoutPage,
 })
+
+const BOOKING_STEPS = ['Service', 'Date and time', 'Review', 'Payment'] as const
 
 function useCountdown(expiresAtUtcSql: string | null): string | null {
   const [label, setLabel] = useState<string | null>(null)
@@ -65,7 +85,7 @@ function useCountdown(expiresAtUtcSql: string | null): string | null {
 }
 
 function CheckoutPage() {
-  const data = Route.useLoaderData()
+  const { user, checkout } = Route.useLoaderData()
   const router = useRouter()
   const navigate = useNavigate()
   const initiate = useServerFn(initiatePaymentFn)
@@ -76,7 +96,7 @@ function CheckoutPage() {
   const [error, setError] = useState<string | null>(null)
   const [mockAttempt, setMockAttempt] = useState<string | null>(null)
 
-  const appointment = data.appointment
+  const appointment = checkout.appointment
   const countdown = useCountdown(
     appointment.status === 'PENDING_PAYMENT'
       ? appointment.reservationExpiresAt
@@ -96,7 +116,11 @@ function CheckoutPage() {
         data: {
           appointmentPublicId: appointment.publicId,
           provider: provider as
-            'PAYSTACK' | 'PAYPAL' | 'STRIPE' | 'CRYPTO' | 'MOCK',
+            | 'PAYSTACK'
+            | 'PAYPAL'
+            | 'STRIPE'
+            | 'CRYPTO'
+            | 'MOCK',
         },
       })
       if (result.checkoutUrl) {
@@ -130,9 +154,7 @@ function CheckoutPage() {
     setBusyProvider('MOCK_SIM')
     setError(null)
     try {
-      await simulate({
-        data: { attemptPublicId: mockAttempt, scenario },
-      })
+      await simulate({ data: { attemptPublicId: mockAttempt, scenario } })
       await reconcile({ data: { attemptPublicId: mockAttempt } })
       await router.invalidate()
       await navigate({
@@ -151,73 +173,106 @@ function CheckoutPage() {
 
   if (appointment.status === 'CONFIRMED') {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-stone-950 px-6 text-stone-100">
-        <h1 className="text-2xl font-bold text-emerald-400">
+      <AppShell userName={user.preferredName}>
+        <h1 className="font-display text-3xl text-ink sm:text-4xl">
           Appointment confirmed
         </h1>
-        <p className="mt-4 text-stone-400">
-          Payment has been received and your appointment is confirmed.
-        </p>
-        <Link
-          to="/appointments/$publicId"
-          params={{ publicId: appointment.publicId }}
-          className="mt-6 text-amber-500 hover:text-amber-400"
-        >
-          View appointment
-        </Link>
-      </main>
+        <div className="mt-6 max-w-2xl">
+          <Notice tone="affirm">
+            Payment has been received and your appointment is confirmed.
+          </Notice>
+          <div className="mt-5">
+            <Link
+              to="/appointments/$publicId"
+              params={{ publicId: appointment.publicId }}
+              className={buttonClass('primary', 'md')}
+            >
+              View appointment
+              <IconArrow />
+            </Link>
+          </div>
+        </div>
+      </AppShell>
     )
   }
 
   if (expired || appointment.status !== 'PENDING_PAYMENT') {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-stone-950 px-6 text-stone-100">
-        <h1 className="text-2xl font-bold">Reservation expired</h1>
-        <p className="mt-4 max-w-md text-center text-stone-400">
-          This reservation is no longer active. Your chosen time was released.
-          Please start a new booking.
-        </p>
-        <Link
-          to="/services"
-          className="mt-6 text-amber-500 hover:text-amber-400"
-        >
-          Book again
-        </Link>
-      </main>
+      <AppShell userName={user.preferredName}>
+        <h1 className="font-display text-3xl text-ink sm:text-4xl">
+          Reservation expired
+        </h1>
+        <div className="mt-6 max-w-2xl">
+          <Notice tone="caution">
+            This reservation is no longer active. Your chosen time was
+            released. Please start a new booking.
+          </Notice>
+          <div className="mt-5">
+            <Link to="/services" className={buttonClass('primary', 'md')}>
+              Book again
+              <IconArrow />
+            </Link>
+          </div>
+        </div>
+      </AppShell>
     )
   }
 
   return (
-    <main className="min-h-screen bg-stone-950 px-6 py-12 text-stone-100">
-      <div className="mx-auto w-full max-w-2xl">
-        <h1 className="text-3xl font-bold">Checkout</h1>
+    <AppShell userName={user.preferredName}>
+      <header>
+        <p className="text-xs font-semibold tracking-[0.28em] text-gold-deep uppercase">
+          Checkout
+        </p>
+        <h1 className="font-display mt-2 text-3xl text-ink sm:text-4xl">
+          Complete your payment
+        </h1>
+      </header>
 
-        <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-          <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <nav
+        aria-label="Booking progress"
+        className="texture-night mt-6 rounded-lg border border-night-line bg-night px-5 py-4"
+      >
+        <StepIndicator steps={BOOKING_STEPS} current={3} />
+      </nav>
+
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-[1fr_1fr]">
+        <Card>
+          <h2 className="text-sm font-semibold tracking-wide text-ink">
             Your reservation
           </h2>
-          <dl className="mt-4 space-y-2 text-sm">
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Service</dt>
-              <dd>{appointment.serviceNameSnapshot}</dd>
+          <dl className="mt-4 divide-y divide-line text-sm">
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Service</dt>
+              <dd className="text-right text-ink">
+                {appointment.serviceNameSnapshot}
+              </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Sacred House</dt>
-              <dd>{appointment.houseNameSnapshot}</dd>
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Sacred House</dt>
+              <dd className="text-right text-ink">
+                {appointment.houseNameSnapshot}
+              </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Date & time ({userTimezone})</dt>
-              <dd>
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Date and time</dt>
+              <dd className="text-right text-ink">
                 {formatUtcSqlInTimezone(appointment.startsAtUtc, userTimezone)}
               </dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Duration</dt>
-              <dd>{appointment.durationMinutesSnapshot} minutes</dd>
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Timezone</dt>
+              <dd className="text-right text-ink">{userTimezone}</dd>
             </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-stone-400">Amount</dt>
-              <dd className="font-medium text-amber-400">
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Duration</dt>
+              <dd className="text-right text-ink">
+                {appointment.durationMinutesSnapshot} minutes
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4 py-3">
+              <dt className="font-semibold text-ink">Amount</dt>
+              <dd className="font-display text-right text-lg text-ink">
                 {formatAmountMinor(
                   appointment.priceMinorSnapshot,
                   appointment.currencySnapshot,
@@ -226,80 +281,90 @@ function CheckoutPage() {
             </div>
           </dl>
           {countdown && countdown !== 'expired' ? (
-            <p className="mt-4 rounded-md border border-amber-900 bg-amber-950/40 px-4 py-3 text-sm text-amber-300">
-              Reservation held for {countdown}. Complete payment before the hold
-              expires.
-            </p>
+            <div className="mt-5">
+              <Notice tone="caution">
+                Reservation held for {countdown}. Complete payment before the
+                hold expires.
+              </Notice>
+            </div>
           ) : null}
-        </section>
+        </Card>
 
-        <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-          <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
-            Choose a payment method
-          </h2>
-          {data.providers.length === 0 ? (
-            <p className="mt-4 text-sm text-stone-500">
-              No payment method is currently available for this appointment.
-              Please contact support.
-            </p>
-          ) : (
-            <div className="mt-4 flex flex-col gap-3">
-              {data.providers.map((provider) => (
-                <button
-                  key={provider.code}
-                  type="button"
-                  onClick={() => void handlePay(provider.code)}
-                  disabled={busyProvider !== null}
-                  className="rounded-md border border-stone-700 px-4 py-3 text-left text-sm text-stone-200 transition-colors hover:border-amber-500 hover:text-amber-400 disabled:opacity-60"
-                >
-                  {busyProvider === provider.code
-                    ? 'Starting payment…'
-                    : `Pay with ${provider.displayName}`}
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-
-        {mockAttempt ? (
-          <section className="mt-6 rounded-lg border border-dashed border-stone-600 bg-stone-900/60 p-6">
-            <h2 className="text-sm font-medium tracking-widest text-stone-400 uppercase">
-              Development simulator (mock provider)
+        <div className="grid gap-6">
+          <Card>
+            <h2 className="text-sm font-semibold tracking-wide text-ink">
+              Choose a payment method
             </h2>
-            <div className="mt-4 flex flex-wrap gap-2">
-              {(
-                [
-                  ['success', 'Simulate success'],
-                  ['failure', 'Simulate failure'],
-                  ['cancel', 'Simulate cancellation'],
-                  ['amount_mismatch', 'Simulate amount mismatch'],
-                ] as const
-              ).map(([scenario, label]) => (
-                <button
-                  key={scenario}
-                  type="button"
-                  onClick={() => void handleSimulate(scenario)}
-                  disabled={busyProvider !== null}
-                  className="rounded-md border border-stone-700 px-3 py-2 text-xs text-stone-300 hover:border-amber-500 disabled:opacity-60"
-                >
-                  {label}
-                </button>
-              ))}
+            {checkout.providers.length === 0 ? (
+              <div className="mt-4">
+                <Notice>
+                  No payment method is currently available for this
+                  appointment. Please contact support.
+                </Notice>
+              </div>
+            ) : (
+              <ul className="mt-4 flex flex-col gap-3">
+                {checkout.providers.map((provider) => (
+                  <li key={provider.code}>
+                    <button
+                      type="button"
+                      onClick={() => void handlePay(provider.code)}
+                      disabled={busyProvider !== null}
+                      className="flex w-full items-center justify-between gap-3 rounded-md border border-line-strong px-4 py-3 text-left text-sm font-semibold text-ink transition-colors hover:border-gold-deep hover:text-gold-deep disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {busyProvider === provider.code
+                        ? 'Starting payment…'
+                        : `Pay with ${provider.displayName}`}
+                      <IconArrow />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="mt-5">
+              <ErrorNotice message={error} />
             </div>
-          </section>
-        ) : null}
 
-        {error ? (
-          <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-            {error}
-          </p>
-        ) : null}
+            <p className="mt-4 text-xs leading-relaxed text-ink-soft">
+              Payment confirmation always comes from the verified payment
+              provider — never from returning to this page.
+            </p>
+          </Card>
 
-        <p className="mt-6 text-xs text-stone-500">
-          Payment confirmation always comes from the verified payment provider —
-          never from returning to this page.
-        </p>
+          {mockAttempt ? (
+            <div className="rounded-lg border border-dashed border-line-strong bg-surface p-6">
+              <h2 className="text-sm font-semibold tracking-wide text-ink">
+                Development simulator (mock provider)
+              </h2>
+              <p className="mt-1 text-xs text-ink-soft">
+                Available only while the mock payment provider is selected;
+                production refuses it outright.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {(
+                  [
+                    ['success', 'Simulate success'],
+                    ['failure', 'Simulate failure'],
+                    ['cancel', 'Simulate cancellation'],
+                    ['amount_mismatch', 'Simulate amount mismatch'],
+                  ] as const
+                ).map(([scenario, label]) => (
+                  <button
+                    key={scenario}
+                    type="button"
+                    onClick={() => void handleSimulate(scenario)}
+                    disabled={busyProvider !== null}
+                    className="rounded-md border border-line-strong px-3 py-2 text-xs text-ink transition-colors hover:border-gold-deep hover:text-gold-deep disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
-    </main>
+    </AppShell>
   )
 }

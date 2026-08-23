@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
+import { Link, createFileRoute, redirect } from '@tanstack/react-router'
 
 import { getCurrentUserFn } from '@/auth/actions'
 import { getMyReceiptFn } from '@/services/booking-actions'
@@ -14,6 +14,9 @@ export const Route = createFileRoute('/payments/receipt/$attemptPublicId')({
   },
   loader: async ({ params }) =>
     getMyReceiptFn({ data: { attemptPublicId: params.attemptPublicId } }),
+  head: () => ({
+    meta: [{ title: 'Payment receipt — Yorùbá Heritage World Virtual' }],
+  }),
   component: ReceiptPage,
 })
 
@@ -23,8 +26,17 @@ function ReceiptPage() {
   return (
     <main className="min-h-screen bg-white px-6 py-12 text-stone-900 print:py-4">
       <div className="mx-auto w-full max-w-xl">
-        <header className="border-b-2 border-stone-900 pb-4">
-          <h1 className="text-2xl font-bold">Payment receipt</h1>
+        <div className="print:hidden">
+          <Link
+            to="/payments"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-stone-600 transition-colors hover:text-stone-900"
+          >
+            <span aria-hidden="true">←</span>
+            Payment history
+          </Link>
+        </div>
+        <header className="mt-4 border-b-2 border-stone-900 pb-4 print:mt-0">
+          <h1 className="font-display text-3xl">Payment receipt</h1>
           <p className="mt-1 text-sm text-stone-500">
             Yorùbá Heritage World Virtual
           </p>

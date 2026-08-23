@@ -1,4 +1,10 @@
-/** Minimal shared form primitives for the foundation auth pages. */
+import { ErrorNotice, Field, buttonClass, inputClass } from './ui'
+
+/**
+ * Auth-page form primitives. These delegate to the shared UI kit so
+ * the sign-in and registration forms cannot drift from the rest of the
+ * platform's field styling, focus treatment or error presentation.
+ */
 
 export function TextField(props: {
   label: string
@@ -10,10 +16,7 @@ export function TextField(props: {
   maxLength?: number
 }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-sm font-medium text-stone-300">
-        {props.label}
-      </span>
+    <Field label={props.label}>
       <input
         name={props.name}
         type={props.type}
@@ -21,22 +24,14 @@ export function TextField(props: {
         required={props.required}
         minLength={props.minLength}
         maxLength={props.maxLength}
-        className="w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-stone-100 placeholder-stone-500 focus:border-amber-500 focus:outline-none"
+        className={inputClass}
       />
-    </label>
+    </Field>
   )
 }
 
 export function FormError(props: { message: string | null }) {
-  if (!props.message) return null
-  return (
-    <p
-      role="alert"
-      className="rounded-md border border-red-900 bg-red-950/60 px-3 py-2 text-sm text-red-300"
-    >
-      {props.message}
-    </p>
-  )
+  return <ErrorNotice message={props.message} />
 }
 
 export function SubmitButton(props: { label: string; busy: boolean }) {
@@ -44,7 +39,7 @@ export function SubmitButton(props: { label: string; busy: boolean }) {
     <button
       type="submit"
       disabled={props.busy}
-      className="w-full rounded-md bg-amber-600 px-4 py-2 font-semibold text-stone-950 transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-60"
+      className={`${buttonClass('primary', 'md')} w-full disabled:cursor-not-allowed disabled:opacity-60`}
     >
       {props.busy ? 'Please wait…' : props.label}
     </button>

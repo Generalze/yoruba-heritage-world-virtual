@@ -12,6 +12,8 @@ import { getCurrentUserFn, registerFn } from '@/auth/actions'
 import { authErrorMessage } from '@/auth/messages'
 import { registerInputSchema } from '@/auth/validation'
 import { FormError, SubmitButton, TextField } from '@/components/forms'
+import { SiteFooter, SiteHeader } from '@/components/site-chrome'
+import { Card, Container, SkipLink } from '@/components/ui'
 
 export const Route = createFileRoute('/register')({
   beforeLoad: async () => {
@@ -63,65 +65,79 @@ function RegisterPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-stone-950 px-6 py-12 text-stone-100">
-      <div className="w-full max-w-md">
-        <h1 className="text-center text-3xl font-bold">Create your account</h1>
-        <p className="mt-2 text-center text-sm text-stone-400">
-          Join Yorùbá Heritage World Virtual
-        </p>
+    <div className="flex min-h-screen flex-col bg-canvas text-ink">
+      <SkipLink />
+      <SiteHeader />
+      <main id="main-content" className="flex flex-1 items-center">
+        <Container className="py-16">
+          <div className="mx-auto w-full max-w-md">
+            <Card>
+              <h1 className="font-display text-center text-3xl text-ink">
+                Create your account
+              </h1>
+              <p className="mt-2 text-center text-sm text-ink-soft">
+                Join Yorùbá Heritage World Virtual
+              </p>
 
-        <form
-          onSubmit={handleSubmit}
-          className="mt-8 space-y-4"
-          noValidate={false}
-        >
-          <TextField
-            label="Preferred name"
-            name="preferredName"
-            type="text"
-            autoComplete="name"
-            required
-            maxLength={100}
-          />
-          <TextField
-            label="Email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            maxLength={255}
-          />
-          <TextField
-            label="Password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={10}
-            maxLength={128}
-          />
-          <p className="text-xs text-stone-500">
-            At least 10 characters — a longer passphrase works well.
-          </p>
-          <TextField
-            label="Confirm password"
-            name="passwordConfirmation"
-            type="password"
-            autoComplete="new-password"
-            required
-            maxLength={128}
-          />
-          <FormError message={error} />
-          <SubmitButton label="Create account" busy={busy} />
-        </form>
+              <form
+                onSubmit={handleSubmit}
+                className="mt-8 space-y-4"
+                noValidate={false}
+              >
+                <TextField
+                  label="Preferred name"
+                  name="preferredName"
+                  type="text"
+                  autoComplete="name"
+                  required
+                  maxLength={100}
+                />
+                <TextField
+                  label="Email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  required
+                  maxLength={255}
+                />
+                <TextField
+                  label="Password"
+                  name="password"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  minLength={10}
+                  maxLength={128}
+                />
+                <p className="text-xs text-ink-soft">
+                  At least 10 characters — a longer passphrase works well.
+                </p>
+                <TextField
+                  label="Confirm password"
+                  name="passwordConfirmation"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  maxLength={128}
+                />
+                <FormError message={error} />
+                <SubmitButton label="Create account" busy={busy} />
+              </form>
 
-        <p className="mt-6 text-center text-sm text-stone-400">
-          Already have an account?{' '}
-          <Link to="/login" className="text-amber-500 hover:text-amber-400">
-            Sign in
-          </Link>
-        </p>
-      </div>
-    </main>
+              <p className="mt-6 text-center text-sm text-ink-soft">
+                Already have an account?{' '}
+                <Link
+                  to="/login"
+                  className="font-semibold text-gold-deep underline-offset-4 hover:underline"
+                >
+                  Sign in
+                </Link>
+              </p>
+            </Card>
+          </div>
+        </Container>
+      </main>
+      <SiteFooter />
+    </div>
   )
 }

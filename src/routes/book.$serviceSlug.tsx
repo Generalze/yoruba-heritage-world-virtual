@@ -13,13 +13,29 @@ import {
   getBookingContextFn,
   getBookingSlotsFn,
 } from '@/services/booking-actions'
+import { AppShell } from '@/components/app-shell'
+import {
+  Card,
+  ErrorNotice,
+  Field,
+  IconArrow,
+  Notice,
+  StepIndicator,
+  buttonClass,
+  inputClass,
+} from '@/components/ui'
 import { formatAmountMinor, formatUtcSqlInTimezone } from '@/lib/display-time'
 
 /**
- * User booking page (spec §12/§15). The browser only ever sends the
- * service identity, a server-issued slot start and an optional note —
- * price, duration, House and validity are server authority (Step 5
- * revalidates under the House lock).
+ * Booking (Step 21A.4), following Screen 3 of the approved reference:
+ * a stepped workspace with a live summary beside it.
+ *
+ * The browser only ever sends the service identity, a SERVER-ISSUED
+ * slot start and an optional note — price, duration, House and
+ * validity are server authority (Step 5 revalidates under the House
+ * lock). Availability and price are never computed or guessed here:
+ * every slot shown came from the server, and an amount is only ever
+ * the snapshot the server returned.
  */
 export const Route = createFileRoute('/book/$serviceSlug')({
   beforeLoad: async () => {
@@ -27,8 +43,15 @@ export const Route = createFileRoute('/book/$serviceSlug')({
     if (!user) throw redirect({ to: '/login' })
     return { user }
   },
-  loader: async ({ params }) =>
-    getBookingContextFn({ data: { serviceSlug: params.serviceSlug } }),
+  loader: async ({ params, context }) => ({
+    user: context.user,
+    booking: await getBookingContextFn({
+      data: { serviceSlug: params.serviceSlug },
+    }),
+  }),
+  head: () => ({
+    meta: [{ title: 'Book an appointment — Yorùbá Heritage World Virtual' }],
+  }),
   component: BookingPage,
 })
 
@@ -42,48 +65,68 @@ interface Slot {
 type BookingContext = Awaited<ReturnType<typeof getBookingContextFn>>
 type BookableContext = Extract<BookingContext, { bookable: true }>
 
+const BOOKING_STEPS = [
+  'Service',
+  'Date and time',
+  'Review',
+  'Payment',
+] as const
+
 function BookingPage() {
-  const context = Route.useLoaderData()
+  const { user, booking } = Route.useLoaderData()
 
-  if (!context.bookable) {
+  if (!booking.bookable) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-stone-950 px-6 text-stone-100">
-        <h1 className="text-2xl font-bold">{context.serviceName}</h1>
-        <p className="mt-4 max-w-md text-center text-stone-400">
-          This service is not open for online booking at the moment.
-        </p>
-        <Link
-          to="/services"
-          className="mt-6 text-amber-500 hover:text-amber-400"
-        >
-          Back to services
-        </Link>
-      </main>
+      <AppShell userName={user.preferredName}>
+        <h1 className="font-display text-3xl text-ink sm:text-4xl">
+          {booking.serviceName}
+        </h1>
+        <div className="mt-6 max-w-2xl">
+          <Notice>
+            This service is not open for online booking at the moment.
+          </Notice>
+          <div className="mt-5">
+            <Link to="/services" className={buttonClass('secondary', 'md')}>
+              Back to services
+            </Link>
+          </div>
+        </div>
+      </AppShell>
     )
   }
 
-  if (!context.eligibility.eligible) {
+  if (!booking.eligibility.eligible) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-stone-950 px-6 text-stone-100">
-        <h1 className="text-2xl font-bold">{context.serviceName}</h1>
-        <p className="mt-4 max-w-md text-center text-stone-400">
-          Your profile is not yet eligible for booking a spiritual service.
-          Please complete your profile first.
-        </p>
-        <Link
-          to="/profile"
-          className="mt-6 text-amber-500 hover:text-amber-400"
-        >
-          Go to your profile
-        </Link>
-      </main>
+      <AppShell userName={user.preferredName}>
+        <h1 className="font-display text-3xl text-ink sm:text-4xl">
+          {booking.serviceName}
+        </h1>
+        <div className="mt-6 max-w-2xl">
+          <Notice tone="caution">
+            Your profile is not yet eligible for booking a spiritual service.
+            Please complete your profile first.
+          </Notice>
+          <div className="mt-5">
+            <Link to="/profile" className={buttonClass('primary', 'md')}>
+              Go to your profile
+              <IconArrow />
+            </Link>
+          </div>
+        </div>
+      </AppShell>
     )
   }
 
-  return <BookingForm context={context} />
+  return <BookingForm userName={user.preferredName} context={booking} />
 }
 
-function BookingForm({ context }: { context: BookableContext }) {
+function BookingForm({
+  userName,
+  context,
+}: {
+  userName: string
+  context: BookableContext
+}) {
   const navigate = useNavigate()
   const loadSlots = useServerFn(getBookingSlotsFn)
   const reserve = useServerFn(createReservationFn)
@@ -99,6 +142,8 @@ function BookingForm({ context }: { context: BookableContext }) {
     typeof Intl !== 'undefined'
       ? Intl.DateTimeFormat().resolvedOptions().timeZone
       : 'UTC'
+
+  const amount = formatAmountMinor(context.priceMinor, context.currency)
 
   async function handleLoadSlots(chosenDate: string) {
     setDate(chosenDate)
@@ -153,140 +198,206 @@ function BookingForm({ context }: { context: BookableContext }) {
   }
 
   return (
-    <main className="min-h-screen bg-stone-950 px-6 py-12 text-stone-100">
-      <div className="mx-auto w-full max-w-3xl">
-        <Link
-          to="/services"
-          className="text-sm text-stone-400 hover:text-amber-500"
-        >
-          ← All services
-        </Link>
-        <h1 className="mt-4 text-3xl font-bold">Book: {context.serviceName}</h1>
-        <p className="mt-2 text-sm text-stone-400">
+    <AppShell userName={userName}>
+      <header>
+        <p className="text-xs font-semibold tracking-[0.28em] text-gold-deep uppercase">
+          Book an appointment
+        </p>
+        <h1 className="font-display mt-2 text-3xl text-ink sm:text-4xl">
+          {context.serviceName}
+        </h1>
+        <p className="mt-2 text-sm text-ink-soft">
           Offered by {context.houseName}
         </p>
+      </header>
 
-        <dl className="mt-6 space-y-2 text-sm">
-          <div className="flex gap-3">
-            <dt className="text-stone-400">Duration</dt>
-            <dd>{context.durationMinutes} minutes</dd>
-          </div>
-          <div className="flex gap-3">
-            <dt className="text-stone-400">Price</dt>
-            <dd className="font-medium text-amber-400">
-              {formatAmountMinor(context.priceMinor, context.currency)}
-            </dd>
-          </div>
-          <div className="flex gap-3">
-            <dt className="text-stone-400">House timezone</dt>
-            <dd>{context.houseTimezone}</dd>
-          </div>
-        </dl>
+      {/* The stepper sits on its own dark band, as in the reference */}
+      <nav
+        aria-label="Booking progress"
+        className="texture-night mt-6 rounded-lg border border-night-line bg-night px-5 py-4"
+      >
+        <StepIndicator
+          steps={BOOKING_STEPS}
+          current={selected ? 2 : 1}
+        />
+      </nav>
 
-        <section className="mt-8 rounded-lg border border-stone-800 bg-stone-900 p-6">
-          <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
-            1. Choose a date
-          </h2>
-          <input
-            type="date"
-            value={date}
-            onChange={(event) => void handleLoadSlots(event.target.value)}
-            className="mt-4 rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
-          />
-
-          {busy && slots === null ? (
-            <p className="mt-4 text-sm text-stone-500">Loading times…</p>
-          ) : null}
-          {slots !== null ? (
-            slots.length === 0 ? (
-              <p className="mt-4 text-sm text-stone-500">
-                No available times on this date. Please try another date.
-              </p>
-            ) : (
-              <>
-                <h2 className="mt-6 text-sm font-medium tracking-widest text-amber-500 uppercase">
-                  2. Choose a time (shown in your timezone: {userTimezone})
-                </h2>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {slots.map((slot) => (
-                    <button
-                      key={slot.startsAtUtc}
-                      type="button"
-                      onClick={() => setSelected(slot)}
-                      className={`rounded-md border px-3 py-2 text-sm transition-colors ${
-                        selected?.startsAtUtc === slot.startsAtUtc
-                          ? 'border-amber-500 bg-amber-950/40 text-amber-300'
-                          : 'border-stone-700 text-stone-300 hover:border-amber-500'
-                      }`}
-                    >
-                      {formatUtcSqlInTimezone(slot.startsAtUtc, userTimezone, {
-                        timeStyle: 'short',
-                      })}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )
-          ) : null}
-        </section>
-
-        {selected ? (
-          <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-            <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
-              3. Review and reserve
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-[1.4fr_1fr]">
+        <div className="grid gap-6">
+          <Card>
+            <h2 className="text-sm font-semibold tracking-wide text-ink">
+              Choose a date
             </h2>
-            <dl className="mt-4 space-y-2 text-sm">
-              <div className="flex gap-3">
-                <dt className="text-stone-400">Your time</dt>
-                <dd>
-                  {formatUtcSqlInTimezone(selected.startsAtUtc, userTimezone)}
-                </dd>
-              </div>
-              <div className="flex gap-3">
-                <dt className="text-stone-400">House local time</dt>
-                <dd>
-                  {selected.houseLocalDate} {selected.houseLocalTime} (
-                  {context.houseTimezone})
-                </dd>
-              </div>
-              <div className="flex gap-3">
-                <dt className="text-stone-400">Amount due</dt>
-                <dd className="font-medium text-amber-400">
-                  {formatAmountMinor(context.priceMinor, context.currency)}
-                </dd>
-              </div>
-            </dl>
-            <label className="mt-4 block text-sm text-stone-400">
-              Private request (optional, seen only by the Sacred House)
-              <textarea
-                value={note}
-                onChange={(event) => setNote(event.target.value.slice(0, 1500))}
-                rows={4}
-                maxLength={1500}
-                className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() => void handleReserve()}
-              disabled={busy}
-              className="mt-4 rounded-md bg-amber-600 px-5 py-2.5 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-500 disabled:opacity-60"
-            >
-              {busy ? 'Reserving…' : 'Reserve and continue to payment'}
-            </button>
-            <p className="mt-3 text-xs text-stone-500">
-              Your time is held briefly while you complete payment. The
-              reservation expires automatically if payment is not completed.
-            </p>
-          </section>
-        ) : null}
+            <div className="mt-4 max-w-xs">
+              <Field
+                label="Appointment date"
+                hint={`Times are offered in the Sacred House timezone (${context.houseTimezone}) and shown in yours.`}
+              >
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(event) => void handleLoadSlots(event.target.value)}
+                  className={inputClass}
+                />
+              </Field>
+            </div>
 
-        {error ? (
-          <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-            {error}
+            {busy && slots === null ? (
+              <p className="mt-5 text-sm text-ink-soft">Loading times…</p>
+            ) : null}
+
+            {slots !== null ? (
+              slots.length === 0 ? (
+                <div className="mt-5">
+                  <Notice>
+                    No available times on this date. Please try another date.
+                  </Notice>
+                </div>
+              ) : (
+                <div className="mt-6">
+                  <h3 className="text-sm font-semibold tracking-wide text-ink">
+                    Choose a time
+                  </h3>
+                  <p className="mt-1 text-xs text-ink-soft">
+                    Shown in your timezone ({userTimezone}).
+                  </p>
+                  <ul className="mt-4 flex flex-wrap gap-2">
+                    {slots.map((slot) => {
+                      const isSelected =
+                        selected?.startsAtUtc === slot.startsAtUtc
+                      return (
+                        <li key={slot.startsAtUtc}>
+                          <button
+                            type="button"
+                            onClick={() => setSelected(slot)}
+                            aria-pressed={isSelected}
+                            className={`rounded-md border px-4 py-2 text-sm transition-colors ${
+                              isSelected
+                                ? 'border-gold-deep bg-surface font-semibold text-ink'
+                                : 'border-line-strong text-ink hover:border-gold-deep hover:text-gold-deep'
+                            }`}
+                          >
+                            {formatUtcSqlInTimezone(
+                              slot.startsAtUtc,
+                              userTimezone,
+                              { timeStyle: 'short' },
+                            )}
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )
+            ) : null}
+          </Card>
+
+          {selected ? (
+            <Card>
+              <h2 className="text-sm font-semibold tracking-wide text-ink">
+                Review and reserve
+              </h2>
+              <dl className="mt-4 divide-y divide-line text-sm">
+                <div className="flex justify-between gap-4 py-2.5">
+                  <dt className="text-ink-soft">Your time</dt>
+                  <dd className="text-right text-ink">
+                    {formatUtcSqlInTimezone(selected.startsAtUtc, userTimezone)}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 py-2.5">
+                  <dt className="text-ink-soft">Sacred House local time</dt>
+                  <dd className="text-right text-ink">
+                    {selected.houseLocalDate} {selected.houseLocalTime} (
+                    {context.houseTimezone})
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="mt-5">
+                <Field
+                  label="Private request (optional)"
+                  hint="Seen only by the Sacred House."
+                >
+                  <textarea
+                    value={note}
+                    onChange={(event) =>
+                      setNote(event.target.value.slice(0, 1500))
+                    }
+                    rows={4}
+                    maxLength={1500}
+                    className={inputClass}
+                  />
+                </Field>
+              </div>
+
+              <div className="mt-5">
+                <ErrorNotice message={error} />
+              </div>
+
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={() => void handleReserve()}
+                  disabled={busy}
+                  className={`${buttonClass('primary', 'md')} disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  {busy ? 'Reserving…' : 'Reserve and continue to payment'}
+                  {busy ? null : <IconArrow />}
+                </button>
+                <p className="mt-3 text-xs leading-relaxed text-ink-soft">
+                  Your time is held briefly while you complete payment. The
+                  reservation expires automatically if payment is not
+                  completed.
+                </p>
+              </div>
+            </Card>
+          ) : null}
+
+          {!selected && error ? <ErrorNotice message={error} /> : null}
+        </div>
+
+        {/* Summary — every figure is the server's snapshot */}
+        <Card>
+          <h2 className="text-sm font-semibold tracking-wide text-ink">
+            Booking summary
+          </h2>
+          <dl className="mt-4 divide-y divide-line text-sm">
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Service</dt>
+              <dd className="text-right text-ink">{context.serviceName}</dd>
+            </div>
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Sacred House</dt>
+              <dd className="text-right text-ink">{context.houseName}</dd>
+            </div>
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Duration</dt>
+              <dd className="text-right text-ink">
+                {context.durationMinutes} minutes
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4 py-2.5">
+              <dt className="text-ink-soft">Selected time</dt>
+              <dd className="text-right text-ink">
+                {selected
+                  ? formatUtcSqlInTimezone(selected.startsAtUtc, userTimezone)
+                  : 'Not chosen yet'}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4 py-3">
+              <dt className="font-semibold text-ink">Amount</dt>
+              <dd className="font-display text-right text-lg text-ink">
+                {amount}
+              </dd>
+            </div>
+          </dl>
+          <p className="mt-4 text-xs leading-relaxed text-ink-soft">
+            Appointments are booked with {context.houseName}, never with an
+            individual member. The Sacred House privately assigns the members
+            responsible for your appointment.
           </p>
-        ) : null}
+        </Card>
       </div>
-    </main>
+    </AppShell>
   )
 }

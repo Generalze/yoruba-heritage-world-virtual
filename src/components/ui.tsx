@@ -209,6 +209,73 @@ export function BackLink({
   )
 }
 
+/**
+ * Booking progress. The steps describe the REAL platform flow — the
+ * service is already chosen before this page, and the Sacred House
+ * follows from it, so there is no separate "choose a House" step to
+ * display (UI direction §10.3: the visual may group steps, but the
+ * backend contract stays authoritative).
+ *
+ * State is announced, not merely coloured: the current step carries
+ * aria-current, and every step's state is spelled out for assistive
+ * technology.
+ */
+export function StepIndicator({
+  steps,
+  current,
+}: {
+  steps: ReadonlyArray<string>
+  current: number
+}) {
+  return (
+    <ol className="flex flex-wrap items-center gap-x-2 gap-y-3">
+      {steps.map((label, index) => {
+        const done = index < current
+        const isCurrent = index === current
+        return (
+          <li key={label} className="flex items-center gap-2">
+            <span
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+                done
+                  ? 'border-gold bg-gold text-night'
+                  : isCurrent
+                    ? 'border-gold text-gold-bright'
+                    : 'border-night-line text-cream-soft-on-night'
+              }`}
+              aria-hidden="true"
+            >
+              {done ? '✓' : index + 1}
+            </span>
+            <span
+              className={`text-sm ${
+                isCurrent
+                  ? 'font-semibold text-cream-on-night'
+                  : 'text-cream-soft-on-night'
+              }`}
+              aria-current={isCurrent ? 'step' : undefined}
+            >
+              {label}
+              <span className="sr-only">
+                {done
+                  ? ' — completed'
+                  : isCurrent
+                    ? ' — current step'
+                    : ' — not yet reached'}
+              </span>
+            </span>
+            {index < steps.length - 1 ? (
+              <span
+                aria-hidden="true"
+                className="ml-1 hidden h-px w-8 bg-night-line sm:block"
+              />
+            ) : null}
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
 // --- Surfaces ----------------------------------------------------------------
 
 /** Warm light card: thin sand border, soft shadow, generous padding. */
@@ -247,6 +314,69 @@ export function Badge({
       {children}
     </span>
   )
+}
+
+export type StatusTone = 'affirm' | 'caution' | 'alert' | 'neutral' | 'info'
+
+const STATUS_TONE_CLASSES: Record<StatusTone, string> = {
+  affirm: 'border-affirm/40 bg-affirm/10 text-affirm',
+  caution: 'border-caution/40 bg-caution/10 text-caution',
+  alert: 'border-alert/40 bg-alert/10 text-alert',
+  info: 'border-line-strong bg-surface text-ink',
+  neutral: 'border-line bg-surface text-ink-soft',
+}
+
+/**
+ * Status chip. The LABEL always says the state in words — the tone
+ * only reinforces it, so nothing is communicated by colour alone
+ * (UI direction §6/§9).
+ */
+export function StatusChip({
+  tone = 'neutral',
+  children,
+}: {
+  tone?: StatusTone
+  children: ReactNode
+}) {
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-full border px-3 py-1 text-xs font-medium ${STATUS_TONE_CLASSES[tone]}`}
+    >
+      {children}
+    </span>
+  )
+}
+
+/** Presentational mapping for the platform's real appointment and
+ * payment states. Unknown states fall back to neutral and still print
+ * their own name — never hidden, never guessed at. */
+export function statusTone(status: string): StatusTone {
+  switch (status) {
+    case 'CONFIRMED':
+    case 'COMPLETED':
+    case 'SUCCEEDED':
+    case 'READY':
+      return 'affirm'
+    case 'PENDING_PAYMENT':
+    case 'PENDING':
+    case 'PROCESSING':
+    case 'RETRYING':
+      return 'caution'
+    case 'FAILED':
+    case 'NO_SHOW':
+      return 'alert'
+    case 'CANCELLED':
+    case 'EXPIRED':
+      return 'neutral'
+    default:
+      return 'neutral'
+  }
+}
+
+/** "PENDING_PAYMENT" → "Pending payment". */
+export function humanizeStatus(status: string): string {
+  const spaced = status.replaceAll('_', ' ').toLowerCase()
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
 }
 
 // --- Decoration --------------------------------------------------------------

@@ -451,6 +451,100 @@ describe('authenticated shell and dashboard', () => {
   })
 })
 
+// --- Booking and payment surface (Step 21A.4) ----------------------------------
+
+describe('booking and payment surface', () => {
+  const OWNER_ROUTES = [
+    'src/routes/book.$serviceSlug.tsx',
+    'src/routes/checkout.$appointmentPublicId.tsx',
+    'src/routes/appointments.index.tsx',
+    'src/routes/appointments.$publicId.tsx',
+    'src/routes/payments.index.tsx',
+    'src/routes/payments.receipt.$attemptPublicId.tsx',
+    'src/routes/payments.return.$provider.tsx',
+  ] as const
+
+  it('KEEPS the server-side auth guard on every owner-scoped page', () => {
+    for (const file of OWNER_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).toContain('beforeLoad')
+      expect(code).toContain('getCurrentUserFn()')
+      expect(code).toContain("redirect({ to: '/login' })")
+    }
+  })
+
+  it('reads nothing admin-scoped into a user surface', () => {
+    for (const file of OWNER_ROUTES) {
+      expect(withoutComments(read(file))).not.toMatch(/admin[A-Z]\w*Fn/)
+    }
+  })
+
+  it('never invents availability or an amount', () => {
+    const booking = withoutComments(read('src/routes/book.$serviceSlug.tsx'))
+    // Slots come from the server; the page never generates times.
+    expect(booking).toContain('getBookingSlotsFn')
+    expect(booking).toContain('getBookingContextFn')
+    // Amounts always go through the shared currency helper.
+    expect(booking).toContain('formatAmountMinor')
+    expect(booking).not.toMatch(/priceMinor\s*\/\s*100/)
+    expect(booking).not.toMatch(/[$₦]\s*\d/)
+  })
+
+  it('keeps payment confirmation server-authoritative', () => {
+    const ret = withoutComments(read('src/routes/payments.return.$provider.tsx'))
+    // The return page reconciles with the server; the query string is
+    // never treated as proof.
+    expect(ret).toContain('reconcilePaymentFn')
+    const checkout = withoutComments(
+      read('src/routes/checkout.$appointmentPublicId.tsx'),
+    )
+    expect(checkout).toContain(
+      'Payment confirmation always comes from the verified payment',
+    )
+  })
+
+  it('offers the Prayer Room only for statuses that can have a recording', () => {
+    const detail = withoutComments(read('src/routes/appointments.$publicId.tsx'))
+    expect(detail).toContain(
+      "if (status !== 'CONFIRMED' && status !== 'COMPLETED') return null",
+    )
+    // …and it never reports pipeline state to the user.
+    expect(detail).not.toMatch(
+      /GENERATING_|STORYBOARDING|RENDERING|UPLOADING|QUEUED/,
+    )
+  })
+
+  it('never displays an internal representative assignment', () => {
+    for (const file of OWNER_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).not.toMatch(/representative/i)
+    }
+  })
+
+  it('states every status in words, not by colour alone', () => {
+    // statusTone only ever decorates a chip whose child is the
+    // humanized status text.
+    for (const file of [
+      'src/routes/appointments.index.tsx',
+      'src/routes/payments.index.tsx',
+      'src/routes/appointments.$publicId.tsx',
+    ] as const) {
+      const code = withoutComments(read(file))
+      expect(code).toContain('humanizeStatus(')
+      expect(code).toContain('StatusChip')
+    }
+  })
+
+  it('keeps the receipt printable rather than wrapping it in the app shell', () => {
+    const receipt = withoutComments(
+      read('src/routes/payments.receipt.$attemptPublicId.tsx'),
+    )
+    expect(receipt).not.toContain('AppShell')
+    expect(receipt).toContain('print:hidden')
+    expect(receipt).toContain('window.print()')
+  })
+})
+
 // --- Route hygiene (house rules extended to the new files) ----------------------
 
 describe('route hygiene', () => {
