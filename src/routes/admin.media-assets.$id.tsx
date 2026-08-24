@@ -157,24 +157,24 @@ function MediaAssetPage() {
     <div>
       <Link
         to="/admin/media-assets"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Media library
       </Link>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">
           {asset.code}{' '}
-          <span className="text-base font-normal text-stone-400">
+          <span className="text-base font-normal text-ink-soft">
             ({asset.assetKind} · {asset.scopeType})
           </span>
         </h1>
         <div className="flex items-center gap-3 text-sm">
           {asset.active ? (
-            <span className="rounded-full bg-emerald-950 px-3 py-1 text-emerald-400">
+            <span className="rounded-full bg-affirm/10 px-3 py-1 text-affirm">
               active
             </span>
           ) : (
-            <span className="rounded-full bg-stone-800 px-3 py-1 text-stone-400">
+            <span className="rounded-full bg-surface px-3 py-1 text-ink-soft">
               inactive
             </span>
           )}
@@ -187,7 +187,7 @@ function MediaAssetPage() {
                   setActive({ data: { id: asset.id, active: !asset.active } }),
                 )
               }
-              className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
             >
               {asset.active ? 'Deactivate (future runtime)' : 'Reactivate'}
             </button>
@@ -195,7 +195,7 @@ function MediaAssetPage() {
           <button
             type="button"
             onClick={() => setShowUpload((value) => !value)}
-            className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-stone-950 hover:bg-amber-500"
+            className="rounded-md bg-gold px-3 py-1.5 font-medium text-night hover:bg-gold-bright"
           >
             Upload new version
           </button>
@@ -203,21 +203,21 @@ function MediaAssetPage() {
       </div>
 
       {showUpload ? (
-        <div className="mt-4 grid gap-3 rounded-md border border-dashed border-stone-700 p-4 sm:grid-cols-4">
-          <label className="block text-xs text-stone-400 sm:col-span-2">
+        <div className="mt-4 grid gap-3 rounded-md border border-dashed border-line-strong p-4 sm:grid-cols-4">
+          <label className="block text-xs text-ink-soft sm:col-span-2">
             File
             <input
               type="file"
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-              className="mt-1 w-full text-sm text-stone-300"
+              className="mt-1 w-full text-sm text-ink-soft"
             />
           </label>
-          <label className="block text-xs text-stone-400">
+          <label className="block text-xs text-ink-soft">
             Source
             <select
               value={sourceType}
               onChange={(event) => setSourceType(event.target.value)}
-              className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+              className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
             >
               {MEDIA_SOURCE_TYPES.map((type) => (
                 <option key={type} value={type}>
@@ -226,24 +226,24 @@ function MediaAssetPage() {
               ))}
             </select>
           </label>
-          <label className="block text-xs text-stone-400">
+          <label className="block text-xs text-ink-soft">
             Language (optional)
             <select
               value={language}
               onChange={(event) => setLanguage(event.target.value)}
-              className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+              className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
             >
               <option value="">None</option>
               <option value="en">English</option>
               <option value="yo">Yorùbá</option>
             </select>
           </label>
-          <label className="block text-xs text-stone-400">
+          <label className="block text-xs text-ink-soft">
             External AI policy
             <select
               value={aiPolicy}
               onChange={(event) => setAiPolicy(event.target.value)}
-              className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+              className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
             >
               {MEDIA_EXTERNAL_AI_POLICIES.map((policy) => (
                 <option key={policy} value={policy}>
@@ -252,7 +252,7 @@ function MediaAssetPage() {
               ))}
             </select>
           </label>
-          <label className="flex items-center gap-2 text-xs text-stone-300 sm:col-span-2">
+          <label className="flex items-center gap-2 text-xs text-ink-soft sm:col-span-2">
             <input
               type="checkbox"
               checked={identifiable}
@@ -266,7 +266,7 @@ function MediaAssetPage() {
               type="button"
               disabled={busy || !file}
               onClick={() => void handleUpload()}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
             >
               Upload draft version
             </button>
@@ -282,7 +282,7 @@ function MediaAssetPage() {
           return (
             <li
               key={version.id}
-              className="rounded-md border border-stone-800 bg-stone-950 p-4"
+              className="rounded-md border border-line bg-surface p-4"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">
@@ -292,41 +292,41 @@ function MediaAssetPage() {
                   {version.language ? ` · ${version.language}` : ''}
                 </span>
                 <span className="flex flex-wrap gap-2 text-xs">
-                  <span className="rounded-full bg-amber-950 px-2.5 py-0.5 text-amber-400">
+                  <span className="rounded-full bg-gold/10 px-2.5 py-0.5 text-gold-deep">
                     {version.status.replaceAll('_', ' ')}
                   </span>
-                  <span className="rounded-full bg-stone-800 px-2.5 py-0.5 text-stone-300">
+                  <span className="rounded-full bg-surface px-2.5 py-0.5 text-ink-soft">
                     Rights:{' '}
                     {RIGHTS_STATUS_LABELS[version.rightsStatus] ??
                       version.rightsStatus}
                   </span>
-                  <span className="rounded-full bg-stone-800 px-2.5 py-0.5 text-stone-300">
+                  <span className="rounded-full bg-surface px-2.5 py-0.5 text-ink-soft">
                     Consent: {version.consentStatus.replaceAll('_', ' ')}
                   </span>
                   <span
                     className={`rounded-full px-2.5 py-0.5 ${
                       check?.eligible
-                        ? 'bg-emerald-950 text-emerald-400'
-                        : 'bg-stone-800 text-stone-400'
+                        ? 'bg-affirm/10 text-affirm'
+                        : 'bg-surface text-ink-soft'
                     }`}
                   >
                     Runtime: {check?.eligible ? 'ELIGIBLE' : 'NOT ELIGIBLE'}
                   </span>
                 </span>
               </div>
-              <p className="mt-1 text-xs break-all text-stone-500">
+              <p className="mt-1 text-xs break-all text-ink-soft">
                 SHA-256: {version.fileSha256} · key: {version.storageKey} ·
                 voice clone authorized:{' '}
                 {version.voiceCloneAuthorized ? 'YES' : 'no'} · AI policy:{' '}
                 {version.externalAiPolicy}
               </p>
               {check && !check.eligible && version.status === 'PUBLISHED' ? (
-                <p className="mt-1 text-xs text-stone-500">
+                <p className="mt-1 text-xs text-ink-soft">
                   Blocked by: {check.failures.join(', ')}
                 </p>
               ) : null}
               {version.reviewNote && version.status === 'DRAFT' ? (
-                <p className="mt-2 rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+                <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">
                   Returned with reason: {version.reviewNote}
                 </p>
               ) : null}
@@ -362,7 +362,7 @@ function MediaAssetPage() {
                           }),
                         )
                       }
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Re-save metadata
                     </button>
@@ -374,7 +374,7 @@ function MediaAssetPage() {
                           submit({ data: { versionId: version.id } }),
                         )
                       }
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Submit for review
                     </button>
@@ -390,7 +390,7 @@ function MediaAssetPage() {
                           approve({ data: { versionId: version.id } }),
                         )
                       }
-                      className="rounded-md bg-emerald-700 px-3 py-1.5 font-medium text-white hover:bg-emerald-600 disabled:opacity-60"
+                      className="rounded-md bg-affirm px-3 py-1.5 font-medium text-white hover:bg-affirm/90 disabled:opacity-60"
                     >
                       Approve
                     </button>
@@ -400,7 +400,7 @@ function MediaAssetPage() {
                       onClick={() =>
                         setNoteFor({ versionId: version.id, kind: 'return' })
                       }
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Return to draft
                     </button>
@@ -415,7 +415,7 @@ function MediaAssetPage() {
                         publish({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+                    className="rounded-md bg-gold px-3 py-1.5 font-medium text-night hover:bg-gold-bright disabled:opacity-60"
                   >
                     Publish
                   </button>
@@ -429,7 +429,7 @@ function MediaAssetPage() {
                         archive({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-400 hover:border-red-700 hover:text-red-400 disabled:opacity-60"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-alert hover:text-alert disabled:opacity-60"
                   >
                     Archive
                   </button>
@@ -456,7 +456,7 @@ function MediaAssetPage() {
                             )
                           }
                         }}
-                        className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                        className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                       >
                         Rights → {RIGHTS_STATUS_LABELS[next] ?? next}
                       </button>
@@ -487,7 +487,7 @@ function MediaAssetPage() {
                             )
                           }
                         }}
-                        className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                        className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                       >
                         Consent → {next.replaceAll('_', ' ')}
                       </button>
@@ -509,8 +509,8 @@ function MediaAssetPage() {
                     }
                     className={`rounded-md px-3 py-1.5 font-medium disabled:opacity-60 ${
                       version.runtimeEnabled
-                        ? 'border border-red-800 text-red-400 hover:bg-red-950'
-                        : 'bg-emerald-700 text-white hover:bg-emerald-600'
+                        ? 'border border-alert/40 text-alert hover:bg-alert/10'
+                        : 'bg-affirm text-white hover:bg-affirm/90'
                     }`}
                   >
                     {version.runtimeEnabled
@@ -531,7 +531,7 @@ function MediaAssetPage() {
                         ? 'Documented consent reference (required)'
                         : 'Reason (required)'
                     }
-                    className="w-full max-w-md rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+                    className="w-full max-w-md rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
                   />
                   <button
                     type="button"
@@ -561,7 +561,7 @@ function MediaAssetPage() {
                         })
                       })
                     }
-                    className="rounded-md border border-amber-700 px-3 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+                    className="rounded-md border border-gold px-3 py-2 text-sm text-gold-deep hover:bg-gold/10 disabled:opacity-60"
                   >
                     Confirm
                   </button>
@@ -572,11 +572,11 @@ function MediaAssetPage() {
         })}
       </ul>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Sacred content links
         </h2>
-        <p className="mt-1 text-xs text-stone-500">
+        <p className="mt-1 text-xs text-ink-soft">
           Exact PUBLISHED sacred version ↔ PUBLISHED media version links. Audio
           roles require AUDIO assets; language must match when set.
         </p>
@@ -584,7 +584,7 @@ function MediaAssetPage() {
           {data.links.map(({ link, sacredVersion }) => (
             <li
               key={link.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-stone-800 bg-stone-950 px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2"
             >
               <span>
                 {link.role} → sacred v{sacredVersion.versionNumber} (
@@ -598,7 +598,7 @@ function MediaAssetPage() {
                   onClick={() =>
                     void run(() => removeLink({ data: { linkId: link.id } }))
                   }
-                  className="rounded-md border border-stone-700 px-2 py-1 text-xs text-stone-400 hover:border-red-700 hover:text-red-400 disabled:opacity-60"
+                  className="rounded-md border border-line-strong px-2 py-1 text-xs text-ink-soft hover:border-alert hover:text-alert disabled:opacity-60"
                 >
                   Unlink
                 </button>
@@ -606,12 +606,12 @@ function MediaAssetPage() {
             </li>
           ))}
           {data.links.length === 0 ? (
-            <li className="text-xs text-stone-500">No links yet.</li>
+            <li className="text-xs text-ink-soft">No links yet.</li>
           ) : null}
         </ul>
         {canPublish ? (
           <div className="mt-4 flex flex-wrap items-end gap-2">
-            <label className="block text-xs text-stone-400">
+            <label className="block text-xs text-ink-soft">
               Sacred content version id
               <input
                 value={linkContentVersionId}
@@ -620,25 +620,25 @@ function MediaAssetPage() {
                     event.target.value.replace(/[^0-9]/g, ''),
                   )
                 }
-                className="mt-1 w-40 rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                className="mt-1 w-40 rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
               />
             </label>
-            <label className="block text-xs text-stone-400">
+            <label className="block text-xs text-ink-soft">
               Media version id
               <input
                 value={linkVersionId}
                 onChange={(event) =>
                   setLinkVersionId(event.target.value.replace(/[^0-9]/g, ''))
                 }
-                className="mt-1 w-32 rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                className="mt-1 w-32 rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
               />
             </label>
-            <label className="block text-xs text-stone-400">
+            <label className="block text-xs text-ink-soft">
               Role
               <select
                 value={linkRole}
                 onChange={(event) => setLinkRole(event.target.value)}
-                className="mt-1 w-44 rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                className="mt-1 w-44 rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
               >
                 {SACRED_MEDIA_LINK_ROLES.map((role) => (
                   <option key={role} value={role}>
@@ -661,7 +661,7 @@ function MediaAssetPage() {
                   }),
                 )
               }
-              className="rounded-md border border-stone-700 px-3 py-2 text-sm text-stone-300 hover:border-amber-500 disabled:opacity-60"
+              className="rounded-md border border-line-strong px-3 py-2 text-sm text-ink-soft hover:border-gold-deep disabled:opacity-60"
             >
               Create link
             </button>
@@ -670,7 +670,7 @@ function MediaAssetPage() {
       </section>
 
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}

@@ -65,7 +65,7 @@ function ContentItemPage() {
     <div>
       <Link
         to="/admin/spiritual-content"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Library
       </Link>
@@ -73,11 +73,11 @@ function ContentItemPage() {
         <h1 className="text-2xl font-bold">{item.code}</h1>
         <div className="flex items-center gap-3 text-sm">
           {item.active ? (
-            <span className="rounded-full bg-emerald-950 px-3 py-1 text-emerald-400">
+            <span className="rounded-full bg-affirm/10 px-3 py-1 text-affirm">
               active
             </span>
           ) : (
-            <span className="rounded-full bg-stone-800 px-3 py-1 text-stone-400">
+            <span className="rounded-full bg-surface px-3 py-1 text-ink-soft">
               inactive
             </span>
           )}
@@ -90,7 +90,7 @@ function ContentItemPage() {
                   setActive({ data: { id: item.id, active: !item.active } }),
                 )
               }
-              className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
             >
               {item.active ? 'Deactivate (future assignments)' : 'Reactivate'}
             </button>
@@ -98,40 +98,40 @@ function ContentItemPage() {
         </div>
       </div>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Structure{' '}
           {data.structureFrozen ? '(frozen — reviewed history exists)' : ''}
         </h2>
         <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
           <div className="flex gap-3">
-            <dt className="text-stone-400">Type</dt>
+            <dt className="text-ink-soft">Type</dt>
             <dd>{contentTypeLabel(item.contentType)}</dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Scope</dt>
+            <dt className="text-ink-soft">Scope</dt>
             <dd>{item.scopeType}</dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Sacred House</dt>
+            <dt className="text-ink-soft">Sacred House</dt>
             <dd>
               {data.houses.find((h) => h.id === item.sacredHouseId)?.name ??
                 '—'}
             </dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Service</dt>
+            <dt className="text-ink-soft">Service</dt>
             <dd>
               {data.services.find((s) => s.id === item.serviceId)?.name ?? '—'}
             </dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Sort order</dt>
+            <dt className="text-ink-soft">Sort order</dt>
             <dd>{item.sortOrder}</dd>
           </div>
         </dl>
         {data.structureFrozen ? (
-          <p className="mt-3 text-xs text-stone-500">
+          <p className="mt-3 text-xs text-ink-soft">
             Code, type and scope are frozen because reviewed versions exist. To
             retarget this guidance, archive/deactivate this item and create a
             new one.
@@ -153,7 +153,7 @@ function ContentItemPage() {
       ))}
 
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}
@@ -234,16 +234,16 @@ function LanguageSection({
   }
 
   return (
-    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
+    <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           {LANGUAGE_LABELS[language] ?? language} versions
         </h2>
         {!working && !showForm ? (
           <button
             type="button"
             onClick={() => setShowForm(true)}
-            className="rounded-md border border-stone-700 px-3 py-1.5 text-sm text-stone-300 hover:border-amber-500"
+            className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-soft hover:border-gold-deep"
           >
             New draft
           </button>
@@ -251,7 +251,7 @@ function LanguageSection({
       </div>
 
       {versions.length === 0 && !showForm ? (
-        <p className="mt-4 text-sm text-stone-500">
+        <p className="mt-4 text-sm text-ink-soft">
           No {LANGUAGE_LABELS[language] ?? language} versions yet. Content is
           written by authorized people only — never generated.
         </p>
@@ -261,7 +261,7 @@ function LanguageSection({
         {versions.map((version) => (
           <li
             key={version.id}
-            className="rounded-md border border-stone-800 bg-stone-950 p-4"
+            className="rounded-md border border-line bg-surface p-4"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-sm font-medium">
@@ -270,16 +270,16 @@ function LanguageSection({
               <span
                 className={`rounded-full px-2.5 py-0.5 text-xs ${
                   version.status === 'PUBLISHED'
-                    ? 'bg-emerald-950 text-emerald-400'
+                    ? 'bg-affirm/10 text-affirm'
                     : version.status === 'ARCHIVED'
-                      ? 'bg-stone-800 text-stone-500'
-                      : 'bg-amber-950 text-amber-400'
+                      ? 'bg-surface text-ink-soft'
+                      : 'bg-gold/10 text-gold-deep'
                 }`}
               >
                 {version.status.replaceAll('_', ' ')}
               </span>
             </div>
-            <p className="mt-1 text-xs text-stone-500">
+            <p className="mt-1 text-xs text-ink-soft">
               Stage: {version.visibilityStage.replaceAll('_', ' ')} ·
               acknowledgement{' '}
               {version.acknowledgementRequired ? 'required' : 'not required'}
@@ -288,12 +288,12 @@ function LanguageSection({
                 : ''}
             </p>
             {version.reviewNote && version.status === 'DRAFT' ? (
-              <p className="mt-2 rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+              <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">
                 Returned with reason: {version.reviewNote}
               </p>
             ) : null}
             {version.status !== 'DRAFT' ? (
-              <pre className="mt-3 max-h-48 overflow-y-auto rounded-md bg-stone-900 p-3 text-xs whitespace-pre-wrap text-stone-300">
+              <pre className="mt-3 max-h-48 overflow-y-auto rounded-md bg-surface-raised p-3 text-xs whitespace-pre-wrap text-ink-soft">
                 {version.body}
               </pre>
             ) : null}
@@ -304,7 +304,7 @@ function LanguageSection({
                     type="button"
                     disabled={busy}
                     onClick={() => loadDraftIntoForm(version)}
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                   >
                     Edit draft
                   </button>
@@ -316,7 +316,7 @@ function LanguageSection({
                         submit({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                   >
                     Submit for review
                   </button>
@@ -329,7 +329,7 @@ function LanguageSection({
                   onClick={() =>
                     void run(() => publish({ data: { versionId: version.id } }))
                   }
-                  className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+                  className="rounded-md bg-gold px-3 py-1.5 font-medium text-night hover:bg-gold-bright disabled:opacity-60"
                 >
                   Publish
                   {versions.some((v) => v.status === 'PUBLISHED')
@@ -344,7 +344,7 @@ function LanguageSection({
                   onClick={() =>
                     void run(() => archive({ data: { versionId: version.id } }))
                   }
-                  className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-400 hover:border-red-700 hover:text-red-400 disabled:opacity-60"
+                  className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-alert hover:text-alert disabled:opacity-60"
                 >
                   Archive
                 </button>
@@ -352,7 +352,7 @@ function LanguageSection({
               {version.status === 'UNDER_REVIEW' && canApprove ? (
                 <Link
                   to="/admin/spiritual-content/review"
-                  className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500"
+                  className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep"
                 >
                   Open in review queue
                 </Link>
@@ -363,30 +363,30 @@ function LanguageSection({
       </ul>
 
       {showForm ? (
-        <div className="mt-4 space-y-3 rounded-md border border-dashed border-stone-700 p-4">
-          <label className="block text-sm text-stone-400">
+        <div className="mt-4 space-y-3 rounded-md border border-dashed border-line-strong p-4">
+          <label className="block text-sm text-ink-soft">
             Title
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value.slice(0, 200))}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Guidance text (plain text; line breaks are preserved)
             <textarea
               value={body}
               onChange={(event) => setBody(event.target.value.slice(0, 20_000))}
               rows={10}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Visibility stage
             <select
               value={stage}
               onChange={(event) => setStage(event.target.value)}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             >
               <option value="AFTER_CONFIRMATION">After confirmation</option>
               <option value="BEFORE_APPOINTMENT">Before appointment</option>
@@ -395,7 +395,7 @@ function LanguageSection({
               </option>
             </select>
           </label>
-          <label className="flex items-center gap-2 text-sm text-stone-400">
+          <label className="flex items-center gap-2 text-sm text-ink-soft">
             <input
               type="checkbox"
               checked={ackRequired}
@@ -404,7 +404,7 @@ function LanguageSection({
             Ask the user to confirm they have read this guidance
           </label>
           {language === 'en' ? (
-            <label className="flex items-center gap-2 text-sm text-stone-400">
+            <label className="flex items-center gap-2 text-sm text-ink-soft">
               <input
                 type="checkbox"
                 checked={allowFallback}
@@ -419,14 +419,14 @@ function LanguageSection({
               type="button"
               disabled={busy}
               onClick={() => void handleSave()}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
             >
               {editingDraft ? 'Save draft' : 'Create draft'}
             </button>
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300"
+              className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft"
             >
               Cancel
             </button>

@@ -50,19 +50,19 @@ function VisualBiblesPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Visual Bibles</h1>
-          <p className="mt-1 text-sm text-stone-400">
+          <p className="mt-1 text-sm text-ink-soft">
             Human-authored visual canon per Sacred House — the approved rules
             every future visual generation must obey. Never AI generated.
           </p>
         </div>
         {housesWithout.length > 0 ? (
           <div className="flex items-end gap-2">
-            <label className="block text-xs text-stone-400">
+            <label className="block text-xs text-ink-soft">
               Sacred House
               <select
                 value={houseId}
                 onChange={(event) => setHouseId(event.target.value)}
-                className="mt-1 w-48 rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                className="mt-1 w-48 rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
               >
                 <option value="">Select…</option>
                 {housesWithout.map((house) => (
@@ -76,7 +76,7 @@ function VisualBiblesPage() {
               type="button"
               disabled={busy || !houseId}
               onClick={() => void handleCreate()}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
             >
               Create Visual Bible
             </button>
@@ -84,28 +84,28 @@ function VisualBiblesPage() {
         ) : null}
       </div>
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}
 
       {data.bibles.length === 0 ? (
-        <p className="mt-10 text-stone-400">No Visual Bibles yet.</p>
+        <p className="mt-10 text-ink-soft">No Visual Bibles yet.</p>
       ) : (
         <ul className="mt-6 space-y-3">
           {data.bibles.map((bible) => (
             <li
               key={bible.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-stone-800 bg-stone-900 px-4 py-3"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-surface-raised px-4 py-3"
             >
               <Link
                 to="/admin/visual-bibles/$id"
                 params={{ id: String(bible.id) }}
-                className="font-medium text-amber-500 hover:underline"
+                className="font-medium text-gold-deep hover:underline"
               >
                 {bible.houseName}
               </Link>
-              <span className="text-xs text-stone-400">
+              <span className="text-xs text-ink-soft">
                 {bible.versions.length > 0
                   ? bible.versions
                       .map(

@@ -72,7 +72,7 @@ function AppointmentsList() {
               status: (event.target.value || undefined) as typeof search.status,
             })
           }
-          className="rounded-md border border-stone-700 bg-stone-900 px-3 py-1.5 text-stone-200"
+          className="rounded-md border border-line-strong bg-surface-raised px-3 py-1.5 text-ink"
         >
           <option value="">All statuses</option>
           {APPOINTMENT_STATUSES.map((status) => (
@@ -90,7 +90,7 @@ function AppointmentsList() {
                 : undefined,
             })
           }
-          className="rounded-md border border-stone-700 bg-stone-900 px-3 py-1.5 text-stone-200"
+          className="rounded-md border border-line-strong bg-surface-raised px-3 py-1.5 text-ink"
         >
           <option value="">All Sacred Houses</option>
           {houses.map((house) => (
@@ -106,13 +106,13 @@ function AppointmentsList() {
             setDate(event.target.value)
             updateSearch({ date: event.target.value || undefined })
           }}
-          className="rounded-md border border-stone-700 bg-stone-900 px-3 py-1.5 text-stone-200"
+          className="rounded-md border border-line-strong bg-surface-raised px-3 py-1.5 text-ink"
         />
       </div>
 
       <table className="mt-6 w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-stone-800 text-xs text-stone-500 uppercase">
+          <tr className="border-b border-line text-xs text-ink-soft uppercase">
             <th className="py-2 pr-4">Starts (UTC)</th>
             <th className="py-2 pr-4">Service</th>
             <th className="py-2 pr-4">Sacred House</th>
@@ -122,7 +122,7 @@ function AppointmentsList() {
         </thead>
         <tbody>
           {rows.map((appointment) => (
-            <tr key={appointment.id} className="border-b border-stone-900">
+            <tr key={appointment.id} className="border-b border-line">
               <td className="py-3 pr-4 font-mono text-xs">
                 {appointment.startsAtUtc}
               </td>
@@ -135,7 +135,7 @@ function AppointmentsList() {
                 <Link
                   to="/admin/appointments/$id"
                   params={{ id: appointment.id }}
-                  className="text-amber-500 hover:text-amber-400"
+                  className="text-gold-deep hover:text-ink"
                 >
                   Open
                 </Link>
@@ -144,7 +144,7 @@ function AppointmentsList() {
           ))}
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={5} className="py-6 text-stone-500">
+              <td colSpan={5} className="py-6 text-ink-soft">
                 No appointments match these filters.
               </td>
             </tr>

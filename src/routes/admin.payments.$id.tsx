@@ -54,14 +54,14 @@ function AdminPaymentDetailPage() {
     <div>
       <Link
         to="/admin/payments"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← All payments
       </Link>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-2xl font-bold">Payment {payment.publicId}</h1>
         {payment.resolutionStatus === 'PAID_REQUIRES_REVIEW' ? (
-          <span className="rounded-full bg-amber-950 px-3 py-1 text-sm text-amber-400">
+          <span className="rounded-full bg-gold/10 px-3 py-1 text-sm text-gold-deep">
             REQUIRES REVIEW
             {payment.reviewReason ? `: ${payment.reviewReason}` : ''}
           </span>
@@ -69,8 +69,8 @@ function AdminPaymentDetailPage() {
       </div>
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <section className="rounded-lg border border-stone-800 bg-stone-900 p-6">
-          <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <section className="rounded-lg border border-line bg-surface-raised p-6">
+          <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
             Payment
           </h2>
           <dl className="mt-4 space-y-2 text-sm">
@@ -120,8 +120,8 @@ function AdminPaymentDetailPage() {
           </dl>
         </section>
 
-        <section className="rounded-lg border border-stone-800 bg-stone-900 p-6">
-          <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <section className="rounded-lg border border-line bg-surface-raised p-6">
+          <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
             Appointment & user
           </h2>
           <dl className="mt-4 space-y-2 text-sm">
@@ -139,19 +139,19 @@ function AdminPaymentDetailPage() {
               }
             />
           </dl>
-          <div className="mt-4 border-t border-stone-800 pt-4">
+          <div className="mt-4 border-t border-line pt-4">
             <button
               type="button"
               onClick={() => void handleReverify()}
               disabled={busy}
-              className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 hover:text-amber-400 disabled:opacity-60"
+              className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep hover:text-ink disabled:opacity-60"
             >
               {busy ? 'Checking with provider…' : 'Re-verify with provider'}
             </button>
             {message ? (
-              <p className="mt-3 text-sm text-stone-400">{message}</p>
+              <p className="mt-3 text-sm text-ink-soft">{message}</p>
             ) : null}
-            <p className="mt-3 text-xs text-stone-500">
+            <p className="mt-3 text-xs text-ink-soft">
               Payment states come only from the verified provider. There is no
               manual override.
             </p>
@@ -159,18 +159,18 @@ function AdminPaymentDetailPage() {
         </section>
       </div>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Webhook & reconciliation history
         </h2>
         {payment.webhookEvents.length === 0 ? (
-          <p className="mt-4 text-sm text-stone-500">
+          <p className="mt-4 text-sm text-ink-soft">
             No webhook events linked to this attempt.
           </p>
         ) : (
           <table className="mt-4 w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-stone-800 text-xs tracking-wider text-stone-500 uppercase">
+              <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
                 <th className="py-2 pr-4">Event</th>
                 <th className="py-2 pr-4">Type</th>
                 <th className="py-2 pr-4">Status</th>
@@ -180,13 +180,13 @@ function AdminPaymentDetailPage() {
             </thead>
             <tbody>
               {payment.webhookEvents.map((event) => (
-                <tr key={event.id} className="border-b border-stone-900">
-                  <td className="py-2 pr-4 text-stone-400">
+                <tr key={event.id} className="border-b border-line">
+                  <td className="py-2 pr-4 text-ink-soft">
                     {event.eventKey.slice(0, 32)}
                   </td>
                   <td className="py-2 pr-4">{event.eventType}</td>
                   <td className="py-2 pr-4">{event.processingStatus}</td>
-                  <td className="py-2 pr-4 text-stone-500">
+                  <td className="py-2 pr-4 text-ink-soft">
                     {event.receivedAt instanceof Date
                       ? event.receivedAt
                           .toISOString()
@@ -194,7 +194,7 @@ function AdminPaymentDetailPage() {
                           .replace('T', ' ')
                       : String(event.receivedAt)}
                   </td>
-                  <td className="py-2 text-stone-500">
+                  <td className="py-2 text-ink-soft">
                     {event.errorCode ?? '—'}
                   </td>
                 </tr>
@@ -210,7 +210,7 @@ function AdminPaymentDetailPage() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4">
-      <dt className="text-stone-400">{label}</dt>
+      <dt className="text-ink-soft">{label}</dt>
       <dd className="text-right break-all">{value}</dd>
     </div>
   )

@@ -60,31 +60,31 @@ function TemplateReviewQueuePage() {
     <div>
       <Link
         to="/admin/prayer-templates"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Templates
       </Link>
       <h1 className="mt-4 text-2xl font-bold">Template review queue</h1>
 
       {queue.length === 0 ? (
-        <p className="mt-8 text-stone-400">Nothing is waiting for review.</p>
+        <p className="mt-8 text-ink-soft">Nothing is waiting for review.</p>
       ) : (
         <ul className="mt-6 space-y-4">
           {queue.map(({ version, template }) => (
             <li
               key={version.id}
-              className="rounded-lg border border-stone-800 bg-stone-900 p-6"
+              className="rounded-lg border border-line bg-surface-raised p-6"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <Link
                     to="/admin/prayer-templates/$id"
                     params={{ id: String(template.id) }}
-                    className="font-medium text-amber-500 hover:underline"
+                    className="font-medium text-gold-deep hover:underline"
                   >
                     {template.code}
                   </Link>
-                  <span className="ml-3 text-sm text-stone-400">
+                  <span className="ml-3 text-sm text-ink-soft">
                     {template.scopeType} ·{' '}
                     {LANGUAGE_LABELS[version.language] ?? version.language} v
                     {version.versionNumber} · priority {version.priority} ·
@@ -92,7 +92,7 @@ function TemplateReviewQueuePage() {
                     {version.targetMinSeconds}–{version.targetMaxSeconds}s
                   </span>
                 </div>
-                <span className="text-xs text-stone-500">
+                <span className="text-xs text-ink-soft">
                   submitted{' '}
                   {version.submittedAt
                     ? new Date(version.submittedAt)
@@ -102,7 +102,7 @@ function TemplateReviewQueuePage() {
                     : '—'}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-stone-500">
+              <p className="mt-2 text-xs text-ink-soft">
                 Inspect the full slot structure on the template page before
                 approving.
               </p>
@@ -113,7 +113,7 @@ function TemplateReviewQueuePage() {
                   onClick={() =>
                     void run(() => approve({ data: { versionId: version.id } }))
                   }
-                  className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-60"
+                  className="rounded-md bg-affirm px-4 py-2 text-sm font-medium text-white hover:bg-affirm/90 disabled:opacity-60"
                 >
                   Approve
                 </button>
@@ -121,7 +121,7 @@ function TemplateReviewQueuePage() {
                   type="button"
                   disabled={busy}
                   onClick={() => setReturning(version.id)}
-                  className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                  className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep disabled:opacity-60"
                 >
                   Return to draft
                 </button>
@@ -134,7 +134,7 @@ function TemplateReviewQueuePage() {
                       setReason(event.target.value.slice(0, 500))
                     }
                     placeholder="Reason (required)"
-                    className="w-full max-w-md rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+                    className="w-full max-w-md rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
                   />
                   <button
                     type="button"
@@ -146,7 +146,7 @@ function TemplateReviewQueuePage() {
                         }),
                       )
                     }
-                    className="rounded-md border border-amber-700 px-3 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+                    className="rounded-md border border-gold px-3 py-2 text-sm text-gold-deep hover:bg-gold/10 disabled:opacity-60"
                   >
                     Confirm return
                   </button>
@@ -157,7 +157,7 @@ function TemplateReviewQueuePage() {
         </ul>
       )}
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}

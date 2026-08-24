@@ -41,7 +41,7 @@ export const Route = createFileRoute('/admin/catalogue/services/$id')({
       <p>Service not found.</p>
       <Link
         to="/admin/catalogue/services"
-        className="text-amber-500 hover:text-amber-400"
+        className="text-gold-deep hover:text-ink"
       >
         Back to services
       </Link>
@@ -108,7 +108,7 @@ function EditServicePage() {
     <div className="max-w-2xl">
       <Link
         to="/admin/catalogue/services"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← All services
       </Link>
@@ -116,10 +116,10 @@ function EditServicePage() {
         <h1 className="text-2xl font-bold">{service.name}</h1>
         <StatusBadge status={service.serviceStatus} />
       </div>
-      <p className="mt-1 font-mono text-xs text-stone-500">{service.code}</p>
+      <p className="mt-1 font-mono text-xs text-ink-soft">{service.code}</p>
 
       {service.reviewNote ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">
           Returned by review: {service.reviewNote}
         </p>
       ) : null}
@@ -130,7 +130,7 @@ function EditServicePage() {
             name="sacredHouseId"
             defaultValue={service.sacredHouseId}
             disabled={!houseChangeable}
-            className="w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-stone-100 disabled:opacity-60"
+            className="w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-ink disabled:opacity-60"
           >
             {houses.map((house) => (
               <option key={house.id} value={house.id}>
@@ -199,13 +199,13 @@ function EditServicePage() {
             />
           </AdminField>
         </div>
-        <p className="text-xs text-stone-500">
+        <p className="text-xs text-ink-soft">
           Leave duration/price/currency empty unless authorised values exist —
           empty fields display publicly as “details provided when opened for
           booking”.
         </p>
         {service.serviceStatus === 'APPROVED' ? (
-          <p className="text-xs text-amber-500">
+          <p className="text-xs text-gold-deep">
             Warning: editing this approved service’s name, slug or description
             removes its approval — it returns to DRAFT and must go through
             review again before it can be published.
@@ -214,7 +214,7 @@ function EditServicePage() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
         >
           {busy ? 'Saving…' : 'Save changes'}
         </button>

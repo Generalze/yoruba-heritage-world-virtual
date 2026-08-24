@@ -18,13 +18,13 @@ function SchedulingList() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Scheduling</h1>
-      <p className="mt-2 text-sm text-stone-400">
+      <p className="mt-2 text-sm text-ink-soft">
         Booking settings and availability belong to the Sacred House —
         individual members are never bookable and have no calendars.
       </p>
       <table className="mt-6 w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-stone-800 text-xs text-stone-500 uppercase">
+          <tr className="border-b border-line text-xs text-ink-soft uppercase">
             <th className="py-2 pr-4">Sacred House</th>
             <th className="py-2 pr-4">Booking</th>
             <th className="py-2 pr-4">Timezone</th>
@@ -33,23 +33,23 @@ function SchedulingList() {
         </thead>
         <tbody>
           {houses.map((house) => (
-            <tr key={house.id} className="border-b border-stone-900">
+            <tr key={house.id} className="border-b border-line">
               <td className="py-3 pr-4">{house.name}</td>
               <td className="py-3 pr-4">
                 {house.settings.bookingEnabled ? (
-                  <span className="text-emerald-400">enabled</span>
+                  <span className="text-affirm">enabled</span>
                 ) : (
-                  <span className="text-stone-500">disabled</span>
+                  <span className="text-ink-soft">disabled</span>
                 )}
               </td>
-              <td className="py-3 pr-4 text-stone-400">
+              <td className="py-3 pr-4 text-ink-soft">
                 {house.settings.schedulingTimezone}
               </td>
               <td className="py-3 text-right">
                 <Link
                   to="/admin/scheduling/$houseId"
                   params={{ houseId: house.id }}
-                  className="text-amber-500 hover:text-amber-400"
+                  className="text-gold-deep hover:text-ink"
                 >
                   Configure
                 </Link>

@@ -102,7 +102,7 @@ function PrayerTemplatePage() {
     <div>
       <Link
         to="/admin/prayer-templates"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Templates
       </Link>
@@ -110,11 +110,11 @@ function PrayerTemplatePage() {
         <h1 className="text-2xl font-bold">{template.code}</h1>
         <div className="flex items-center gap-3 text-sm">
           {template.active ? (
-            <span className="rounded-full bg-emerald-950 px-3 py-1 text-emerald-400">
+            <span className="rounded-full bg-affirm/10 px-3 py-1 text-affirm">
               active
             </span>
           ) : (
-            <span className="rounded-full bg-stone-800 px-3 py-1 text-stone-400">
+            <span className="rounded-full bg-surface px-3 py-1 text-ink-soft">
               inactive
             </span>
           )}
@@ -129,7 +129,7 @@ function PrayerTemplatePage() {
                   }),
                 )
               }
-              className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
             >
               {template.active ? 'Deactivate (future sessions)' : 'Reactivate'}
             </button>
@@ -137,25 +137,25 @@ function PrayerTemplatePage() {
         </div>
       </div>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Scope{' '}
           {data.structureFrozen ? '(frozen — reviewed history exists)' : ''}
         </h2>
         <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
           <div className="flex gap-3">
-            <dt className="text-stone-400">Scope</dt>
+            <dt className="text-ink-soft">Scope</dt>
             <dd>{template.scopeType}</dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Sacred House</dt>
+            <dt className="text-ink-soft">Sacred House</dt>
             <dd>
               {data.houses.find((h) => h.id === template.sacredHouseId)?.name ??
                 '—'}
             </dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Service</dt>
+            <dt className="text-ink-soft">Service</dt>
             <dd>
               {data.services.find((s) => s.id === template.serviceId)?.name ??
                 '—'}
@@ -182,7 +182,7 @@ function PrayerTemplatePage() {
       <PreviewSection houses={data.houses} services={data.services} />
 
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}
@@ -195,15 +195,15 @@ function SlotTable({ definition }: { definition: DefinitionRow }) {
     <div className="mt-3 overflow-x-auto">
       <table className="w-full min-w-[700px] border-separate border-spacing-0 text-xs">
         <thead>
-          <tr className="text-left tracking-wider text-stone-500 uppercase">
-            <th className="border-b border-stone-800 px-2 py-1">#</th>
-            <th className="border-b border-stone-800 px-2 py-1">Key</th>
-            <th className="border-b border-stone-800 px-2 py-1">Kind</th>
-            <th className="border-b border-stone-800 px-2 py-1">Selector</th>
-            <th className="border-b border-stone-800 px-2 py-1">Type</th>
-            <th className="border-b border-stone-800 px-2 py-1">Min/Max</th>
-            <th className="border-b border-stone-800 px-2 py-1">Scopes</th>
-            <th className="border-b border-stone-800 px-2 py-1">
+          <tr className="text-left tracking-wider text-ink-soft uppercase">
+            <th className="border-b border-line px-2 py-1">#</th>
+            <th className="border-b border-line px-2 py-1">Key</th>
+            <th className="border-b border-line px-2 py-1">Kind</th>
+            <th className="border-b border-line px-2 py-1">Selector</th>
+            <th className="border-b border-line px-2 py-1">Type</th>
+            <th className="border-b border-line px-2 py-1">Min/Max</th>
+            <th className="border-b border-line px-2 py-1">Scopes</th>
+            <th className="border-b border-line px-2 py-1">
               Pins / Silence
             </th>
           </tr>
@@ -211,30 +211,30 @@ function SlotTable({ definition }: { definition: DefinitionRow }) {
         <tbody>
           {definition.slots.map((slot) => (
             <tr key={slot.id}>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.position}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.slotKey}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.slotKind}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.selectorMode ?? '—'}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.contentType ? contentTypeLabel(slot.contentType) : '—'}
                 {slot.themeCode ? ` · ${slot.themeCode}` : ''}
                 {slot.variantKind ? ` · ${slot.variantKind}` : ''}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.minSelect}–{slot.maxSelect}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.allowedScopes.join(', ') || '—'}
               </td>
-              <td className="border-b border-stone-900 px-2 py-1">
+              <td className="border-b border-line px-2 py-1">
                 {slot.slotKind === 'SILENCE'
                   ? `${slot.silenceDurationSeconds}s silence`
                   : slot.pins.length > 0
@@ -246,7 +246,7 @@ function SlotTable({ definition }: { definition: DefinitionRow }) {
         </tbody>
       </table>
       {definition.forbiddenPairs.length > 0 ? (
-        <p className="mt-2 text-xs text-stone-400">
+        <p className="mt-2 text-xs text-ink-soft">
           Forbidden pairs:{' '}
           {definition.forbiddenPairs
             .map((pair) => `${pair.contentItemIdA}×${pair.contentItemIdB}`)
@@ -405,9 +405,9 @@ function TemplateLanguageSection({
   }
 
   return (
-    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
+    <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           {LANGUAGE_LABELS[language] ?? language} versions
         </h2>
         {!working && !showForm ? (
@@ -419,7 +419,7 @@ function TemplateLanguageSection({
               setPairs('')
               setShowForm(true)
             }}
-            className="rounded-md border border-stone-700 px-3 py-1.5 text-sm text-stone-300 hover:border-amber-500"
+            className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-soft hover:border-gold-deep"
           >
             New draft
           </button>
@@ -427,7 +427,7 @@ function TemplateLanguageSection({
       </div>
 
       {definitions.length === 0 && !showForm ? (
-        <p className="mt-4 text-sm text-stone-500">
+        <p className="mt-4 text-sm text-ink-soft">
           No {LANGUAGE_LABELS[language] ?? language} versions yet.
         </p>
       ) : null}
@@ -438,7 +438,7 @@ function TemplateLanguageSection({
           return (
             <li
               key={version.id}
-              className="rounded-md border border-stone-800 bg-stone-950 p-4"
+              className="rounded-md border border-line bg-surface p-4"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">
@@ -449,22 +449,22 @@ function TemplateLanguageSection({
                 <span
                   className={`rounded-full px-2.5 py-0.5 text-xs ${
                     version.status === 'PUBLISHED'
-                      ? 'bg-emerald-950 text-emerald-400'
+                      ? 'bg-affirm/10 text-affirm'
                       : version.status === 'ARCHIVED'
-                        ? 'bg-stone-800 text-stone-500'
-                        : 'bg-amber-950 text-amber-400'
+                        ? 'bg-surface text-ink-soft'
+                        : 'bg-gold/10 text-gold-deep'
                   }`}
                 >
                   {version.status.replaceAll('_', ' ')}
                 </span>
               </div>
               {version.definitionSha256 ? (
-                <p className="mt-1 text-xs break-all text-stone-500">
+                <p className="mt-1 text-xs break-all text-ink-soft">
                   Definition SHA-256: {version.definitionSha256}
                 </p>
               ) : null}
               {version.reviewNote && version.status === 'DRAFT' ? (
-                <p className="mt-2 rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+                <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">
                   Returned with reason: {version.reviewNote}
                 </p>
               ) : null}
@@ -476,7 +476,7 @@ function TemplateLanguageSection({
                       type="button"
                       disabled={busy}
                       onClick={() => loadDraftIntoForm(definition)}
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Edit draft
                     </button>
@@ -488,7 +488,7 @@ function TemplateLanguageSection({
                           submit({ data: { versionId: version.id } }),
                         )
                       }
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Submit for review
                     </button>
@@ -503,7 +503,7 @@ function TemplateLanguageSection({
                         publish({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+                    className="rounded-md bg-gold px-3 py-1.5 font-medium text-night hover:bg-gold-bright disabled:opacity-60"
                   >
                     Publish
                   </button>
@@ -517,7 +517,7 @@ function TemplateLanguageSection({
                         archive({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-400 hover:border-red-700 hover:text-red-400 disabled:opacity-60"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-alert hover:text-alert disabled:opacity-60"
                   >
                     Archive
                   </button>
@@ -525,7 +525,7 @@ function TemplateLanguageSection({
                 {version.status === 'UNDER_REVIEW' && canApprove ? (
                   <Link
                     to="/admin/prayer-templates/review"
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep"
                   >
                     Open in review queue
                   </Link>
@@ -537,7 +537,7 @@ function TemplateLanguageSection({
       </ul>
 
       {showForm ? (
-        <div className="mt-4 space-y-4 rounded-md border border-dashed border-stone-700 p-4">
+        <div className="mt-4 space-y-4 rounded-md border border-dashed border-line-strong p-4">
           <div className="grid gap-3 sm:grid-cols-4">
             <NumField
               label="Priority"
@@ -562,9 +562,9 @@ function TemplateLanguageSection({
           </div>
 
           {slots.map((slot, index) => (
-            <div key={index} className="rounded-md border border-stone-800 p-3">
+            <div key={index} className="rounded-md border border-line p-3">
               <div className="grid gap-3 sm:grid-cols-4">
-                <label className="block text-xs text-stone-400">
+                <label className="block text-xs text-ink-soft">
                   Slot key
                   <input
                     value={slot.slotKey}
@@ -573,7 +573,7 @@ function TemplateLanguageSection({
                         slotKey: event.target.value.toUpperCase().slice(0, 60),
                       })
                     }
-                    className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                    className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                   />
                 </label>
                 <NumField
@@ -582,14 +582,14 @@ function TemplateLanguageSection({
                   value={slot.position}
                   onChange={(value) => updateSlot(index, { position: value })}
                 />
-                <label className="block text-xs text-stone-400">
+                <label className="block text-xs text-ink-soft">
                   Kind
                   <select
                     value={slot.slotKind}
                     onChange={(event) =>
                       updateSlot(index, { slotKind: event.target.value })
                     }
-                    className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                    className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                   >
                     {SLOT_KINDS.map((kind) => (
                       <option key={kind} value={kind}>
@@ -608,14 +608,14 @@ function TemplateLanguageSection({
                     }
                   />
                 ) : (
-                  <label className="block text-xs text-stone-400">
+                  <label className="block text-xs text-ink-soft">
                     Selector
                     <select
                       value={slot.selectorMode}
                       onChange={(event) =>
                         updateSlot(index, { selectorMode: event.target.value })
                       }
-                      className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                      className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                     >
                       {SLOT_SELECTOR_MODES.map((mode) => (
                         <option key={mode} value={mode}>
@@ -646,7 +646,7 @@ function TemplateLanguageSection({
                   />
                   {slot.selectorMode === 'ELIGIBLE_FILTER' ? (
                     <>
-                      <label className="block text-xs text-stone-400">
+                      <label className="block text-xs text-ink-soft">
                         Sacred type
                         <select
                           value={slot.contentType}
@@ -655,7 +655,7 @@ function TemplateLanguageSection({
                               contentType: event.target.value,
                             })
                           }
-                          className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                          className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                         >
                           {SACRED_RUNTIME_CONTENT_TYPES.map((type) => (
                             <option key={type} value={type}>
@@ -664,7 +664,7 @@ function TemplateLanguageSection({
                           ))}
                         </select>
                       </label>
-                      <label className="block text-xs text-stone-400">
+                      <label className="block text-xs text-ink-soft">
                         Theme (optional)
                         <input
                           value={slot.themeCode}
@@ -675,16 +675,16 @@ function TemplateLanguageSection({
                                 .slice(0, 60),
                             })
                           }
-                          className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                          className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                         />
                       </label>
-                      <label className="block text-xs text-stone-400 sm:col-span-2">
+                      <label className="block text-xs text-ink-soft sm:col-span-2">
                         Allowed scopes
                         <span className="mt-1 flex gap-3">
                           {CONTENT_SCOPE_TYPES.map((scope) => (
                             <label
                               key={scope}
-                              className="flex items-center gap-1 text-xs text-stone-300"
+                              className="flex items-center gap-1 text-xs text-ink-soft"
                             >
                               <input
                                 type="checkbox"
@@ -704,7 +704,7 @@ function TemplateLanguageSection({
                           ))}
                         </span>
                       </label>
-                      <label className="block text-xs text-stone-400 sm:col-span-2">
+                      <label className="block text-xs text-ink-soft sm:col-span-2">
                         Variant kind (optional)
                         <select
                           value={slot.variantKind}
@@ -713,7 +713,7 @@ function TemplateLanguageSection({
                               variantKind: event.target.value,
                             })
                           }
-                          className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                          className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                         >
                           <option value="">Any</option>
                           {VARIANT_KINDS.map((kind) => (
@@ -725,7 +725,7 @@ function TemplateLanguageSection({
                       </label>
                     </>
                   ) : (
-                    <label className="block text-xs text-stone-400 sm:col-span-2">
+                    <label className="block text-xs text-ink-soft sm:col-span-2">
                       Pinned content version ids (comma-separated)
                       <input
                         value={slot.pinnedContentVersionIds}
@@ -734,7 +734,7 @@ function TemplateLanguageSection({
                             pinnedContentVersionIds: event.target.value,
                           })
                         }
-                        className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                        className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                       />
                     </label>
                   )}
@@ -747,7 +747,7 @@ function TemplateLanguageSection({
                     current.filter((_, slotIndex) => slotIndex !== index),
                   )
                 }
-                className="mt-2 rounded-md border border-stone-700 px-2 py-1 text-xs text-stone-400 hover:border-red-700 hover:text-red-400"
+                className="mt-2 rounded-md border border-line-strong px-2 py-1 text-xs text-ink-soft hover:border-alert hover:text-alert"
               >
                 Remove slot
               </button>
@@ -761,17 +761,17 @@ function TemplateLanguageSection({
                 { ...EMPTY_SLOT, position: String(current.length + 1) },
               ])
             }
-            className="rounded-md border border-stone-700 px-3 py-1.5 text-sm text-stone-300 hover:border-amber-500"
+            className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-soft hover:border-gold-deep"
           >
             Add slot
           </button>
 
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Forbidden content-item pairs (itemA:itemB, comma-separated)
             <input
               value={pairs}
               onChange={(event) => setPairs(event.target.value)}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
 
@@ -780,7 +780,7 @@ function TemplateLanguageSection({
               type="button"
               disabled={busy}
               onClick={() => void handleSave()}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
             >
               {editingVersionId != null ? 'Save draft' : 'Create draft'}
             </button>
@@ -790,7 +790,7 @@ function TemplateLanguageSection({
                 setShowForm(false)
                 setEditingVersionId(null)
               }}
-              className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300"
+              className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft"
             >
               Cancel
             </button>
@@ -852,17 +852,17 @@ function PreviewSection({
   }
 
   return (
-    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-      <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+    <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+      <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
         Resolver preview (staff only — real autonomous resolver)
       </h2>
       <div className="mt-4 grid gap-3 sm:grid-cols-4">
-        <label className="block text-xs text-stone-400">
+        <label className="block text-xs text-ink-soft">
           Service
           <select
             value={serviceId}
             onChange={(event) => setServiceId(event.target.value)}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           >
             <option value="">None</option>
             {services.map((service) => (
@@ -872,12 +872,12 @@ function PreviewSection({
             ))}
           </select>
         </label>
-        <label className="block text-xs text-stone-400">
+        <label className="block text-xs text-ink-soft">
           Sacred House
           <select
             value={houseId}
             onChange={(event) => setHouseId(event.target.value)}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           >
             <option value="">None</option>
             {houses.map((house) => (
@@ -887,23 +887,23 @@ function PreviewSection({
             ))}
           </select>
         </label>
-        <label className="block text-xs text-stone-400">
+        <label className="block text-xs text-ink-soft">
           Language
           <select
             value={language}
             onChange={(event) => setLanguage(event.target.value)}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           >
             <option value="en">English</option>
             <option value="yo">Yorùbá</option>
           </select>
         </label>
-        <label className="block text-xs text-stone-400">
+        <label className="block text-xs text-ink-soft">
           Variation seed
           <input
             value={seed}
             onChange={(event) => setSeed(event.target.value.slice(0, 120))}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           />
         </label>
       </div>
@@ -911,31 +911,31 @@ function PreviewSection({
         type="button"
         disabled={busy || !seed.trim()}
         onClick={() => void runPreview()}
-        className="mt-3 rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 disabled:opacity-60"
+        className="mt-3 rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep disabled:opacity-60"
       >
         Run preview
       </button>
       {error ? (
-        <p className="mt-3 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-300">
+        <p className="mt-3 rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">
           {error}
         </p>
       ) : null}
       {result ? (
         result.status === 'RESOLVED' ? (
-          <div className="mt-4 rounded-md border border-stone-800 bg-stone-950 p-4 text-sm">
+          <div className="mt-4 rounded-md border border-line bg-surface p-4 text-sm">
             <p>
               Resolved template{' '}
-              <span className="font-medium text-amber-500">
+              <span className="font-medium text-gold-deep">
                 {result.templateCode}
               </span>{' '}
               v{result.templateVersionNumber} ({result.templateScopeType}) ·
               est. {result.estimatedSeconds}s of {result.targetMinSeconds}–
               {result.targetMaxSeconds}s
             </p>
-            <p className="mt-1 text-xs break-all text-stone-500">
+            <p className="mt-1 text-xs break-all text-ink-soft">
               Definition SHA-256: {result.definitionSha256}
             </p>
-            <ul className="mt-3 space-y-1 text-xs text-stone-300">
+            <ul className="mt-3 space-y-1 text-xs text-ink-soft">
               {result.slots.map((slot) => (
                 <li key={slot.slotKey}>
                   {slot.position}. {slot.slotKey} —{' '}
@@ -952,7 +952,7 @@ function PreviewSection({
             </ul>
           </div>
         ) : (
-          <p className="mt-4 rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-sm text-amber-300">
+          <p className="mt-4 rounded-md border border-gold bg-gold/10 px-3 py-2 text-sm text-gold-deep">
             NO_VALID_TEMPLATE — {result.consideredTemplates} applicable
             template(s) considered; none could resolve with currently eligible
             content.
@@ -975,7 +975,7 @@ function NumField({
   small?: boolean
 }) {
   return (
-    <label className={`block ${small ? 'text-xs' : 'text-sm'} text-stone-400`}>
+    <label className={`block ${small ? 'text-xs' : 'text-sm'} text-ink-soft`}>
       {label}
       <input
         value={value}
@@ -983,7 +983,7 @@ function NumField({
         onChange={(event) =>
           onChange(event.target.value.replace(/[^0-9-]/g, '').slice(0, 6))
         }
-        className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+        className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
       />
     </label>
   )

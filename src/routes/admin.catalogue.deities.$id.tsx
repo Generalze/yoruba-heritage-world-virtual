@@ -45,7 +45,7 @@ export const Route = createFileRoute('/admin/catalogue/deities/$id')({
       <p>Profile not found.</p>
       <Link
         to="/admin/catalogue/deities"
-        className="text-amber-500 hover:text-amber-400"
+        className="text-gold-deep hover:text-ink"
       >
         Back to deity profiles
       </Link>
@@ -105,7 +105,7 @@ function EditDeityPage() {
     <div className="max-w-2xl">
       <Link
         to="/admin/catalogue/deities"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← All deity profiles
       </Link>
@@ -113,15 +113,15 @@ function EditDeityPage() {
         <h1 className="text-2xl font-bold">{deity.name}</h1>
         <StatusBadge status={deity.profileStatus} />
       </div>
-      <p className="mt-1 font-mono text-xs text-stone-500">{deity.code}</p>
+      <p className="mt-1 font-mono text-xs text-ink-soft">{deity.code}</p>
 
       {deity.reviewNote ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">
           Returned by review: {deity.reviewNote}
         </p>
       ) : null}
       {deity.approvedAt ? (
-        <p className="mt-2 text-xs text-stone-500">
+        <p className="mt-2 text-xs text-ink-soft">
           Approved {new Date(deity.approvedAt).toLocaleString()}
         </p>
       ) : null}
@@ -167,7 +167,7 @@ function EditDeityPage() {
           />
         </AdminField>
         {deity.profileStatus === 'APPROVED' ? (
-          <p className="text-xs text-amber-500">
+          <p className="text-xs text-gold-deep">
             Warning: editing this approved profile (including relationships)
             removes its approval — the record returns to DRAFT and must go
             through review again before it can be published.
@@ -176,17 +176,17 @@ function EditDeityPage() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
         >
           {busy ? 'Saving…' : 'Save changes'}
         </button>
       </form>
 
       <section className="mt-8">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Connected Sacred Houses
         </h2>
-        <p className="mt-1 text-xs text-stone-500">
+        <p className="mt-1 text-xs text-ink-soft">
           Relationships are selected explicitly — never inferred.
         </p>
         <ul className="mt-3 space-y-2">
@@ -219,7 +219,7 @@ function EditDeityPage() {
       </section>
 
       <section className="mt-8">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Connected services
         </h2>
         <ul className="mt-3 space-y-2">
@@ -248,7 +248,7 @@ function EditDeityPage() {
                 />
                 <span>
                   {row.service.name}
-                  <span className="text-stone-500"> — {row.houseName}</span>
+                  <span className="text-ink-soft"> — {row.houseName}</span>
                 </span>
               </li>
             )

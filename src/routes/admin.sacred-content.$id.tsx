@@ -89,7 +89,7 @@ function SacredItemPage() {
     <div>
       <Link
         to="/admin/sacred-content"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Sacred library
       </Link>
@@ -97,11 +97,11 @@ function SacredItemPage() {
         <h1 className="text-2xl font-bold">{item.code}</h1>
         <div className="flex items-center gap-3 text-sm">
           {item.active ? (
-            <span className="rounded-full bg-emerald-950 px-3 py-1 text-emerald-400">
+            <span className="rounded-full bg-affirm/10 px-3 py-1 text-affirm">
               active
             </span>
           ) : (
-            <span className="rounded-full bg-stone-800 px-3 py-1 text-stone-400">
+            <span className="rounded-full bg-surface px-3 py-1 text-ink-soft">
               inactive
             </span>
           )}
@@ -114,7 +114,7 @@ function SacredItemPage() {
                   setActive({ data: { id: item.id, active: !item.active } }),
                 )
               }
-              className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
             >
               {item.active ? 'Deactivate (future runtime)' : 'Reactivate'}
             </button>
@@ -122,29 +122,29 @@ function SacredItemPage() {
         </div>
       </div>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Structure{' '}
           {data.structureFrozen ? '(frozen — reviewed history exists)' : ''}
         </h2>
         <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
           <div className="flex gap-3">
-            <dt className="text-stone-400">Type</dt>
+            <dt className="text-ink-soft">Type</dt>
             <dd>{contentTypeLabel(item.contentType)}</dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Scope</dt>
+            <dt className="text-ink-soft">Scope</dt>
             <dd>{item.scopeType}</dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Sacred House</dt>
+            <dt className="text-ink-soft">Sacred House</dt>
             <dd>
               {data.houses.find((h) => h.id === item.sacredHouseId)?.name ??
                 '—'}
             </dd>
           </div>
           <div className="flex gap-3">
-            <dt className="text-stone-400">Service</dt>
+            <dt className="text-ink-soft">Service</dt>
             <dd>
               {data.services.find((s) => s.id === item.serviceId)?.name ?? '—'}
             </dd>
@@ -169,7 +169,7 @@ function SacredItemPage() {
       ))}
 
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}
@@ -311,9 +311,9 @@ function SacredLanguageSection({
   }
 
   return (
-    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
+    <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           {LANGUAGE_LABELS[language] ?? language} versions
         </h2>
         {!working && !showForm ? (
@@ -326,7 +326,7 @@ function SacredLanguageSection({
               setProfileForm({ ...EMPTY_PROFILE })
               setShowForm(true)
             }}
-            className="rounded-md border border-stone-700 px-3 py-1.5 text-sm text-stone-300 hover:border-amber-500"
+            className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-soft hover:border-gold-deep"
           >
             New draft
           </button>
@@ -334,7 +334,7 @@ function SacredLanguageSection({
       </div>
 
       {versions.length === 0 && !showForm ? (
-        <p className="mt-4 text-sm text-stone-500">
+        <p className="mt-4 text-sm text-ink-soft">
           No {LANGUAGE_LABELS[language] ?? language} versions yet. Sacred text
           is written by authorized people only — never generated, never
           translated automatically.
@@ -350,7 +350,7 @@ function SacredLanguageSection({
           return (
             <li
               key={version.id}
-              className="rounded-md border border-stone-800 bg-stone-950 p-4"
+              className="rounded-md border border-line bg-surface p-4"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">
@@ -360,10 +360,10 @@ function SacredLanguageSection({
                   <span
                     className={`rounded-full px-2.5 py-0.5 ${
                       version.status === 'PUBLISHED'
-                        ? 'bg-emerald-950 text-emerald-400'
+                        ? 'bg-affirm/10 text-affirm'
                         : version.status === 'ARCHIVED'
-                          ? 'bg-stone-800 text-stone-500'
-                          : 'bg-amber-950 text-amber-400'
+                          ? 'bg-surface text-ink-soft'
+                          : 'bg-gold/10 text-gold-deep'
                     }`}
                   >
                     Cultural: {version.status.replaceAll('_', ' ')}
@@ -371,11 +371,11 @@ function SacredLanguageSection({
                   <span
                     className={`rounded-full px-2.5 py-0.5 ${
                       profile?.rightsStatus === 'CLEARED'
-                        ? 'bg-emerald-950 text-emerald-400'
+                        ? 'bg-affirm/10 text-affirm'
                         : profile?.rightsStatus === 'RESTRICTED' ||
                             profile?.rightsStatus === 'WITHDRAWN'
-                          ? 'bg-red-950 text-red-400'
-                          : 'bg-stone-800 text-stone-400'
+                          ? 'bg-alert/10 text-alert'
+                          : 'bg-surface text-ink-soft'
                     }`}
                   >
                     Rights:{' '}
@@ -387,8 +387,8 @@ function SacredLanguageSection({
                   <span
                     className={`rounded-full px-2.5 py-0.5 ${
                       check?.eligible
-                        ? 'bg-emerald-950 text-emerald-400'
-                        : 'bg-stone-800 text-stone-400'
+                        ? 'bg-affirm/10 text-affirm'
+                        : 'bg-surface text-ink-soft'
                     }`}
                   >
                     Runtime: {check?.eligible ? 'ELIGIBLE' : 'NOT ELIGIBLE'}
@@ -397,7 +397,7 @@ function SacredLanguageSection({
               </div>
 
               {profile ? (
-                <dl className="mt-3 grid gap-1 text-xs text-stone-400 sm:grid-cols-2">
+                <dl className="mt-3 grid gap-1 text-xs text-ink-soft sm:grid-cols-2">
                   <div>Variant: {profile.variantKind}</div>
                   <div>Provenance: {profile.provenanceType}</div>
                   <div>
@@ -436,18 +436,18 @@ function SacredLanguageSection({
               ) : null}
 
               {check && !check.eligible && version.status === 'PUBLISHED' ? (
-                <p className="mt-2 text-xs text-stone-500">
+                <p className="mt-2 text-xs text-ink-soft">
                   Blocked by: {check.failures.join(', ')}
                 </p>
               ) : null}
 
               {version.reviewNote && version.status === 'DRAFT' ? (
-                <p className="mt-2 rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+                <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">
                   Returned with reason: {version.reviewNote}
                 </p>
               ) : null}
               {version.status !== 'DRAFT' ? (
-                <pre className="mt-3 max-h-48 overflow-y-auto rounded-md bg-stone-900 p-3 text-xs whitespace-pre-wrap text-stone-300">
+                <pre className="mt-3 max-h-48 overflow-y-auto rounded-md bg-surface-raised p-3 text-xs whitespace-pre-wrap text-ink-soft">
                   {version.body}
                 </pre>
               ) : null}
@@ -459,7 +459,7 @@ function SacredLanguageSection({
                       type="button"
                       disabled={busy}
                       onClick={() => loadDraftIntoForm(version)}
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Edit draft & profile
                     </button>
@@ -471,7 +471,7 @@ function SacredLanguageSection({
                           submit({ data: { versionId: version.id } }),
                         )
                       }
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Submit for review
                     </button>
@@ -486,7 +486,7 @@ function SacredLanguageSection({
                         publish({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+                    className="rounded-md bg-gold px-3 py-1.5 font-medium text-night hover:bg-gold-bright disabled:opacity-60"
                   >
                     Publish
                   </button>
@@ -500,7 +500,7 @@ function SacredLanguageSection({
                         archive({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-400 hover:border-red-700 hover:text-red-400 disabled:opacity-60"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-alert hover:text-alert disabled:opacity-60"
                   >
                     Archive
                   </button>
@@ -508,7 +508,7 @@ function SacredLanguageSection({
                 {version.status === 'UNDER_REVIEW' && canApprove ? (
                   <Link
                     to="/admin/sacred-content/review"
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep"
                   >
                     Open in review queue
                   </Link>
@@ -534,7 +534,7 @@ function SacredLanguageSection({
                             )
                           }
                         }}
-                        className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                        className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                       >
                         Rights → {RIGHTS_STATUS_LABELS[next] ?? next}
                       </button>
@@ -556,8 +556,8 @@ function SacredLanguageSection({
                     }
                     className={`rounded-md px-3 py-1.5 font-medium disabled:opacity-60 ${
                       profile.runtimeEnabled
-                        ? 'border border-red-800 text-red-400 hover:bg-red-950'
-                        : 'bg-emerald-700 text-white hover:bg-emerald-600'
+                        ? 'border border-alert/40 text-alert hover:bg-alert/10'
+                        : 'bg-affirm text-white hover:bg-affirm/90'
                     }`}
                   >
                     {profile.runtimeEnabled
@@ -575,7 +575,7 @@ function SacredLanguageSection({
                       setRightsNote(event.target.value.slice(0, 1000))
                     }
                     placeholder={`Reason for ${rightsNoteFor.status} (required)`}
-                    className="w-full max-w-md rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+                    className="w-full max-w-md rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
                   />
                   <button
                     type="button"
@@ -592,7 +592,7 @@ function SacredLanguageSection({
                         setRightsNoteFor(null)
                       })
                     }
-                    className="rounded-md border border-amber-700 px-3 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+                    className="rounded-md border border-gold px-3 py-2 text-sm text-gold-deep hover:bg-gold/10 disabled:opacity-60"
                   >
                     Confirm
                   </button>
@@ -604,23 +604,23 @@ function SacredLanguageSection({
       </ul>
 
       {showForm ? (
-        <div className="mt-4 space-y-3 rounded-md border border-dashed border-stone-700 p-4">
-          <label className="block text-sm text-stone-400">
+        <div className="mt-4 space-y-3 rounded-md border border-dashed border-line-strong p-4">
+          <label className="block text-sm text-ink-soft">
             Title
             <input
               value={title}
               onChange={(event) => setTitle(event.target.value.slice(0, 200))}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Sacred text (human-authored plain text; diacritics and line breaks
             are preserved exactly)
             <textarea
               value={body}
               onChange={(event) => setBody(event.target.value.slice(0, 20_000))}
               rows={10}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
 
@@ -723,7 +723,7 @@ function SacredLanguageSection({
               }
             />
           </div>
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Internal provenance note (staff only, never public)
             <textarea
               value={profileForm.internalProvenanceNote}
@@ -734,10 +734,10 @@ function SacredLanguageSection({
                 }))
               }
               rows={3}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
-          <label className="flex items-center gap-2 text-sm text-stone-400">
+          <label className="flex items-center gap-2 text-sm text-ink-soft">
             <input
               type="checkbox"
               checked={profileForm.repeatable}
@@ -750,7 +750,7 @@ function SacredLanguageSection({
             />
             Repeatable — leadership permits reuse for the same participant
           </label>
-          <label className="flex items-start gap-2 text-sm text-stone-300">
+          <label className="flex items-start gap-2 text-sm text-ink-soft">
             <input
               type="checkbox"
               checked={profileForm.digitalStorageAuthorized}
@@ -773,7 +773,7 @@ function SacredLanguageSection({
               type="button"
               disabled={busy}
               onClick={() => void handleSave()}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
             >
               {editingVersionId != null ? 'Save draft' : 'Create draft'}
             </button>
@@ -783,7 +783,7 @@ function SacredLanguageSection({
                 setShowForm(false)
                 setEditingVersionId(null)
               }}
-              className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300"
+              className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft"
             >
               Cancel
             </button>
@@ -806,12 +806,12 @@ function SelectField({
   onChange: (value: string) => void
 }) {
   return (
-    <label className="block text-sm text-stone-400">
+    <label className="block text-sm text-ink-soft">
       {label}
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+        className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
       >
         {options.map((option) => (
           <option key={option} value={option}>
@@ -833,12 +833,12 @@ function TextField({
   onChange: (value: string) => void
 }) {
   return (
-    <label className="block text-sm text-stone-400">
+    <label className="block text-sm text-ink-soft">
       {label}
       <input
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+        className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
       />
     </label>
   )

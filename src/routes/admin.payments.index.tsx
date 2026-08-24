@@ -76,12 +76,12 @@ function AdminPaymentsPage() {
       </div>
 
       {rows.length === 0 ? (
-        <p className="mt-8 text-stone-400">No payments match this filter.</p>
+        <p className="mt-8 text-ink-soft">No payments match this filter.</p>
       ) : (
         <div className="mt-6 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-stone-800 text-xs tracking-wider text-stone-500 uppercase">
+              <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
                 <th className="py-2 pr-4">Payment</th>
                 <th className="py-2 pr-4">Provider</th>
                 <th className="py-2 pr-4">Amount</th>
@@ -95,9 +95,9 @@ function AdminPaymentsPage() {
               {rows.map((row) => (
                 <tr
                   key={row.id}
-                  className={`border-b border-stone-900 ${
+                  className={`border-b border-line ${
                     row.resolutionStatus === 'PAID_REQUIRES_REVIEW'
-                      ? 'bg-amber-950/20'
+                      ? 'bg-gold/10'
                       : ''
                   }`}
                 >
@@ -105,7 +105,7 @@ function AdminPaymentsPage() {
                     <Link
                       to="/admin/payments/$id"
                       params={{ id: String(row.id) }}
-                      className="text-amber-500 hover:text-amber-400"
+                      className="text-gold-deep hover:text-ink"
                     >
                       {row.publicId.slice(0, 8)}…
                     </Link>
@@ -117,15 +117,15 @@ function AdminPaymentsPage() {
                   <td className="py-2 pr-4">{row.status}</td>
                   <td className="py-2 pr-4">
                     {row.resolutionStatus === 'PAID_REQUIRES_REVIEW' ? (
-                      <span className="rounded-full bg-amber-950 px-2 py-0.5 text-xs text-amber-400">
+                      <span className="rounded-full bg-gold/10 px-2 py-0.5 text-xs text-gold-deep">
                         REVIEW{row.reviewReason ? `: ${row.reviewReason}` : ''}
                       </span>
                     ) : (
                       row.resolutionStatus
                     )}
                   </td>
-                  <td className="py-2 pr-4 text-stone-400">{row.userEmail}</td>
-                  <td className="py-2 text-stone-500">
+                  <td className="py-2 pr-4 text-ink-soft">{row.userEmail}</td>
+                  <td className="py-2 text-ink-soft">
                     {row.createdAt instanceof Date
                       ? row.createdAt
                           .toISOString()
@@ -158,8 +158,8 @@ function FilterLink({
       search={search}
       className={`rounded-full border px-3 py-1 ${
         active
-          ? 'border-amber-500 text-amber-400'
-          : 'border-stone-700 text-stone-400 hover:border-amber-600'
+          ? 'border-gold text-gold-deep'
+          : 'border-line-strong text-ink-soft hover:border-gold-deep'
       }`}
     >
       {label}

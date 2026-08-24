@@ -40,7 +40,7 @@ function NewDeityPage() {
   return (
     <div className="max-w-xl">
       <h1 className="text-2xl font-bold">New deity profile</h1>
-      <p className="mt-2 text-sm text-stone-400">
+      <p className="mt-2 text-sm text-ink-soft">
         New profiles always start as DRAFT — publication requires review and
         approval. Enter only approved content; leave the description empty if
         approved text does not exist yet.
@@ -84,7 +84,7 @@ function NewDeityPage() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
         >
           {busy ? 'Creating…' : 'Create draft'}
         </button>

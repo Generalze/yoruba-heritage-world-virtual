@@ -27,7 +27,7 @@ function CatalogueDashboard() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Spiritual Catalogue</h1>
-      <p className="mt-2 max-w-2xl text-sm text-stone-400">
+      <p className="mt-2 max-w-2xl text-sm text-ink-soft">
         New records start as drafts. Drafts are submitted for review; approval
         and publication are Admin authorities. Nothing appears publicly until it
         is approved, published and active.
@@ -37,10 +37,10 @@ function CatalogueDashboard() {
           <Link
             key={section.to}
             to={section.to}
-            className="rounded-lg border border-stone-800 bg-stone-900 p-5 transition-colors hover:border-amber-600"
+            className="rounded-lg border border-line bg-surface-raised p-5 transition-colors hover:border-gold-deep"
           >
             <h2 className="font-semibold">{section.title}</h2>
-            <p className="mt-2 text-xs text-stone-400">{section.detail}</p>
+            <p className="mt-2 text-xs text-ink-soft">{section.detail}</p>
           </Link>
         ))}
       </div>

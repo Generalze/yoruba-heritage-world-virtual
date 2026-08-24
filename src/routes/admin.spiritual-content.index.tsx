@@ -50,13 +50,13 @@ function SpiritualContentLibraryPage() {
         <div className="flex items-center gap-3">
           <Link
             to="/admin/spiritual-content/review"
-            className="text-sm text-stone-400 hover:text-amber-500"
+            className="text-sm text-ink-soft hover:text-ink"
           >
             Review queue →
           </Link>
           <Link
             to="/admin/spiritual-content/new"
-            className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500"
+            className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright"
           >
             New content item
           </Link>
@@ -80,7 +80,7 @@ function SpiritualContentLibraryPage() {
       </div>
 
       {data.items.length === 0 ? (
-        <p className="mt-8 text-stone-400">
+        <p className="mt-8 text-ink-soft">
           No content items yet. The library starts empty until authorized staff
           add human-authored guidance.
         </p>
@@ -88,7 +88,7 @@ function SpiritualContentLibraryPage() {
         <div className="mt-6 overflow-x-auto">
           <table className="w-full text-left text-sm">
             <thead>
-              <tr className="border-b border-stone-800 text-xs tracking-wider text-stone-500 uppercase">
+              <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
                 <th className="py-2 pr-4">Code</th>
                 <th className="py-2 pr-4">Type</th>
                 <th className="py-2 pr-4">Scope</th>
@@ -101,12 +101,12 @@ function SpiritualContentLibraryPage() {
             </thead>
             <tbody>
               {data.items.map((item) => (
-                <tr key={item.id} className="border-b border-stone-900">
+                <tr key={item.id} className="border-b border-line">
                   <td className="py-2 pr-4">
                     <Link
                       to="/admin/spiritual-content/$id"
                       params={{ id: String(item.id) }}
-                      className="text-amber-500 hover:text-amber-400"
+                      className="text-gold-deep hover:text-ink"
                     >
                       {item.code}
                     </Link>
@@ -115,7 +115,7 @@ function SpiritualContentLibraryPage() {
                     {contentTypeLabel(item.contentType)}
                   </td>
                   <td className="py-2 pr-4">{item.scopeType}</td>
-                  <td className="py-2 pr-4 text-stone-400">
+                  <td className="py-2 pr-4 text-ink-soft">
                     {item.scopeType === 'SACRED_HOUSE'
                       ? houseName(item.sacredHouseId)
                       : item.scopeType === 'SERVICE'
@@ -128,12 +128,12 @@ function SpiritualContentLibraryPage() {
                   <td className="py-2 pr-4">
                     <VersionSummary summary={item.yo} />
                   </td>
-                  <td className="py-2 pr-4 text-stone-500">{item.sortOrder}</td>
+                  <td className="py-2 pr-4 text-ink-soft">{item.sortOrder}</td>
                   <td className="py-2">
                     {item.active ? (
-                      <span className="text-emerald-400">yes</span>
+                      <span className="text-affirm">yes</span>
                     ) : (
-                      <span className="text-stone-500">no</span>
+                      <span className="text-ink-soft">no</span>
                     )}
                   </td>
                 </tr>
@@ -158,14 +158,14 @@ function VersionSummary({
   return (
     <span className="text-xs">
       {summary.publishedVersion != null ? (
-        <span className="text-emerald-400">
+        <span className="text-affirm">
           v{summary.publishedVersion} live
         </span>
       ) : (
-        <span className="text-stone-500">none</span>
+        <span className="text-ink-soft">none</span>
       )}
       {summary.workingStatus ? (
-        <span className="ml-2 text-amber-400">
+        <span className="ml-2 text-gold-deep">
           v{summary.workingVersion} {summary.workingStatus.toLowerCase()}
         </span>
       ) : null}
@@ -188,8 +188,8 @@ function FilterLink({
       search={search}
       className={`rounded-full border px-3 py-1 ${
         active
-          ? 'border-amber-500 text-amber-400'
-          : 'border-stone-700 text-stone-400 hover:border-amber-600'
+          ? 'border-gold text-gold-deep'
+          : 'border-line-strong text-ink-soft hover:border-gold-deep'
       }`}
     >
       {label}

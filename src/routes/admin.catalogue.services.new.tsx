@@ -46,7 +46,7 @@ function NewServicePage() {
   return (
     <div className="max-w-xl">
       <h1 className="text-2xl font-bold">New service</h1>
-      <p className="mt-2 text-sm text-stone-400">
+      <p className="mt-2 text-sm text-ink-soft">
         New services start as DRAFT. Prices and durations stay empty until
         authorised values exist — the system never invents them.
       </p>
@@ -55,7 +55,7 @@ function NewServicePage() {
           <select
             name="sacredHouseId"
             required
-            className="w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-stone-100"
+            className="w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-ink"
           >
             {houses.map((house) => (
               <option key={house.id} value={house.id}>
@@ -102,7 +102,7 @@ function NewServicePage() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
         >
           {busy ? 'Creating…' : 'Create draft'}
         </button>

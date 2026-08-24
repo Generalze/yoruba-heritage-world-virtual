@@ -30,19 +30,19 @@ function ReviewQueuePage() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Review Queue</h1>
-      <p className="mt-2 text-sm text-stone-400">
+      <p className="mt-2 text-sm text-ink-soft">
         Records submitted for review. Open a record to approve it or return it
         to draft with a reason.
       </p>
 
       {items.length === 0 ? (
-        <p className="mt-8 text-sm text-stone-500">
+        <p className="mt-8 text-sm text-ink-soft">
           Nothing is waiting for review.
         </p>
       ) : (
         <table className="mt-6 w-full text-left text-sm">
           <thead>
-            <tr className="border-b border-stone-800 text-xs text-stone-500 uppercase">
+            <tr className="border-b border-line text-xs text-ink-soft uppercase">
               <th className="py-2 pr-4">Type</th>
               <th className="py-2 pr-4">Name</th>
               <th className="py-2 pr-4">Status</th>
@@ -54,16 +54,16 @@ function ReviewQueuePage() {
             {items.map((item) => (
               <tr
                 key={`${item.kind}-${item.id}`}
-                className="border-b border-stone-900"
+                className="border-b border-line"
               >
-                <td className="py-3 pr-4 text-stone-400">
+                <td className="py-3 pr-4 text-ink-soft">
                   {KIND_LABEL[item.kind]}
                 </td>
                 <td className="py-3 pr-4">{item.name}</td>
                 <td className="py-3 pr-4">
                   <StatusBadge status="UNDER_REVIEW" />
                 </td>
-                <td className="py-3 pr-4 text-stone-400">
+                <td className="py-3 pr-4 text-ink-soft">
                   {new Date(item.updatedAt).toLocaleString()}
                 </td>
                 <td className="py-3 text-right">
@@ -71,7 +71,7 @@ function ReviewQueuePage() {
                     <Link
                       to="/admin/catalogue/deities/$id"
                       params={{ id: item.id }}
-                      className="text-amber-500 hover:text-amber-400"
+                      className="text-gold-deep hover:text-ink"
                     >
                       Review
                     </Link>
@@ -79,7 +79,7 @@ function ReviewQueuePage() {
                     <Link
                       to="/admin/catalogue/sacred-houses/$id"
                       params={{ id: item.id }}
-                      className="text-amber-500 hover:text-amber-400"
+                      className="text-gold-deep hover:text-ink"
                     >
                       Review
                     </Link>
@@ -87,7 +87,7 @@ function ReviewQueuePage() {
                     <Link
                       to="/admin/catalogue/services/$id"
                       params={{ id: item.id }}
-                      className="text-amber-500 hover:text-amber-400"
+                      className="text-gold-deep hover:text-ink"
                     >
                       Review
                     </Link>

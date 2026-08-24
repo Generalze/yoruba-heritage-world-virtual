@@ -45,7 +45,7 @@ function NewHousePage() {
   return (
     <div className="max-w-xl">
       <h1 className="text-2xl font-bold">New Sacred House</h1>
-      <p className="mt-2 text-sm text-stone-400">
+      <p className="mt-2 text-sm text-ink-soft">
         New Sacred Houses start as DRAFT. Enter only approved content.
       </p>
       <form onSubmit={handleSubmit} className="mt-6 space-y-4">
@@ -87,7 +87,7 @@ function NewHousePage() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
         >
           {busy ? 'Creating…' : 'Create draft'}
         </button>

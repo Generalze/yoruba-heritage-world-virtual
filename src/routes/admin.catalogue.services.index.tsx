@@ -17,14 +17,14 @@ function AdminServicesList() {
         <h1 className="text-2xl font-bold">Services</h1>
         <Link
           to="/admin/catalogue/services/new"
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright"
         >
           New service
         </Link>
       </div>
       <table className="mt-6 w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-stone-800 text-xs text-stone-500 uppercase">
+          <tr className="border-b border-line text-xs text-ink-soft uppercase">
             <th className="py-2 pr-4">Name</th>
             <th className="py-2 pr-4">Sacred House</th>
             <th className="py-2 pr-4">Status</th>
@@ -33,9 +33,9 @@ function AdminServicesList() {
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.service.id} className="border-b border-stone-900">
+            <tr key={row.service.id} className="border-b border-line">
               <td className="py-3 pr-4">{row.service.name}</td>
-              <td className="py-3 pr-4 text-stone-400">{row.houseName}</td>
+              <td className="py-3 pr-4 text-ink-soft">{row.houseName}</td>
               <td className="py-3 pr-4">
                 <StatusBadge status={row.service.serviceStatus} />
               </td>
@@ -43,7 +43,7 @@ function AdminServicesList() {
                 <Link
                   to="/admin/catalogue/services/$id"
                   params={{ id: row.service.id }}
-                  className="text-amber-500 hover:text-amber-400"
+                  className="text-gold-deep hover:text-ink"
                 >
                   Open
                 </Link>

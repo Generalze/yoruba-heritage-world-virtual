@@ -69,32 +69,32 @@ function NewContentItemPage() {
     <div className="max-w-2xl">
       <Link
         to="/admin/spiritual-content"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Library
       </Link>
       <h1 className="mt-4 text-2xl font-bold">New guidance content item</h1>
-      <p className="mt-2 text-sm text-stone-400">
+      <p className="mt-2 text-sm text-ink-soft">
         The item is a stable identity. Guidance text itself is authored as
         versions and goes through review before publication.
       </p>
 
-      <div className="mt-6 space-y-4 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <label className="block text-sm text-stone-400">
+      <div className="mt-6 space-y-4 rounded-lg border border-line bg-surface-raised p-6">
+        <label className="block text-sm text-ink-soft">
           Stable code (UPPER_SNAKE_CASE)
           <input
             value={code}
             onChange={(event) => setCode(event.target.value.toUpperCase())}
             placeholder="e.g. HOUSE_ARRIVAL_NOTES"
-            className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+            className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           />
         </label>
-        <label className="block text-sm text-stone-400">
+        <label className="block text-sm text-ink-soft">
           Content type
           <select
             value={contentType}
             onChange={(event) => setContentType(event.target.value)}
-            className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+            className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           >
             {GUIDANCE_CONTENT_TYPES.map((type) => (
               <option key={type} value={type}>
@@ -103,12 +103,12 @@ function NewContentItemPage() {
             ))}
           </select>
         </label>
-        <label className="block text-sm text-stone-400">
+        <label className="block text-sm text-ink-soft">
           Applicability scope
           <select
             value={scopeType}
             onChange={(event) => setScopeType(event.target.value)}
-            className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+            className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           >
             <option value="PLATFORM">Platform (everyone)</option>
             <option value="SACRED_HOUSE">Sacred House</option>
@@ -116,12 +116,12 @@ function NewContentItemPage() {
           </select>
         </label>
         {scopeType === 'SACRED_HOUSE' ? (
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Sacred House
             <select
               value={sacredHouseId}
               onChange={(event) => setSacredHouseId(event.target.value)}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             >
               <option value="">Select…</option>
               {data.houses.map((house) => (
@@ -133,12 +133,12 @@ function NewContentItemPage() {
           </label>
         ) : null}
         {scopeType === 'SERVICE' ? (
-          <label className="block text-sm text-stone-400">
+          <label className="block text-sm text-ink-soft">
             Service (its House is derived automatically)
             <select
               value={serviceId}
               onChange={(event) => setServiceId(event.target.value)}
-              className="mt-2 w-full rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+              className="mt-2 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             >
               <option value="">Select…</option>
               {data.services.map((service) => (
@@ -149,25 +149,25 @@ function NewContentItemPage() {
             </select>
           </label>
         ) : null}
-        <label className="block text-sm text-stone-400">
+        <label className="block text-sm text-ink-soft">
           Sort order
           <input
             type="number"
             value={sortOrder}
             onChange={(event) => setSortOrder(event.target.value)}
-            className="mt-2 w-32 rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+            className="mt-2 w-32 rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           />
         </label>
         <button
           type="button"
           onClick={() => void handleCreate()}
           disabled={busy}
-          className="rounded-md bg-amber-600 px-5 py-2.5 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+          className="rounded-md bg-gold px-5 py-2.5 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
         >
           {busy ? 'Creating…' : 'Create item'}
         </button>
         {error ? (
-          <p className="rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+          <p className="rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
             {error}
           </p>
         ) : null}

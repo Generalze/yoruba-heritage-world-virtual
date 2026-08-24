@@ -42,7 +42,7 @@ export const Route = createFileRoute('/admin/catalogue/sacred-houses/$id')({
       <p>Sacred House not found.</p>
       <Link
         to="/admin/catalogue/sacred-houses"
-        className="text-amber-500 hover:text-amber-400"
+        className="text-gold-deep hover:text-ink"
       >
         Back to Sacred Houses
       </Link>
@@ -131,7 +131,7 @@ function EditHousePage() {
     <div className="max-w-2xl">
       <Link
         to="/admin/catalogue/sacred-houses"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← All Sacred Houses
       </Link>
@@ -139,10 +139,10 @@ function EditHousePage() {
         <h1 className="text-2xl font-bold">{house.name}</h1>
         <StatusBadge status={house.status} />
       </div>
-      <p className="mt-1 font-mono text-xs text-stone-500">{house.code}</p>
+      <p className="mt-1 font-mono text-xs text-ink-soft">{house.code}</p>
 
       {house.reviewNote ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-sm text-red-200">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert">
           Returned by review: {house.reviewNote}
         </p>
       ) : null}
@@ -188,14 +188,14 @@ function EditHousePage() {
           />
         </AdminField>
         {house.status === 'APPROVED' ? (
-          <p className="text-xs text-amber-500">
+          <p className="text-xs text-gold-deep">
             Warning: editing this approved House (including focus areas or
             members) removes its approval — it returns to DRAFT and must go
             through review again before it can be published.
           </p>
         ) : null}
         {house.status === 'PUBLISHED' ? (
-          <p className="text-xs text-amber-500">
+          <p className="text-xs text-gold-deep">
             This House is live. Unpublish it before changing content, focus
             areas or members.
           </p>
@@ -203,21 +203,21 @@ function EditHousePage() {
         <button
           type="submit"
           disabled={busy}
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
         >
           {busy ? 'Saving…' : 'Save changes'}
         </button>
       </form>
 
       <section className="mt-8">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Focus areas
         </h2>
         <ul className="mt-3 space-y-2">
           {house.focusAreas.map((area) => (
             <li key={area.id} className="flex items-center gap-3 text-sm">
               <span
-                className={area.active ? '' : 'text-stone-600 line-through'}
+                className={area.active ? '' : 'text-ink-soft line-through'}
               >
                 {area.label}
               </span>
@@ -231,7 +231,7 @@ function EditHousePage() {
                     }),
                   )
                 }
-                className="text-xs text-stone-500 hover:text-amber-500 disabled:opacity-40"
+                className="text-xs text-ink-soft hover:text-ink disabled:opacity-40"
               >
                 {area.active ? 'deactivate' : 'activate'}
               </button>
@@ -249,7 +249,7 @@ function EditHousePage() {
           <button
             type="submit"
             disabled={busy || !editable}
-            className="rounded-md border border-stone-700 px-4 text-sm text-stone-200 hover:border-amber-500 disabled:opacity-40"
+            className="rounded-md border border-line-strong px-4 text-sm text-ink hover:border-gold-deep disabled:opacity-40"
           >
             Add
           </button>
@@ -257,17 +257,17 @@ function EditHousePage() {
       </section>
 
       <section className="mt-8">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Members (informational only — never bookable)
         </h2>
         <ul className="mt-3 space-y-2">
           {house.members.map((member) => (
             <li key={member.id} className="flex items-center gap-3 text-sm">
               <span
-                className={member.active ? '' : 'text-stone-600 line-through'}
+                className={member.active ? '' : 'text-ink-soft line-through'}
               >
                 {member.displayName}
-                <span className="text-stone-500">
+                <span className="text-ink-soft">
                   {' '}
                   — {member.memberType.replace('_', ' ')}
                 </span>
@@ -282,7 +282,7 @@ function EditHousePage() {
                     }),
                   )
                 }
-                className="text-xs text-stone-500 hover:text-amber-500 disabled:opacity-40"
+                className="text-xs text-ink-soft hover:text-ink disabled:opacity-40"
               >
                 {member.active ? 'deactivate' : 'activate'}
               </button>
@@ -300,7 +300,7 @@ function EditHousePage() {
           <select
             name="memberType"
             disabled={!editable}
-            className="rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-200"
+            className="rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           >
             {MEMBER_TYPES.map((type) => (
               <option key={type} value={type}>
@@ -311,7 +311,7 @@ function EditHousePage() {
           <button
             type="submit"
             disabled={busy || !editable}
-            className="rounded-md border border-stone-700 px-4 text-sm text-stone-200 hover:border-amber-500 disabled:opacity-40"
+            className="rounded-md border border-line-strong px-4 text-sm text-ink hover:border-gold-deep disabled:opacity-40"
           >
             Add
           </button>

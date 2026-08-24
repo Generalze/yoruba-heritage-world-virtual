@@ -56,19 +56,19 @@ function VideoRecipePreviewPage() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Video Recipe Preview</h1>
-      <p className="mt-1 text-sm text-stone-400">
+      <p className="mt-1 text-sm text-ink-soft">
         Deterministic dry-run of the autonomous recipe engine: approved session
         plan + eligible media + verified Visual Bible. Nothing is persisted or
         generated.
       </p>
 
       <div className="mt-6 grid max-w-3xl gap-3 sm:grid-cols-4">
-        <label className="block text-xs text-stone-400 sm:col-span-2">
+        <label className="block text-xs text-ink-soft sm:col-span-2">
           Service
           <select
             value={serviceId}
             onChange={(event) => setServiceId(event.target.value)}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           >
             <option value="">Select…</option>
             {data.services.map((service) => (
@@ -79,23 +79,23 @@ function VideoRecipePreviewPage() {
             ))}
           </select>
         </label>
-        <label className="block text-xs text-stone-400">
+        <label className="block text-xs text-ink-soft">
           Language
           <select
             value={language}
             onChange={(event) => setLanguage(event.target.value)}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           >
             <option value="en">English</option>
             <option value="yo">Yorùbá</option>
           </select>
         </label>
-        <label className="block text-xs text-stone-400">
+        <label className="block text-xs text-ink-soft">
           Variation seed
           <input
             value={seed}
             onChange={(event) => setSeed(event.target.value.slice(0, 120))}
-            className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+            className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
           />
         </label>
       </div>
@@ -103,39 +103,39 @@ function VideoRecipePreviewPage() {
         type="button"
         disabled={busy || !serviceId || !seed.trim()}
         onClick={() => void runPreview()}
-        className="mt-3 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+        className="mt-3 rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
       >
         Build recipe
       </button>
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}
 
       {result ? (
         result.recipe.status === 'RECIPE_READY' ? (
-          <div className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
+          <div className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+              <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
                 Recipe ready
               </h2>
               {result.validation ? (
                 <span
                   className={`rounded-full px-3 py-1 text-xs ${
                     result.validation.status === 'VALID'
-                      ? 'bg-emerald-950 text-emerald-400'
-                      : 'bg-red-950 text-red-400'
+                      ? 'bg-affirm/10 text-affirm'
+                      : 'bg-alert/10 text-alert'
                   }`}
                 >
                   Validation: {result.validation.status}
                 </span>
               ) : null}
             </div>
-            <p className="mt-2 text-xs break-all text-stone-500">
+            <p className="mt-2 text-xs break-all text-ink-soft">
               recipeSha256: {result.recipe.recipeSha256}
             </p>
-            <dl className="mt-3 grid gap-1 text-xs text-stone-400 sm:grid-cols-2">
+            <dl className="mt-3 grid gap-1 text-xs text-ink-soft sm:grid-cols-2">
               <div>
                 Template version #{result.recipe.templateVersionId} (v
                 {result.recipe.templateVersionNumber})
@@ -156,15 +156,15 @@ function VideoRecipePreviewPage() {
               </div>
             </dl>
             {result.validation?.status === 'INVALID' ? (
-              <p className="mt-2 rounded-md border border-red-900 bg-red-950/40 px-3 py-2 text-xs text-red-300">
+              <p className="mt-2 rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-xs text-alert">
                 Invalid: {result.validation.reasons.join(', ')}
               </p>
             ) : null}
-            <ul className="mt-4 space-y-2 text-xs text-stone-300">
+            <ul className="mt-4 space-y-2 text-xs text-ink-soft">
               {result.recipe.segments.map((segment) => (
                 <li
                   key={segment.segmentIndex}
-                  className="rounded-md border border-stone-800 bg-stone-950 px-3 py-2"
+                  className="rounded-md border border-line bg-surface px-3 py-2"
                 >
                   <span className="font-medium">
                     {segment.slotPosition}. {segment.slotKey}
@@ -194,7 +194,7 @@ function VideoRecipePreviewPage() {
             </ul>
           </div>
         ) : (
-          <p className="mt-6 rounded-md border border-amber-900 bg-amber-950/40 px-4 py-3 text-sm text-amber-300">
+          <p className="mt-6 rounded-md border border-gold bg-gold/10 px-4 py-3 text-sm text-gold-deep">
             RECIPE_UNAVAILABLE — {result.recipe.reasons.join(', ')}
           </p>
         )

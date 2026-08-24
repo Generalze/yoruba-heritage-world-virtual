@@ -124,7 +124,7 @@ function VisualBiblePage() {
     <div>
       <Link
         to="/admin/visual-bibles"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Visual Bibles
       </Link>
@@ -141,7 +141,7 @@ function VisualBiblePage() {
                 ])
                 setShowForm(true)
               }}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright"
             >
               New draft
             </button>
@@ -161,14 +161,14 @@ function VisualBiblePage() {
                 )
               })
             }
-            className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 disabled:opacity-60"
+            className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep disabled:opacity-60"
           >
             Run verified load
           </button>
         </div>
       </div>
       {loadResult ? (
-        <p className="mt-2 text-xs text-stone-400">
+        <p className="mt-2 text-xs text-ink-soft">
           Verified loader result: {loadResult}
         </p>
       ) : null}
@@ -179,27 +179,27 @@ function VisualBiblePage() {
           return (
             <li
               key={version.id}
-              className="rounded-md border border-stone-800 bg-stone-950 p-4"
+              className="rounded-md border border-line bg-surface p-4"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">
                   v{version.versionNumber} · {versionRules.length} rules
                 </span>
-                <span className="rounded-full bg-amber-950 px-2.5 py-0.5 text-xs text-amber-400">
+                <span className="rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold-deep">
                   {version.status.replaceAll('_', ' ')}
                 </span>
               </div>
               {version.definitionSha256 ? (
-                <p className="mt-1 text-xs break-all text-stone-500">
+                <p className="mt-1 text-xs break-all text-ink-soft">
                   Definition SHA-256: {version.definitionSha256}
                 </p>
               ) : null}
               {version.reviewNote && version.status === 'DRAFT' ? (
-                <p className="mt-2 rounded-md border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">
+                <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">
                   Returned with reason: {version.reviewNote}
                 </p>
               ) : null}
-              <ul className="mt-3 space-y-1 text-xs text-stone-300">
+              <ul className="mt-3 space-y-1 text-xs text-ink-soft">
                 {versionRules.map((rule) => (
                   <li key={rule.id}>
                     {rule.position}. [{rule.category}] {rule.ruleText}
@@ -213,7 +213,7 @@ function VisualBiblePage() {
                       type="button"
                       disabled={busy}
                       onClick={() => loadDraftIntoForm(version.id)}
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Edit rules
                     </button>
@@ -225,7 +225,7 @@ function VisualBiblePage() {
                           submit({ data: { versionId: version.id } }),
                         )
                       }
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Submit for review
                     </button>
@@ -241,7 +241,7 @@ function VisualBiblePage() {
                           approve({ data: { versionId: version.id } }),
                         )
                       }
-                      className="rounded-md bg-emerald-700 px-3 py-1.5 font-medium text-white hover:bg-emerald-600 disabled:opacity-60"
+                      className="rounded-md bg-affirm px-3 py-1.5 font-medium text-white hover:bg-affirm/90 disabled:opacity-60"
                     >
                       Approve
                     </button>
@@ -249,7 +249,7 @@ function VisualBiblePage() {
                       type="button"
                       disabled={busy}
                       onClick={() => setReturning(version.id)}
-                      className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                      className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-gold-deep disabled:opacity-60"
                     >
                       Return to draft
                     </button>
@@ -264,7 +264,7 @@ function VisualBiblePage() {
                         publish({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md bg-amber-600 px-3 py-1.5 font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+                    className="rounded-md bg-gold px-3 py-1.5 font-medium text-night hover:bg-gold-bright disabled:opacity-60"
                   >
                     Publish
                   </button>
@@ -278,7 +278,7 @@ function VisualBiblePage() {
                         archive({ data: { versionId: version.id } }),
                       )
                     }
-                    className="rounded-md border border-stone-700 px-3 py-1.5 text-stone-400 hover:border-red-700 hover:text-red-400 disabled:opacity-60"
+                    className="rounded-md border border-line-strong px-3 py-1.5 text-ink-soft hover:border-alert hover:text-alert disabled:opacity-60"
                   >
                     Archive
                   </button>
@@ -292,7 +292,7 @@ function VisualBiblePage() {
                       setReason(event.target.value.slice(0, 500))
                     }
                     placeholder="Reason (required)"
-                    className="w-full max-w-md rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+                    className="w-full max-w-md rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
                   />
                   <button
                     type="button"
@@ -304,7 +304,7 @@ function VisualBiblePage() {
                         }),
                       )
                     }
-                    className="rounded-md border border-amber-700 px-3 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+                    className="rounded-md border border-gold px-3 py-2 text-sm text-gold-deep hover:bg-gold/10 disabled:opacity-60"
                   >
                     Confirm return
                   </button>
@@ -316,17 +316,17 @@ function VisualBiblePage() {
       </ul>
 
       {showForm ? (
-        <div className="mt-4 space-y-3 rounded-md border border-dashed border-stone-700 p-4">
+        <div className="mt-4 space-y-3 rounded-md border border-dashed border-line-strong p-4">
           {rules.map((rule, index) => (
             <div key={index} className="flex flex-wrap items-end gap-2">
-              <label className="block text-xs text-stone-400">
+              <label className="block text-xs text-ink-soft">
                 Category
                 <select
                   value={rule.category}
                   onChange={(event) =>
                     updateRule(index, { category: event.target.value })
                   }
-                  className="mt-1 w-56 rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                  className="mt-1 w-56 rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                 >
                   {VISUAL_BIBLE_RULE_CATEGORIES.map((category) => (
                     <option key={category} value={category}>
@@ -335,7 +335,7 @@ function VisualBiblePage() {
                   ))}
                 </select>
               </label>
-              <label className="block text-xs text-stone-400">
+              <label className="block text-xs text-ink-soft">
                 Position
                 <input
                   value={rule.position}
@@ -344,10 +344,10 @@ function VisualBiblePage() {
                       position: event.target.value.replace(/[^0-9]/g, ''),
                     })
                   }
-                  className="mt-1 w-20 rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                  className="mt-1 w-20 rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                 />
               </label>
-              <label className="block flex-1 text-xs text-stone-400">
+              <label className="block flex-1 text-xs text-ink-soft">
                 Rule (human-authored plain text)
                 <input
                   value={rule.ruleText}
@@ -356,7 +356,7 @@ function VisualBiblePage() {
                       ruleText: event.target.value.slice(0, 2000),
                     })
                   }
-                  className="mt-1 w-full rounded-md border border-stone-700 bg-stone-950 px-2 py-1.5 text-sm text-stone-100"
+                  className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
                 />
               </label>
               <button
@@ -366,7 +366,7 @@ function VisualBiblePage() {
                     current.filter((_, ruleIndex) => ruleIndex !== index),
                   )
                 }
-                className="rounded-md border border-stone-700 px-2 py-1.5 text-xs text-stone-400 hover:border-red-700 hover:text-red-400"
+                className="rounded-md border border-line-strong px-2 py-1.5 text-xs text-ink-soft hover:border-alert hover:text-alert"
               >
                 Remove
               </button>
@@ -385,7 +385,7 @@ function VisualBiblePage() {
                   },
                 ])
               }
-              className="rounded-md border border-stone-700 px-3 py-1.5 text-sm text-stone-300 hover:border-amber-500"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink-soft hover:border-gold-deep"
             >
               Add rule
             </button>
@@ -393,7 +393,7 @@ function VisualBiblePage() {
               type="button"
               disabled={busy || rules.some((rule) => !rule.ruleText.trim())}
               onClick={() => void handleSave()}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500 disabled:opacity-60"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright disabled:opacity-60"
             >
               {editingVersionId != null ? 'Save draft' : 'Create draft'}
             </button>
@@ -403,7 +403,7 @@ function VisualBiblePage() {
                 setShowForm(false)
                 setEditingVersionId(null)
               }}
-              className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300"
+              className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft"
             >
               Cancel
             </button>
@@ -412,7 +412,7 @@ function VisualBiblePage() {
       ) : null}
 
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}

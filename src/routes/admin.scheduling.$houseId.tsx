@@ -150,14 +150,14 @@ function SchedulingHousePage() {
     <div className="max-w-3xl">
       <Link
         to="/admin/scheduling"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Scheduling
       </Link>
       <h1 className="mt-3 text-2xl font-bold">{data.house!.name}</h1>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Booking settings
         </h2>
         <form
@@ -229,7 +229,7 @@ function SchedulingHousePage() {
               className={adminInputClass}
             />
           </AdminField>
-          <label className="flex items-center gap-3 self-end pb-2 text-sm text-stone-200">
+          <label className="flex items-center gap-3 self-end pb-2 text-sm text-ink">
             <input
               type="checkbox"
               name="bookingEnabled"
@@ -241,7 +241,7 @@ function SchedulingHousePage() {
             <button
               type="submit"
               disabled={busy}
-              className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500 disabled:opacity-50"
+              className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright disabled:opacity-50"
             >
               {busy ? 'Saving…' : 'Save settings'}
             </button>
@@ -249,15 +249,15 @@ function SchedulingHousePage() {
         </form>
       </section>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Weekly availability ({settings.schedulingTimezone})
         </h2>
         <ul className="mt-4 space-y-2 text-sm">
           {data.windows.map((window) => (
             <li key={window.id} className="flex items-center gap-4">
               <span
-                className={window.active ? '' : 'text-stone-600 line-through'}
+                className={window.active ? '' : 'text-ink-soft line-through'}
               >
                 {DAY_NAMES[window.dayOfWeek - 1]}{' '}
                 {window.startLocalTime.slice(0, 5)}–
@@ -273,14 +273,14 @@ function SchedulingHousePage() {
                     }),
                   )
                 }
-                className="text-xs text-stone-500 hover:text-amber-500"
+                className="text-xs text-ink-soft hover:text-ink"
               >
                 {window.active ? 'deactivate' : 'activate'}
               </button>
             </li>
           ))}
           {data.windows.length === 0 ? (
-            <li className="text-stone-500">
+            <li className="text-ink-soft">
               No availability configured — the House has no bookable hours.
             </li>
           ) : null}
@@ -288,7 +288,7 @@ function SchedulingHousePage() {
         <form onSubmit={handleAddWindow} className="mt-4 flex flex-wrap gap-2">
           <select
             name="dayOfWeek"
-            className="rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-200"
+            className="rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           >
             {DAY_NAMES.map((name, i) => (
               <option key={name} value={i + 1}>
@@ -311,15 +311,15 @@ function SchedulingHousePage() {
           <button
             type="submit"
             disabled={busy}
-            className="rounded-md border border-stone-700 px-4 text-sm text-stone-200 hover:border-amber-500 disabled:opacity-40"
+            className="rounded-md border border-line-strong px-4 text-sm text-ink hover:border-gold-deep disabled:opacity-40"
           >
             Add window
           </button>
         </form>
       </section>
 
-      <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900 p-6">
-        <h2 className="text-sm font-medium tracking-widest text-amber-500 uppercase">
+      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+        <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
           Date exceptions
         </h2>
         <ul className="mt-4 space-y-2 text-sm">
@@ -331,7 +331,7 @@ function SchedulingHousePage() {
                   ? ` ${exception.startLocalTime.slice(0, 5)}–${exception.endLocalTime?.slice(0, 5)}`
                   : ''}
                 {exception.label ? (
-                  <span className="text-stone-500"> ({exception.label})</span>
+                  <span className="text-ink-soft"> ({exception.label})</span>
                 ) : null}
               </span>
               <button
@@ -342,7 +342,7 @@ function SchedulingHousePage() {
                     removeException({ data: { exceptionId: exception.id } }),
                   )
                 }
-                className="text-xs text-stone-500 hover:text-red-400"
+                className="text-xs text-ink-soft hover:text-alert"
               >
                 remove
               </button>
@@ -363,7 +363,7 @@ function SchedulingHousePage() {
             name="type"
             value={exceptionType}
             onChange={(event) => setExceptionType(event.target.value)}
-            className="rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-200"
+            className="rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
           >
             <option value="CLOSED">CLOSED (whole day)</option>
             <option value="BLOCK">BLOCK (remove interval)</option>
@@ -394,7 +394,7 @@ function SchedulingHousePage() {
           <button
             type="submit"
             disabled={busy}
-            className="rounded-md border border-stone-700 px-4 text-sm text-stone-200 hover:border-amber-500 disabled:opacity-40"
+            className="rounded-md border border-line-strong px-4 text-sm text-ink hover:border-gold-deep disabled:opacity-40"
           >
             Add exception
           </button>

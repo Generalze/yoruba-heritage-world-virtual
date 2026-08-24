@@ -5,18 +5,19 @@ import type { WorkflowEvent } from '@/services/admin-catalogue'
 /** Shared building blocks for the admin catalogue UI. */
 
 const STATUS_STYLES: Record<string, string> = {
-  DRAFT: 'bg-stone-800 text-stone-300',
-  UNDER_REVIEW: 'bg-sky-950 text-sky-300',
-  APPROVED: 'bg-amber-950 text-amber-300',
-  PUBLISHED: 'bg-emerald-950 text-emerald-300',
-  ARCHIVED: 'bg-stone-900 text-stone-500',
+  DRAFT: 'border border-line-strong bg-surface text-ink-soft',
+  UNDER_REVIEW: 'border border-caution/40 bg-caution/10 text-caution',
+  APPROVED: 'border border-gold bg-gold/10 text-gold-deep',
+  PUBLISHED: 'border border-affirm/40 bg-affirm/10 text-affirm',
+  ARCHIVED: 'border border-line bg-surface text-ink-soft',
 }
 
 export function StatusBadge(props: { status: string }) {
   return (
     <span
       className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-medium ${
-        STATUS_STYLES[props.status] ?? 'bg-stone-800 text-stone-300'
+        STATUS_STYLES[props.status] ??
+        'border border-line-strong bg-surface text-ink-soft'
       }`}
     >
       {props.status.replace('_', ' ')}
@@ -59,7 +60,7 @@ export function WorkflowActions(props: {
               type="button"
               disabled={props.busy}
               onClick={() => setRejecting((value) => !value)}
-              className="rounded-md border border-red-900 px-3 py-1.5 text-sm text-red-300 hover:border-red-700 disabled:opacity-50"
+              className="rounded-md border border-alert/40 px-3 py-1.5 text-sm text-alert hover:border-alert disabled:opacity-50"
             >
               {EVENT_LABELS[event]}
             </button>
@@ -69,7 +70,7 @@ export function WorkflowActions(props: {
               type="button"
               disabled={props.busy}
               onClick={() => props.onEvent(event)}
-              className="rounded-md border border-stone-700 px-3 py-1.5 text-sm text-stone-200 hover:border-amber-500 hover:text-amber-500 disabled:opacity-50"
+              className="rounded-md border border-line-strong px-3 py-1.5 text-sm text-ink hover:border-gold-deep hover:text-gold-deep disabled:opacity-50"
             >
               {EVENT_LABELS[event]}
             </button>
@@ -77,15 +78,15 @@ export function WorkflowActions(props: {
         )}
       </div>
       {rejecting ? (
-        <div className="rounded-md border border-red-900 bg-red-950/40 p-3">
-          <label className="block text-sm text-red-200">
+        <div className="rounded-md border border-alert/40 bg-alert/10 p-3">
+          <label className="block text-sm text-alert">
             Reason for returning this record
             <textarea
               value={note}
               onChange={(event) => setNote(event.target.value)}
               maxLength={500}
               rows={2}
-              className="mt-1 w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-stone-100"
+              className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
             />
           </label>
           <button
@@ -96,7 +97,7 @@ export function WorkflowActions(props: {
               setRejecting(false)
               setNote('')
             }}
-            className="mt-2 rounded-md bg-red-900 px-3 py-1.5 text-sm text-red-100 hover:bg-red-800 disabled:opacity-50"
+            className="mt-2 rounded-md bg-alert px-3 py-1.5 text-sm text-white hover:bg-alert/90 disabled:opacity-50"
           >
             Confirm return to draft
           </button>
@@ -112,7 +113,7 @@ export function AdminField(props: {
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-stone-300">
+      <span className="mb-1 block text-sm font-medium text-ink-soft">
         {props.label}
       </span>
       {props.children}
@@ -121,14 +122,14 @@ export function AdminField(props: {
 }
 
 export const adminInputClass =
-  'w-full rounded-md border border-stone-700 bg-stone-900 px-3 py-2 text-stone-100 focus:border-amber-500 focus:outline-none'
+  'w-full rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-ink focus:border-gold-deep focus:outline-none'
 
 export function AdminError(props: { message: string | null }) {
   if (!props.message) return null
   return (
     <p
       role="alert"
-      className="mt-3 rounded-md border border-red-900 bg-red-950/60 px-3 py-2 text-sm text-red-300"
+      className="mt-3 rounded-md border border-alert/40 bg-alert/10 px-3 py-2 text-sm text-alert"
     >
       {props.message}
     </p>

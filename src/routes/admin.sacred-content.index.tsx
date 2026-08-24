@@ -40,7 +40,7 @@ function SacredContentLibraryPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Sacred Runtime Content</h1>
-          <p className="mt-1 text-sm text-stone-400">
+          <p className="mt-1 text-sm text-ink-soft">
             Human-authored sacred blocks for the future autonomous Prayer Room
             engine. This library is separate from appointment guidance.
           </p>
@@ -48,19 +48,19 @@ function SacredContentLibraryPage() {
         <div className="flex gap-2">
           <Link
             to="/admin/sacred-content/review"
-            className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500"
+            className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep"
           >
             Review queue
           </Link>
           <Link
             to="/admin/sacred-content/runtime"
-            className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500"
+            className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep"
           >
             Runtime state
           </Link>
           <Link
             to="/admin/sacred-content/new"
-            className="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-stone-950 hover:bg-amber-500"
+            className="rounded-md bg-gold px-4 py-2 text-sm font-medium text-night hover:bg-gold-bright"
           >
             New sacred item
           </Link>
@@ -80,7 +80,7 @@ function SacredContentLibraryPage() {
       </div>
 
       {data.items.length === 0 ? (
-        <p className="mt-10 text-stone-400">
+        <p className="mt-10 text-ink-soft">
           No sacred runtime content yet. The library starts empty — every block
           is written and approved by authorized people.
         </p>
@@ -88,15 +88,15 @@ function SacredContentLibraryPage() {
         <div className="mt-6 overflow-x-auto">
           <table className="w-full min-w-[900px] border-separate border-spacing-0 text-sm">
             <thead>
-              <tr className="text-left text-xs tracking-wider text-stone-500 uppercase">
-                <th className="border-b border-stone-800 px-3 py-2">Code</th>
-                <th className="border-b border-stone-800 px-3 py-2">Type</th>
-                <th className="border-b border-stone-800 px-3 py-2">Scope</th>
-                <th className="border-b border-stone-800 px-3 py-2">en / yo</th>
-                <th className="border-b border-stone-800 px-3 py-2">Rights</th>
-                <th className="border-b border-stone-800 px-3 py-2">Runtime</th>
-                <th className="border-b border-stone-800 px-3 py-2">Theme</th>
-                <th className="border-b border-stone-800 px-3 py-2">Active</th>
+              <tr className="text-left text-xs tracking-wider text-ink-soft uppercase">
+                <th className="border-b border-line px-3 py-2">Code</th>
+                <th className="border-b border-line px-3 py-2">Type</th>
+                <th className="border-b border-line px-3 py-2">Scope</th>
+                <th className="border-b border-line px-3 py-2">en / yo</th>
+                <th className="border-b border-line px-3 py-2">Rights</th>
+                <th className="border-b border-line px-3 py-2">Runtime</th>
+                <th className="border-b border-line px-3 py-2">Theme</th>
+                <th className="border-b border-line px-3 py-2">Active</th>
               </tr>
             </thead>
             <tbody>
@@ -131,49 +131,49 @@ function SacredContentLibraryPage() {
                   return parts.length > 0 ? parts.join(', ') : '—'
                 }
                 return (
-                  <tr key={item.id} className="hover:bg-stone-900">
-                    <td className="border-b border-stone-900 px-3 py-2">
+                  <tr key={item.id} className="hover:bg-surface">
+                    <td className="border-b border-line px-3 py-2">
                       <Link
                         to="/admin/sacred-content/$id"
                         params={{ id: String(item.id) }}
-                        className="font-medium text-amber-500 hover:underline"
+                        className="font-medium text-gold-deep hover:underline"
                       >
                         {item.code}
                       </Link>
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2">
+                    <td className="border-b border-line px-3 py-2">
                       {contentTypeLabel(item.contentType)}
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2">
+                    <td className="border-b border-line px-3 py-2">
                       {scopeName}
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2 text-xs text-stone-400">
+                    <td className="border-b border-line px-3 py-2 text-xs text-ink-soft">
                       en: {summary('en')}
                       <br />
                       yo: {summary('yo')}
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2 text-xs">
+                    <td className="border-b border-line px-3 py-2 text-xs">
                       {rights.length > 0
                         ? rights
                             .map((r) => RIGHTS_STATUS_LABELS[r] ?? r)
                             .join(', ')
                         : '—'}
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2">
+                    <td className="border-b border-line px-3 py-2">
                       {anyRuntime ? (
-                        <span className="rounded-full bg-emerald-950 px-2 py-0.5 text-xs text-emerald-400">
+                        <span className="rounded-full bg-affirm/10 px-2 py-0.5 text-xs text-affirm">
                           enabled
                         </span>
                       ) : (
-                        <span className="rounded-full bg-stone-800 px-2 py-0.5 text-xs text-stone-400">
+                        <span className="rounded-full bg-surface px-2 py-0.5 text-xs text-ink-soft">
                           off
                         </span>
                       )}
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2 text-xs text-stone-400">
+                    <td className="border-b border-line px-3 py-2 text-xs text-ink-soft">
                       {themes.length > 0 ? themes.join(', ') : '—'}
                     </td>
-                    <td className="border-b border-stone-900 px-3 py-2">
+                    <td className="border-b border-line px-3 py-2">
                       {item.active ? 'yes' : 'no'}
                     </td>
                   </tr>
@@ -202,8 +202,8 @@ function FilterLink({
       search={search}
       className={`rounded-full px-3 py-1 ${
         active
-          ? 'bg-amber-600 text-stone-950'
-          : 'bg-stone-900 text-stone-300 hover:bg-stone-800'
+          ? 'bg-gold text-night'
+          : 'bg-surface-raised text-ink-soft hover:bg-surface'
       }`}
     >
       {label}

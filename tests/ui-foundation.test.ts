@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'bun:test'
 
 import {
+  ADMIN_NAV,
   APP_DISCOVER_NAV,
   APP_NAV,
   PUBLIC_NAV,
@@ -27,9 +28,7 @@ const read = (relativePath: string): string =>
 /** Comments stripped, so prose ABOUT a rule cannot satisfy or violate
  * the rule — the house pattern from the deployment-topology suite. */
 const withoutComments = (source: string): string =>
-  source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
 
 // --- Formatting helpers -------------------------------------------------------
 
@@ -91,6 +90,14 @@ describe('navigation destinations are real routes', () => {
   it('every authenticated shell destination exists in the generated route tree', () => {
     for (const item of [...APP_NAV, ...APP_DISCOVER_NAV]) {
       expect(exists(item.to)).toBe(true)
+    }
+  })
+
+  it('every admin destination exists in the generated route tree', () => {
+    for (const group of ADMIN_NAV) {
+      for (const item of group.items) {
+        expect(exists(item.to)).toBe(true)
+      }
     }
   })
 
@@ -253,9 +260,7 @@ describe('the approved Olódùmárè wording', () => {
   it('keeps the canon-§1 separateness statements on the Olódùmárè page', () => {
     // The landing card carries the devotional wording alone; the fuller
     // policy statements live on the page the card links to.
-    expect(page).toContain(
-      'Olódùmárè is presented separately and respectfully',
-    )
+    expect(page).toContain('Olódùmárè is presented separately and respectfully')
     expect(page).toContain(
       'Olódùmárè is not presented as one deity among a collection',
     )
@@ -491,7 +496,9 @@ describe('booking and payment surface', () => {
   })
 
   it('keeps payment confirmation server-authoritative', () => {
-    const ret = withoutComments(read('src/routes/payments.return.$provider.tsx'))
+    const ret = withoutComments(
+      read('src/routes/payments.return.$provider.tsx'),
+    )
     // The return page reconciles with the server; the query string is
     // never treated as proof.
     expect(ret).toContain('reconcilePaymentFn')
@@ -504,7 +511,9 @@ describe('booking and payment surface', () => {
   })
 
   it('offers the Prayer Room only for statuses that can have a recording', () => {
-    const detail = withoutComments(read('src/routes/appointments.$publicId.tsx'))
+    const detail = withoutComments(
+      read('src/routes/appointments.$publicId.tsx'),
+    )
     expect(detail).toContain(
       "if (status !== 'CONFIRMED' && status !== 'COMPLETED') return null",
     )
@@ -606,7 +615,91 @@ describe('the Prayer Room stays RECORDED, not live', () => {
     expect(page).toContain('SkipLink')
     expect(page).toContain('id="main-content"')
     // Immersive never means trapped: navigation away stays on screen.
-    expect(page).toContain("to=\"/appointments/$publicId\"")
+    expect(page).toContain('to="/appointments/$publicId"')
+  })
+})
+
+// --- Admin area (Step 21A.6) ---------------------------------------------------
+
+describe('the admin area wears the shared shell', () => {
+  const shell = withoutComments(read('src/components/admin-shell.tsx'))
+  const layout = withoutComments(read('src/routes/admin.tsx'))
+
+  it('keeps the server-side guard exactly where it was', () => {
+    expect(layout).toContain('beforeLoad')
+    expect(layout).toContain('getAdminContextFn')
+    expect(layout).toContain("redirect({ to: '/login' })")
+    expect(layout).toContain('<AdminShell')
+  })
+
+  it('gates links on REAL permission strings the server already uses', () => {
+    // A permission a nav entry invents would hide a link forever, or
+    // worse, imply a capability that does not exist. Every non-null
+    // permission here must be one the RBAC model actually defines.
+    const rbac = read('src/auth/rbac.ts')
+    for (const group of ADMIN_NAV) {
+      for (const item of group.items) {
+        if (item.permission === null) continue
+        expect(rbac).toContain(item.permission)
+      }
+    }
+  })
+
+  it('never treats a hidden link as the authorization boundary', () => {
+    expect(shell).toContain('permissions.includes(item.permission)')
+    // The shell renders navigation only. It must not decide anything.
+    expect(shell).not.toContain('serverFn')
+    expect(shell).not.toMatch(/\bdelete|approve|publish|archive\b/i)
+  })
+
+  it('carries the same accessibility affordances as the member shell', () => {
+    expect(shell).toContain('<SkipLink />')
+    expect(shell).toContain('id="main-content"')
+    expect(shell).toContain('aria-expanded={menuOpen}')
+    expect(shell).toContain('aria-controls="admin-menu"')
+    expect(shell).toContain('aria-labelledby={labelId}')
+    // Group labels are <p>, not headings: each page owns its outline.
+    expect(shell).not.toMatch(/<h[1-6]/)
+  })
+
+  it('is on the design system, with no legacy palette left anywhere', () => {
+    const legacy =
+      /\b(?:hover:|focus:)?(?:bg|text|border|ring|divide|placeholder)-(?:stone|amber|sky|emerald|rose|slate|gray|zinc|red|green|blue|yellow)-[0-9]{2,3}\b/
+    const adminFiles = readdirSync(join(process.cwd(), 'src/routes'))
+      .filter((name) => name.startsWith('admin') && name.endsWith('.tsx'))
+      .map((name) => `src/routes/${name}`)
+    expect(adminFiles.length).toBeGreaterThan(30)
+    for (const file of [...adminFiles, 'src/components/admin.tsx']) {
+      expect(read(file)).not.toMatch(legacy)
+    }
+  })
+
+  it('never stacks two opacity modifiers on one colour', () => {
+    // `bg-alert/10/40` is not a Tailwind class: it compiles to nothing,
+    // so the panel silently loses its background instead of failing
+    // loudly. Cheap to write by hand, invisible in review, so guarded.
+    const doubled = /[a-z-]+-[a-z-]+[/][0-9]+[/][0-9]+/
+    const files = readdirSync(join(process.cwd(), 'src/routes'))
+      .filter((name) => name.endsWith('.tsx'))
+      .map((name) => `src/routes/${name}`)
+    for (const file of [...files, 'src/components/admin.tsx']) {
+      expect(read(file)).not.toMatch(doubled)
+    }
+  })
+
+  it('states every lifecycle status in words, not by colour alone', () => {
+    const badges = read('src/components/admin.tsx')
+    for (const status of [
+      'DRAFT',
+      'UNDER_REVIEW',
+      'APPROVED',
+      'PUBLISHED',
+      'ARCHIVED',
+    ]) {
+      expect(badges).toContain(status)
+    }
+    // The badge prints the status itself, so the word is always there.
+    expect(badges).toContain("{props.status.replace('_', ' ')}")
   })
 })
 

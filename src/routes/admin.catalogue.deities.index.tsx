@@ -27,7 +27,7 @@ function AdminDeitiesList() {
           <select
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value)}
-            className="rounded-md border border-stone-700 bg-stone-900 px-3 py-1.5 text-sm text-stone-200"
+            className="rounded-md border border-line-strong bg-surface-raised px-3 py-1.5 text-sm text-ink"
           >
             <option value="ALL">All statuses</option>
             {CATALOGUE_STATUSES.map((status) => (
@@ -38,7 +38,7 @@ function AdminDeitiesList() {
           </select>
           <Link
             to="/admin/catalogue/deities/new"
-            className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500"
+            className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright"
           >
             New profile
           </Link>
@@ -46,7 +46,7 @@ function AdminDeitiesList() {
       </div>
       <table className="mt-6 w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-stone-800 text-xs text-stone-500 uppercase">
+          <tr className="border-b border-line text-xs text-ink-soft uppercase">
             <th className="py-2 pr-4">Name</th>
             <th className="py-2 pr-4">Code</th>
             <th className="py-2 pr-4">Status</th>
@@ -56,22 +56,22 @@ function AdminDeitiesList() {
         </thead>
         <tbody>
           {visible.map((deity) => (
-            <tr key={deity.id} className="border-b border-stone-900">
+            <tr key={deity.id} className="border-b border-line">
               <td className="py-3 pr-4">{deity.name}</td>
-              <td className="py-3 pr-4 font-mono text-xs text-stone-400">
+              <td className="py-3 pr-4 font-mono text-xs text-ink-soft">
                 {deity.code}
               </td>
               <td className="py-3 pr-4">
                 <StatusBadge status={deity.profileStatus} />
               </td>
-              <td className="py-3 pr-4 text-stone-400">
+              <td className="py-3 pr-4 text-ink-soft">
                 {deity.active ? 'yes' : 'no'}
               </td>
               <td className="py-3 text-right">
                 <Link
                   to="/admin/catalogue/deities/$id"
                   params={{ id: deity.id }}
-                  className="text-amber-500 hover:text-amber-400"
+                  className="text-gold-deep hover:text-ink"
                 >
                   Open
                 </Link>

@@ -17,14 +17,14 @@ function AdminHousesList() {
         <h1 className="text-2xl font-bold">Sacred Houses</h1>
         <Link
           to="/admin/catalogue/sacred-houses/new"
-          className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-stone-950 hover:bg-amber-500"
+          className="rounded-md bg-gold px-4 py-2 text-sm font-semibold text-night hover:bg-gold-bright"
         >
           New Sacred House
         </Link>
       </div>
       <table className="mt-6 w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-stone-800 text-xs text-stone-500 uppercase">
+          <tr className="border-b border-line text-xs text-ink-soft uppercase">
             <th className="py-2 pr-4">Name</th>
             <th className="py-2 pr-4">Code</th>
             <th className="py-2 pr-4">Status</th>
@@ -34,22 +34,22 @@ function AdminHousesList() {
         </thead>
         <tbody>
           {houses.map((house) => (
-            <tr key={house.id} className="border-b border-stone-900">
+            <tr key={house.id} className="border-b border-line">
               <td className="py-3 pr-4">{house.name}</td>
-              <td className="py-3 pr-4 font-mono text-xs text-stone-400">
+              <td className="py-3 pr-4 font-mono text-xs text-ink-soft">
                 {house.code}
               </td>
               <td className="py-3 pr-4">
                 <StatusBadge status={house.status} />
               </td>
-              <td className="py-3 pr-4 text-stone-400">
+              <td className="py-3 pr-4 text-ink-soft">
                 {house.active ? 'yes' : 'no'}
               </td>
               <td className="py-3 text-right">
                 <Link
                   to="/admin/catalogue/sacred-houses/$id"
                   params={{ id: house.id }}
-                  className="text-amber-500 hover:text-amber-400"
+                  className="text-gold-deep hover:text-ink"
                 >
                   Open
                 </Link>

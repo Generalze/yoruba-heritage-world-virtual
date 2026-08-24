@@ -64,41 +64,41 @@ function SacredReviewQueuePage() {
     <div>
       <Link
         to="/admin/sacred-content"
-        className="text-sm text-stone-400 hover:text-amber-500"
+        className="text-sm text-ink-soft hover:text-ink"
       >
         ← Sacred library
       </Link>
       <h1 className="mt-4 text-2xl font-bold">Sacred content review queue</h1>
-      <p className="mt-1 text-sm text-stone-400">
+      <p className="mt-1 text-sm text-ink-soft">
         Cultural approval only. Rights clearance and runtime enablement are
         separate gates managed on the item page.
       </p>
 
       {queue.length === 0 ? (
-        <p className="mt-8 text-stone-400">Nothing is waiting for review.</p>
+        <p className="mt-8 text-ink-soft">Nothing is waiting for review.</p>
       ) : (
         <ul className="mt-6 space-y-4">
           {queue.map(({ version, item }) => (
             <li
               key={version.id}
-              className="rounded-lg border border-stone-800 bg-stone-900 p-6"
+              className="rounded-lg border border-line bg-surface-raised p-6"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <Link
                     to="/admin/sacred-content/$id"
                     params={{ id: String(item.id) }}
-                    className="font-medium text-amber-500 hover:underline"
+                    className="font-medium text-gold-deep hover:underline"
                   >
                     {item.code}
                   </Link>
-                  <span className="ml-3 text-sm text-stone-400">
+                  <span className="ml-3 text-sm text-ink-soft">
                     {contentTypeLabel(item.contentType)} · {item.scopeType} ·{' '}
                     {LANGUAGE_LABELS[version.language] ?? version.language} v
                     {version.versionNumber}
                   </span>
                 </div>
-                <span className="text-xs text-stone-500">
+                <span className="text-xs text-ink-soft">
                   submitted{' '}
                   {version.submittedAt
                     ? new Date(version.submittedAt)
@@ -109,7 +109,7 @@ function SacredReviewQueuePage() {
                 </span>
               </div>
               <h2 className="mt-3 text-lg font-semibold">{version.title}</h2>
-              <pre className="mt-4 max-h-80 overflow-y-auto rounded-md bg-stone-950 p-4 text-sm whitespace-pre-wrap text-stone-200">
+              <pre className="mt-4 max-h-80 overflow-y-auto rounded-md bg-surface p-4 text-sm whitespace-pre-wrap text-ink">
                 {version.body}
               </pre>
 
@@ -120,7 +120,7 @@ function SacredReviewQueuePage() {
                   onClick={() =>
                     void run(() => approve({ data: { versionId: version.id } }))
                   }
-                  className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600 disabled:opacity-60"
+                  className="rounded-md bg-affirm px-4 py-2 text-sm font-medium text-white hover:bg-affirm/90 disabled:opacity-60"
                 >
                   Approve (cultural)
                 </button>
@@ -128,7 +128,7 @@ function SacredReviewQueuePage() {
                   type="button"
                   disabled={busy}
                   onClick={() => setReturning(version.id)}
-                  className="rounded-md border border-stone-700 px-4 py-2 text-sm text-stone-300 hover:border-amber-500 disabled:opacity-60"
+                  className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink-soft hover:border-gold-deep disabled:opacity-60"
                 >
                   Return to draft
                 </button>
@@ -141,7 +141,7 @@ function SacredReviewQueuePage() {
                       setReason(event.target.value.slice(0, 500))
                     }
                     placeholder="Reason (required)"
-                    className="w-full max-w-md rounded-md border border-stone-700 bg-stone-950 px-3 py-2 text-sm text-stone-100"
+                    className="w-full max-w-md rounded-md border border-line-strong bg-surface-raised px-3 py-2 text-sm text-ink"
                   />
                   <button
                     type="button"
@@ -153,7 +153,7 @@ function SacredReviewQueuePage() {
                         }),
                       )
                     }
-                    className="rounded-md border border-amber-700 px-3 py-2 text-sm text-amber-400 hover:bg-amber-950 disabled:opacity-60"
+                    className="rounded-md border border-gold px-3 py-2 text-sm text-gold-deep hover:bg-gold/10 disabled:opacity-60"
                   >
                     Confirm return
                   </button>
@@ -164,7 +164,7 @@ function SacredReviewQueuePage() {
         </ul>
       )}
       {error ? (
-        <p className="mt-4 rounded-md border border-red-900 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+        <p className="mt-4 rounded-md border border-alert/40 bg-alert/10 px-4 py-3 text-sm text-alert">
           {error}
         </p>
       ) : null}
