@@ -701,6 +701,41 @@ describe('the admin area wears the shared shell', () => {
     // The badge prints the status itself, so the word is always there.
     expect(badges).toContain("{props.status.replace('_', ' ')}")
   })
+
+  it('renders the admin overview from one server-side summary contract', () => {
+    const dashboard = withoutComments(read('src/routes/admin.index.tsx'))
+    const service = withoutComments(
+      read('src/services/admin-overview-actions.ts'),
+    )
+    expect(dashboard).toContain('getAdminOverviewFn')
+    expect(service).toContain('getAuthenticatedUser')
+    expect(service).toContain('getUserPermissionCodes')
+    expect(service).toContain('appointments.view')
+    expect(dashboard).toContain('Review queue depth')
+    expect(dashboard).toContain('Generation monitoring')
+    expect(dashboard).toContain('Upcoming appointments')
+  })
+
+  it('keeps the admin overview operational and privacy-bounded', () => {
+    const dashboard = withoutComments(read('src/routes/admin.index.tsx'))
+    const service = withoutComments(
+      read('src/services/admin-overview-actions.ts'),
+    )
+    for (const source of [dashboard, service]) {
+      for (const forbidden of [
+        'privateRequestNote',
+        'amountMinor',
+        'currencySnapshot',
+        'storageKey',
+        'recipeJsonText',
+        'providerReference',
+        'providerPaymentId',
+      ]) {
+        expect(source).not.toContain(forbidden)
+      }
+      expect(source).not.toMatch(/spiritualContentVersions\.body|\bbody:/)
+    }
+  })
 })
 
 // --- Route hygiene (house rules extended to the new files) ----------------------
