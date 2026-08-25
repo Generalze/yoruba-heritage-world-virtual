@@ -281,10 +281,11 @@ describe('the approved Olódùmárè wording', () => {
 describe('site chrome and authenticated shell', () => {
   const chrome = read('src/components/site-chrome.tsx')
   const shell = read('src/components/app-shell.tsx')
+  const adminShell = read('src/components/admin-shell.tsx')
   const ui = read('src/components/ui.tsx')
 
   it('mobile disclosure menus are real buttons with ARIA state', () => {
-    for (const source of [chrome, shell]) {
+    for (const source of [chrome, shell, adminShell]) {
       expect(source).toContain('aria-expanded')
       expect(source).toContain('aria-controls')
       expect(source).toContain('type="button"')
@@ -295,6 +296,7 @@ describe('site chrome and authenticated shell', () => {
     expect(chrome).toContain('aria-label="Primary"')
     expect(chrome).toContain('aria-label="Footer"')
     expect(shell).toContain('aria-label="Account"')
+    expect(adminShell).toContain('aria-label="Admin"')
   })
 
   it('decorative graphics are hidden from assistive technology', () => {
@@ -303,7 +305,7 @@ describe('site chrome and authenticated shell', () => {
   })
 
   it('renders no raw HTML anywhere in the new UI layer', () => {
-    for (const source of [chrome, shell, ui]) {
+    for (const source of [chrome, shell, adminShell, ui]) {
       expect(source).not.toContain('dangerouslySetInnerHTML')
     }
   })
@@ -311,6 +313,30 @@ describe('site chrome and authenticated shell', () => {
   it('drives navigation from the shared tested nav models', () => {
     expect(chrome).toContain('PUBLIC_NAV')
     expect(shell).toContain('APP_NAV')
+  })
+
+  it('keeps shell chrome usable on narrow mobile viewports', () => {
+    expect(ui).toContain('max-w-6xl px-4 sm:px-6')
+    expect(ui).toContain('text-3xl')
+    expect(ui).toContain('sm:text-5xl')
+
+    for (const source of [chrome, shell, adminShell]) {
+      expect(source).toContain('min-w-0')
+      expect(source).toContain('truncate')
+    }
+
+    expect(chrome).toContain('px-4 py-4 sm:px-6')
+    expect(chrome).toContain('px-4 pt-2 pb-6 sm:px-6')
+    expect(chrome).toContain('px-4 py-12 sm:px-6')
+    expect(chrome).toContain('min-[360px]:grid-cols-2')
+
+    expect(shell).toContain('flex-wrap')
+    expect(shell).toContain('justify-start')
+    expect(shell).toContain('sm:justify-end')
+
+    for (const source of [shell, adminShell]) {
+      expect(source).toContain('px-4 py-8 sm:px-6 sm:py-10')
+    }
   })
 })
 

@@ -39,13 +39,13 @@ function BrandLockup() {
   return (
     <Link
       to="/"
-      className="flex items-center gap-3 text-cream-on-night transition-colors hover:text-gold-bright"
+      className="flex min-w-0 items-center gap-3 text-cream-on-night transition-colors hover:text-gold-bright"
     >
       <span className="text-gold">
         <BrandMark className="h-8 w-8" />
       </span>
-      <span className="leading-tight">
-        <span className="font-display block text-lg">
+      <span className="min-w-0 leading-tight">
+        <span className="font-display block truncate text-lg">
           Yorùbá Heritage World
         </span>
         <span className="block text-[0.65rem] font-semibold tracking-[0.3em] text-cream-soft-on-night uppercase">
@@ -61,7 +61,7 @@ export function SiteHeader() {
 
   return (
     <header className="texture-night border-b border-night-line bg-night">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-6 py-4">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-4 sm:px-6">
         <BrandLockup />
 
         {/* Desktop navigation */}
@@ -118,7 +118,7 @@ export function SiteHeader() {
         <nav
           id="site-menu"
           aria-label="Primary"
-          className="border-t border-night-line px-6 pt-2 pb-6 lg:hidden"
+          className="border-t border-night-line px-4 pt-2 pb-6 sm:px-6 lg:hidden"
         >
           <ul className="flex flex-col gap-1">
             {PUBLIC_NAV.map((item) => (
@@ -164,7 +164,7 @@ export function SiteHeader() {
 export function SiteFooter() {
   return (
     <footer className="texture-night border-t border-night-line bg-night">
-      <div className="mx-auto w-full max-w-6xl px-6 py-12">
+      <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
         <div className="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
           <div className="max-w-sm">
             <BrandLockup />
@@ -178,7 +178,7 @@ export function SiteFooter() {
             <h2 className="text-xs font-semibold tracking-[0.28em] text-gold-bright uppercase">
               Explore
             </h2>
-            <ul className="mt-4 grid grid-cols-2 gap-x-10 gap-y-2">
+            <ul className="mt-4 grid gap-x-10 gap-y-2 min-[360px]:grid-cols-2">
               {PUBLIC_NAV.map((item) => (
                 <li key={item.to}>
                   <Link

@@ -100,13 +100,13 @@ export function AdminShell({
       <header className="texture-night flex items-center justify-between gap-3 border-b border-night-line bg-night px-4 py-3 lg:hidden">
         <Link
           to="/admin"
-          className="flex items-center gap-2 text-cream-on-night"
+          className="flex min-w-0 items-center gap-2 text-cream-on-night"
         >
           <span className="text-gold">
             <BrandMark className="h-6 w-6" />
           </span>
-          <span className="leading-tight">
-            <span className="font-display block text-sm">
+          <span className="min-w-0 leading-tight">
+            <span className="font-display block truncate text-sm">
               Yorùbá Heritage World
             </span>
             <span className="block text-[0.55rem] font-semibold tracking-[0.3em] text-cream-soft-on-night uppercase">
@@ -174,7 +174,7 @@ export function AdminShell({
 
       {/* Workspace */}
       <div className="min-w-0 flex-1">
-        <main id="main-content" className="mx-auto w-full max-w-6xl px-6 py-10">
+        <main id="main-content" className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
           {children}
         </main>
       </div>

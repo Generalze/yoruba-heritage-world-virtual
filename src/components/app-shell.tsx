@@ -102,12 +102,14 @@ export function AppShell({
       <header className="texture-night flex items-center justify-between gap-3 border-b border-night-line bg-night px-4 py-3 lg:hidden">
         <Link
           to="/dashboard"
-          className="flex items-center gap-2 text-cream-on-night"
+          className="flex min-w-0 items-center gap-2 text-cream-on-night"
         >
           <span className="text-gold">
             <BrandMark className="h-6 w-6" />
           </span>
-          <span className="font-display text-base">Yorùbá Heritage World</span>
+          <span className="font-display truncate text-base">
+            Yorùbá Heritage World
+          </span>
         </Link>
         <button
           type="button"
@@ -170,12 +172,12 @@ export function AppShell({
       <div className="min-w-0 flex-1">
         {actions ? (
           <div className="border-b border-line bg-surface">
-            <div className="mx-auto flex w-full max-w-5xl items-center justify-end gap-3 px-6 py-3">
+            <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-start gap-3 px-4 py-3 sm:justify-end sm:px-6">
               {actions}
             </div>
           </div>
         ) : null}
-        <main id="main-content" className="mx-auto w-full max-w-5xl px-6 py-10">
+        <main id="main-content" className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-10">
           {children}
         </main>
       </div>
