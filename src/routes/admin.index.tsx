@@ -56,7 +56,7 @@ function AdminDashboard() {
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <section className="rounded-lg border border-line bg-surface-raised p-5">
+        <section className="min-w-0 rounded-lg border border-line bg-surface-raised p-5">
           <div className="flex items-center justify-between gap-3">
             <h2 className="font-semibold">Review queue depth</h2>
             <Link
@@ -92,7 +92,7 @@ function AdminDashboard() {
           )}
         </section>
 
-        <section className="rounded-lg border border-line bg-surface-raised p-5">
+        <section className="min-w-0 rounded-lg border border-line bg-surface-raised p-5">
           <div className="flex items-center justify-between gap-3">
             <h2 className="font-semibold">Generation monitoring</h2>
             <Link
@@ -175,7 +175,7 @@ function AdminDashboard() {
         </section>
       </div>
 
-      <section className="mt-6 rounded-lg border border-line bg-surface-raised p-5">
+      <section className="mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-5">
         <div className="flex items-center justify-between gap-3">
           <h2 className="font-semibold">Upcoming appointments</h2>
           <Link
@@ -255,7 +255,7 @@ function SummaryPanel({
         : 'text-ink'
 
   return (
-    <section className="rounded-lg border border-line bg-surface-raised p-5">
+    <section className="min-w-0 rounded-lg border border-line bg-surface-raised p-5">
       <p className="text-xs font-semibold tracking-widest text-ink-soft uppercase">
         {label}
       </p>

@@ -848,6 +848,19 @@ describe('the admin area wears the shared shell', () => {
     expect(dashboard).toContain('Upcoming appointments')
   })
 
+  it('lets the admin overview cards shrink around their responsive tables', () => {
+    const dashboard = withoutComments(read('src/routes/admin.index.tsx'))
+    expect(dashboard).toContain(
+      'min-w-0 rounded-lg border border-line bg-surface-raised p-5',
+    )
+    expect(dashboard).toContain(
+      'mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-5',
+    )
+    expect(dashboard).toContain('overflow-x-auto')
+    expect(dashboard).toContain('min-w-[560px]')
+    expect(dashboard).toContain('min-w-[640px]')
+  })
+
   it('keeps the admin overview operational and privacy-bounded', () => {
     const dashboard = withoutComments(read('src/routes/admin.index.tsx'))
     const service = withoutComments(
