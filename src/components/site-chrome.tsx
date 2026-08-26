@@ -6,18 +6,34 @@ import { PUBLIC_NAV } from './navigation'
 import { BrandMark, IconClose, IconMenu, SkipLink, buttonClass } from './ui'
 
 /**
+ * Who the chrome is greeting, if anyone. Public pages stay readable
+ * signed out, so this is always optional and never gates content — it
+ * only decides whether the header offers a way IN or a way BACK.
+ */
+export interface ChromeUser {
+  preferredName: string
+}
+
+/**
  * The public page frame: skip link, header, the single <main> the skip
  * link targets, and the footer. Every public route uses this so the
  * chrome and the accessibility affordances cannot drift apart between
  * pages.
  */
-export function PublicPage({ children }: { children: ReactNode }) {
+export function PublicPage({
+  children,
+  user,
+}: {
+  children: ReactNode
+  /** The signed-in visitor, when there is one. */
+  user?: ChromeUser | null
+}) {
   return (
     <div className="min-h-screen bg-canvas text-ink">
       <SkipLink />
-      <SiteHeader />
+      <SiteHeader user={user} />
       <main id="main-content">{children}</main>
-      <SiteFooter />
+      <SiteFooter user={user} />
     </div>
   )
 }
@@ -56,7 +72,7 @@ function BrandLockup() {
   )
 }
 
-export function SiteHeader() {
+export function SiteHeader({ user }: { user?: ChromeUser | null }) {
   const [menuOpen, setMenuOpen] = useState(false)
 
   return (
@@ -76,8 +92,7 @@ export function SiteHeader() {
                 'aria-current': 'page',
               }}
               inactiveProps={{
-                className:
-                  'text-cream-soft-on-night hover:text-cream-on-night',
+                className: 'text-cream-soft-on-night hover:text-cream-on-night',
               }}
               className="text-sm font-medium transition-colors"
             >
@@ -87,15 +102,28 @@ export function SiteHeader() {
         </nav>
 
         <div className="hidden items-center gap-3 lg:flex">
-          <Link
-            to="/login"
-            className="text-sm font-medium text-cream-soft-on-night transition-colors hover:text-cream-on-night"
-          >
-            Log in
-          </Link>
-          <Link to="/register" className={buttonClass('primary', 'md')}>
-            Join now
-          </Link>
+          {user ? (
+            <>
+              <span className="max-w-[12rem] truncate text-sm text-cream-soft-on-night">
+                {user.preferredName}
+              </span>
+              <Link to="/dashboard" className={buttonClass('primary', 'md')}>
+                My account
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link
+                to="/login"
+                className="text-sm font-medium text-cream-soft-on-night transition-colors hover:text-cream-on-night"
+              >
+                Log in
+              </Link>
+              <Link to="/register" className={buttonClass('primary', 'md')}>
+                Join now
+              </Link>
+            </>
+          )}
         </div>
 
         {/* Mobile menu toggle */}
@@ -140,20 +168,37 @@ export function SiteHeader() {
             ))}
           </ul>
           <div className="mt-4 flex flex-col gap-3 border-t border-night-line pt-4">
-            <Link
-              to="/login"
-              className={buttonClass('secondary-on-dark', 'md')}
-              onClick={() => setMenuOpen(false)}
-            >
-              Log in
-            </Link>
-            <Link
-              to="/register"
-              className={buttonClass('primary', 'md')}
-              onClick={() => setMenuOpen(false)}
-            >
-              Join now
-            </Link>
+            {user ? (
+              <>
+                <p className="truncate px-3 text-sm text-cream-soft-on-night">
+                  Signed in as {user.preferredName}
+                </p>
+                <Link
+                  to="/dashboard"
+                  className={buttonClass('primary', 'md')}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  My account
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link
+                  to="/login"
+                  className={buttonClass('secondary-on-dark', 'md')}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Log in
+                </Link>
+                <Link
+                  to="/register"
+                  className={buttonClass('primary', 'md')}
+                  onClick={() => setMenuOpen(false)}
+                >
+                  Join now
+                </Link>
+              </>
+            )}
           </div>
         </nav>
       ) : null}
@@ -161,7 +206,7 @@ export function SiteHeader() {
   )
 }
 
-export function SiteFooter() {
+export function SiteFooter({ user }: { user?: ChromeUser | null }) {
   return (
     <footer className="texture-night border-t border-night-line bg-night">
       <div className="mx-auto w-full max-w-6xl px-4 py-12 sm:px-6">
@@ -169,8 +214,8 @@ export function SiteFooter() {
           <div className="max-w-sm">
             <BrandLockup />
             <p className="mt-4 text-sm leading-relaxed text-cream-soft-on-night">
-              A digital home for Yorùbá prayer, ancestral connection and
-              sacred cultural practice.
+              A digital home for Yorùbá prayer, ancestral connection and sacred
+              cultural practice.
             </p>
           </div>
 
@@ -189,22 +234,35 @@ export function SiteFooter() {
                   </Link>
                 </li>
               ))}
-              <li>
-                <Link
-                  to="/login"
-                  className="text-sm text-cream-soft-on-night transition-colors hover:text-cream-on-night"
-                >
-                  Log in
-                </Link>
-              </li>
-              <li>
-                <Link
-                  to="/register"
-                  className="text-sm text-cream-soft-on-night transition-colors hover:text-cream-on-night"
-                >
-                  Join now
-                </Link>
-              </li>
+              {user ? (
+                <li>
+                  <Link
+                    to="/dashboard"
+                    className="text-sm text-cream-soft-on-night transition-colors hover:text-cream-on-night"
+                  >
+                    My account
+                  </Link>
+                </li>
+              ) : (
+                <>
+                  <li>
+                    <Link
+                      to="/login"
+                      className="text-sm text-cream-soft-on-night transition-colors hover:text-cream-on-night"
+                    >
+                      Log in
+                    </Link>
+                  </li>
+                  <li>
+                    <Link
+                      to="/register"
+                      className="text-sm text-cream-soft-on-night transition-colors hover:text-cream-on-night"
+                    >
+                      Join now
+                    </Link>
+                  </li>
+                </>
+              )}
             </ul>
           </nav>
         </div>

@@ -2,6 +2,7 @@ import { Link, createFileRoute, notFound } from '@tanstack/react-router'
 
 import { getServiceFn } from '@/services/catalogue-actions'
 import { getServiceBookableFn } from '@/services/booking-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import {
   BackLink,
@@ -25,6 +26,7 @@ import { formatAmountMinor } from '@/lib/display-time'
  * genuine booking path exists.
  */
 export const Route = createFileRoute('/services/$slug')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: async ({ params }) => {
     const service = await getServiceFn({ data: { slug: params.slug } })
     if (!service) throw notFound()
@@ -50,14 +52,18 @@ export const Route = createFileRoute('/services/$slug')({
 })
 
 function ServiceNotFound() {
+  const { user } = Route.useRouteContext()
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         title="Service not found"
         intro="This service is not available."
       >
         <div className="mt-6">
-          <Link to="/services" className={buttonClass('secondary-on-dark', 'md')}>
+          <Link
+            to="/services"
+            className={buttonClass('secondary-on-dark', 'md')}
+          >
             Back to services
           </Link>
         </div>
@@ -67,6 +73,7 @@ function ServiceNotFound() {
 }
 
 function ServicePage() {
+  const { user } = Route.useRouteContext()
   const service = Route.useLoaderData()
   const price =
     service.priceMinor !== null && service.currency !== null
@@ -78,7 +85,7 @@ function ServicePage() {
       : null
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner kicker="Spiritual service" title={service.name}>
         <p className="mt-4 text-sm text-cream-soft-on-night">
           Offered by{' '}
@@ -112,10 +119,9 @@ function ServicePage() {
                 </p>
               )}
               <p className="mt-6 text-sm leading-relaxed text-ink-soft">
-                Appointments are booked with{' '}
-                {service.sacredHouse.name}, never with an individual member.
-                The Sacred House privately assigns the members responsible for
-                your appointment.
+                Appointments are booked with {service.sacredHouse.name}, never
+                with an individual member. The Sacred House privately assigns
+                the members responsible for your appointment.
               </p>
             </Card>
           </div>

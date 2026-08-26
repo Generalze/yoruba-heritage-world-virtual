@@ -5,6 +5,7 @@ import {
   listSacredHousesFn,
   listServicesFn,
 } from '@/services/catalogue-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import {
   EmblemMedallion,
@@ -40,6 +41,7 @@ import {
  */
 
 export const Route = createFileRoute('/')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: async () => {
     const [houses, serviceGroups, deities] = await Promise.all([
       listSacredHousesFn(),
@@ -55,6 +57,7 @@ export const Route = createFileRoute('/')({
 })
 
 function Home() {
+  const { user } = Route.useRouteContext()
   const { houses, serviceGroups, deities } = Route.useLoaderData()
 
   const featuredServices = serviceGroups
@@ -67,7 +70,7 @@ function Home() {
     .slice(0, 4)
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       {/* 1 — Hero: full-bleed candle-lit photograph, copy on a scrim.
             The image is APPROVED, rights-cleared platform artwork held
             in public/ (same-origin, as the CSP requires). It is
@@ -109,10 +112,17 @@ function Home() {
               appointment, and receive your recording in your own Prayer Room.
             </p>
             <div className="mt-9 flex flex-col gap-4 sm:flex-row sm:items-center">
-              <Link to="/register" className={buttonClass('primary', 'lg')}>
-                Create your account
-                <IconArrow />
-              </Link>
+              {user ? (
+                <Link to="/dashboard" className={buttonClass('primary', 'lg')}>
+                  Go to my dashboard
+                  <IconArrow />
+                </Link>
+              ) : (
+                <Link to="/register" className={buttonClass('primary', 'lg')}>
+                  Create your account
+                  <IconArrow />
+                </Link>
+              )}
               <Link
                 to="/sacred-houses"
                 className={buttonClass('secondary-on-dark', 'lg')}
@@ -120,15 +130,17 @@ function Home() {
                 Explore Sacred Houses
               </Link>
             </div>
-            <p className="mt-7 text-sm text-cream-soft-on-night">
-              Already a member?{' '}
-              <Link
-                to="/login"
-                className="font-medium text-gold-bright underline-offset-4 hover:underline"
-              >
-                Log in
-              </Link>
-            </p>
+            {user ? null : (
+              <p className="mt-7 text-sm text-cream-soft-on-night">
+                Already a member?{' '}
+                <Link
+                  to="/login"
+                  className="font-medium text-gold-bright underline-offset-4 hover:underline"
+                >
+                  Log in
+                </Link>
+              </p>
+            )}
           </div>
         </Container>
       </section>

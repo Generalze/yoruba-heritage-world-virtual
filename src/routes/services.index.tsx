@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 
 import { listServicesFn } from '@/services/catalogue-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import { MotifTile, motifForIndex } from '@/components/motifs'
 import { Container, IconArrow, PageBanner } from '@/components/ui'
@@ -13,6 +14,7 @@ import { Container, IconArrow, PageBanner } from '@/components/ui'
  * the stored record.
  */
 export const Route = createFileRoute('/services/')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: () => listServicesFn(),
   head: () => ({
     meta: [{ title: 'Services — Yorùbá Heritage World Virtual' }],
@@ -21,10 +23,11 @@ export const Route = createFileRoute('/services/')({
 })
 
 function ServicesPage() {
+  const { user } = Route.useRouteContext()
   const groups = Route.useLoaderData()
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         kicker="Spiritual services"
         title="Service families"

@@ -1,6 +1,7 @@
 import { Link, createFileRoute, notFound } from '@tanstack/react-router'
 
 import { getSacredHouseFn } from '@/services/catalogue-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import {
   BackLink,
@@ -19,6 +20,7 @@ import {
  * affordance appears beside a member by rule.
  */
 export const Route = createFileRoute('/sacred-houses/$slug')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: async ({ params }) => {
     const house = await getSacredHouseFn({ data: { slug: params.slug } })
     if (!house) throw notFound()
@@ -45,8 +47,9 @@ const MEMBER_TYPE_LABELS: Record<string, string> = {
 }
 
 function HouseNotFound() {
+  const { user } = Route.useRouteContext()
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         title="Sacred House not found"
         intro="This Sacred House is not available."
@@ -65,10 +68,11 @@ function HouseNotFound() {
 }
 
 function SacredHousePage() {
+  const { user } = Route.useRouteContext()
   const house = Route.useLoaderData()
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         kicker="Sacred House"
         title={house.name}
@@ -129,8 +133,8 @@ function SacredHousePage() {
                 </ul>
                 <p className="mt-4 text-xs leading-relaxed text-ink-soft">
                   Appointments are booked with the Sacred House. The House
-                  privately assigns the members responsible for each
-                  appointment — individual members cannot be booked.
+                  privately assigns the members responsible for each appointment
+                  — individual members cannot be booked.
                 </p>
               </Card>
             ) : null}

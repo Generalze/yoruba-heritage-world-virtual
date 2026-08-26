@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 
 import { listDeitiesFn } from '@/services/catalogue-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import { InitialMedallion } from '@/components/motifs'
 import { Container, IconArrow, PageBanner } from '@/components/ui'
@@ -12,6 +13,7 @@ import { Container, IconArrow, PageBanner } from '@/components/ui'
  * record (canon §1).
  */
 export const Route = createFileRoute('/deities/')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: () => listDeitiesFn(),
   head: () => ({
     meta: [{ title: 'Deity profiles — Yorùbá Heritage World Virtual' }],
@@ -20,10 +22,11 @@ export const Route = createFileRoute('/deities/')({
 })
 
 function DeitiesPage() {
+  const { user } = Route.useRouteContext()
   const deities = Route.useLoaderData()
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         kicker="Deity profiles"
         title="Approved spiritual profiles"

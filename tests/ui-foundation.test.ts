@@ -241,7 +241,7 @@ describe('landing page (src/routes/index.tsx)', () => {
 
   it('keeps the page chrome and the full-bleed hero image', () => {
     // The frame lives in PublicPage so it cannot drift between pages.
-    expect(code).toContain('<PublicPage>')
+    expect(code).toContain('<PublicPage user={user}>')
     // The hero photograph is same-origin (the CSP allows no external
     // image host), decorative, and covers the box at every width.
     expect(code).toContain('src="/hero-sanctuary.jpg"')
@@ -277,8 +277,7 @@ describe('landing page (src/routes/index.tsx)', () => {
               left: 0,
               right: dimensions.width,
               top: (dimensions.height - dimensions.width / frameAspect) / 2,
-              bottom:
-                (dimensions.height + dimensions.width / frameAspect) / 2,
+              bottom: (dimensions.height + dimensions.width / frameAspect) / 2,
             }
           : {
               left:
@@ -439,19 +438,44 @@ describe('public pages share one frame', () => {
 
   it('every public route renders inside PublicPage', () => {
     for (const file of PUBLIC_ROUTES) {
-      expect(withoutComments(read(file))).toContain('<PublicPage>')
+      expect(withoutComments(read(file))).toContain('<PublicPage user={user}>')
+    }
+  })
+
+  it('every public route tells the chrome who is visiting', () => {
+    // Step 21A.10: the header used to invite a signed-in member to
+    // "Log in / Join now" on every public page. Each route now reads
+    // the visitor through the EXISTING contract and hands it to the
+    // chrome. It stays a read: no route gains a redirect.
+    for (const file of PUBLIC_ROUTES) {
+      const code = withoutComments(read(file))
+      expect(code).toContain('getCurrentUserFn')
+      expect(code).toContain('Route.useRouteContext()')
+      expect(code).not.toContain('redirect(')
     }
   })
 
   it('PublicPage is the single owner of the chrome and the skip target', () => {
     const chrome = withoutComments(read('src/components/site-chrome.tsx'))
     expect(chrome).toContain('<SkipLink />')
-    expect(chrome).toContain('<SiteHeader />')
-    expect(chrome).toContain('<SiteFooter />')
+    expect(chrome).toContain('<SiteHeader user={user} />')
+    expect(chrome).toContain('<SiteFooter user={user} />')
     expect(chrome).toContain('id="main-content"')
     // Exactly one <main> in the public frame — a second landmark would
     // make the skip link ambiguous.
     expect(chrome.split('<main').length - 1).toBe(1)
+  })
+
+  it('offers a signed-in visitor their account, not another sign-up', () => {
+    const chrome = withoutComments(read('src/components/site-chrome.tsx'))
+    // Both branches exist, and the signed-out one is still intact.
+    expect(chrome).toContain('Log in')
+    expect(chrome).toContain('Join now')
+    expect(chrome).toContain('My account')
+    expect(chrome).toContain('to="/dashboard"')
+    // The chrome only greets; it never gates a public page.
+    expect(chrome).not.toContain('redirect(')
+    expect(chrome).not.toContain('getCurrentUserFn')
   })
 
   it('carries no stale “later stage” copy for features that now exist', () => {
@@ -812,7 +836,10 @@ describe('the admin area wears the shared shell', () => {
       const source = withoutComments(read(file))
       for (const match of source.matchAll(/<table className="([^"]*)"/g)) {
         const tableClass = match[1]
-        const beforeTable = source.slice(Math.max(0, match.index - 260), match.index)
+        const beforeTable = source.slice(
+          Math.max(0, match.index - 260),
+          match.index,
+        )
         expect(tableClass).toMatch(/\bmin-w-(?:\[|[a-z0-9-]+)/)
         expect(beforeTable).toMatch(/AdminTableFrame|overflow-x-auto/)
       }

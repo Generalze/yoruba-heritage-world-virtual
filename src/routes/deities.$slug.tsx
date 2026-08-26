@@ -1,6 +1,7 @@
 import { Link, createFileRoute, notFound } from '@tanstack/react-router'
 
 import { getDeityFn } from '@/services/catalogue-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import {
   BackLink,
@@ -18,6 +19,7 @@ import {
  * interface.
  */
 export const Route = createFileRoute('/deities/$slug')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: async ({ params }) => {
     const deity = await getDeityFn({ data: { slug: params.slug } })
     if (!deity) throw notFound()
@@ -37,14 +39,18 @@ export const Route = createFileRoute('/deities/$slug')({
 })
 
 function DeityNotFound() {
+  const { user } = Route.useRouteContext()
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         title="Profile not found"
         intro="This deity profile is not available."
       >
         <div className="mt-6">
-          <Link to="/deities" className={buttonClass('secondary-on-dark', 'md')}>
+          <Link
+            to="/deities"
+            className={buttonClass('secondary-on-dark', 'md')}
+          >
             Back to deity profiles
           </Link>
         </div>
@@ -54,10 +60,11 @@ function DeityNotFound() {
 }
 
 function DeityPage() {
+  const { user } = Route.useRouteContext()
   const deity = Route.useLoaderData()
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         kicker="Deity profile"
         title={deity.name}

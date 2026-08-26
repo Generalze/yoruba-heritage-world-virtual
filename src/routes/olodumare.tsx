@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import { Container, PatternDivider, buttonClass } from '@/components/ui'
 
@@ -15,6 +16,7 @@ import { Container, PatternDivider, buttonClass } from '@/components/ui'
  * canon. Nothing on this page is AI-generated or editable content.
  */
 export const Route = createFileRoute('/olodumare')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   head: () => ({
     meta: [{ title: 'Olódùmárè — Yorùbá Heritage World Virtual' }],
   }),
@@ -22,8 +24,9 @@ export const Route = createFileRoute('/olodumare')({
 })
 
 function OlodumarePage() {
+  const { user } = Route.useRouteContext()
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <section className="bg-canvas">
         <Container className="py-12 sm:py-16">
           <div className="texture-night relative overflow-hidden rounded-2xl border border-gold/30 bg-night px-6 py-16 sm:py-20">

@@ -1,6 +1,7 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 
 import { listSacredHousesFn } from '@/services/catalogue-actions'
+import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import { EmblemMedallion } from '@/components/motifs'
 import { Badge, Container, IconArrow, PageBanner } from '@/components/ui'
@@ -13,6 +14,7 @@ import { Badge, Container, IconArrow, PageBanner } from '@/components/ui'
  * House would be an emblem nobody approved.
  */
 export const Route = createFileRoute('/sacred-houses/')({
+  beforeLoad: async () => ({ user: await getCurrentUserFn() }),
   loader: () => listSacredHousesFn(),
   head: () => ({
     meta: [{ title: 'Sacred Houses — Yorùbá Heritage World Virtual' }],
@@ -21,10 +23,11 @@ export const Route = createFileRoute('/sacred-houses/')({
 })
 
 function SacredHousesPage() {
+  const { user } = Route.useRouteContext()
   const houses = Route.useLoaderData()
 
   return (
-    <PublicPage>
+    <PublicPage user={user}>
       <PageBanner
         kicker="Discover"
         title="Sacred Houses"
