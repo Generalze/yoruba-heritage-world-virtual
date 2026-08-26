@@ -12,6 +12,7 @@ import { z } from 'zod'
 import {
   AdminError,
   AdminField,
+  AdminTableFrame,
   StatusBadge,
   adminInputClass,
 } from '@/components/admin'
@@ -321,7 +322,11 @@ function AppointmentDetail() {
               {appointment.guidanceSet.set.preferredLanguageSnapshot ?? '—'}
             </p>
             {appointment.guidanceSet.assignments.length > 0 ? (
-              <table className="mt-4 w-full text-left text-sm">
+              <AdminTableFrame
+                label="Spiritual guidance assignments"
+                className="mt-4"
+              >
+                <table className="w-full min-w-[760px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
                     <th className="py-2 pr-4">Title</th>
@@ -361,7 +366,8 @@ function AppointmentDetail() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+                </table>
+              </AdminTableFrame>
             ) : null}
           </>
         )}

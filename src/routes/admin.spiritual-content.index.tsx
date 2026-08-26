@@ -86,7 +86,7 @@ function SpiritualContentLibraryPage() {
         </p>
       ) : (
         <div className="mt-6 overflow-x-auto">
-          <table className="w-full text-left text-sm">
+          <table className="w-full min-w-[980px] text-left text-sm">
             <thead>
               <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
                 <th className="py-2 pr-4">Code</th>

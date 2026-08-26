@@ -4,6 +4,23 @@ import type { WorkflowEvent } from '@/services/admin-catalogue'
 
 /** Shared building blocks for the admin catalogue UI. */
 
+export function AdminTableFrame(props: {
+  label: string
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <div
+      role="region"
+      aria-label={props.label}
+      tabIndex={0}
+      className={`mt-6 overflow-x-auto rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-deep focus-visible:ring-offset-2 focus-visible:ring-offset-canvas ${props.className ?? ''}`}
+    >
+      {props.children}
+    </div>
+  )
+}
+
 const STATUS_STYLES: Record<string, string> = {
   DRAFT: 'border border-line-strong bg-surface text-ink-soft',
   UNDER_REVIEW: 'border border-caution/40 bg-caution/10 text-caution',

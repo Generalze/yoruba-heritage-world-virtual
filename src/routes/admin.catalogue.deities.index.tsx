@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
 
-import { StatusBadge } from '@/components/admin'
+import { AdminTableFrame, StatusBadge } from '@/components/admin'
 import { adminListDeitiesFn } from '@/services/admin-catalogue-actions'
 import { CATALOGUE_STATUSES } from '@/db/schema'
 
@@ -44,42 +44,44 @@ function AdminDeitiesList() {
           </Link>
         </div>
       </div>
-      <table className="mt-6 w-full text-left text-sm">
-        <thead>
-          <tr className="border-b border-line text-xs text-ink-soft uppercase">
-            <th className="py-2 pr-4">Name</th>
-            <th className="py-2 pr-4">Code</th>
-            <th className="py-2 pr-4">Status</th>
-            <th className="py-2 pr-4">Active</th>
-            <th className="py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((deity) => (
-            <tr key={deity.id} className="border-b border-line">
-              <td className="py-3 pr-4">{deity.name}</td>
-              <td className="py-3 pr-4 font-mono text-xs text-ink-soft">
-                {deity.code}
-              </td>
-              <td className="py-3 pr-4">
-                <StatusBadge status={deity.profileStatus} />
-              </td>
-              <td className="py-3 pr-4 text-ink-soft">
-                {deity.active ? 'yes' : 'no'}
-              </td>
-              <td className="py-3 text-right">
-                <Link
-                  to="/admin/catalogue/deities/$id"
-                  params={{ id: deity.id }}
-                  className="text-gold-deep hover:text-ink"
-                >
-                  Open
-                </Link>
-              </td>
+      <AdminTableFrame label="Deity profiles">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-line text-xs text-ink-soft uppercase">
+              <th className="py-2 pr-4">Name</th>
+              <th className="py-2 pr-4">Code</th>
+              <th className="py-2 pr-4">Status</th>
+              <th className="py-2 pr-4">Active</th>
+              <th className="py-2" />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {visible.map((deity) => (
+              <tr key={deity.id} className="border-b border-line">
+                <td className="py-3 pr-4">{deity.name}</td>
+                <td className="py-3 pr-4 font-mono text-xs text-ink-soft">
+                  {deity.code}
+                </td>
+                <td className="py-3 pr-4">
+                  <StatusBadge status={deity.profileStatus} />
+                </td>
+                <td className="py-3 pr-4 text-ink-soft">
+                  {deity.active ? 'yes' : 'no'}
+                </td>
+                <td className="py-3 text-right">
+                  <Link
+                    to="/admin/catalogue/deities/$id"
+                    params={{ id: deity.id }}
+                    className="text-gold-deep hover:text-ink"
+                  >
+                    Open
+                  </Link>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </AdminTableFrame>
     </div>
   )
 }

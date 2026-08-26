@@ -6,7 +6,7 @@ import {
   useRouter,
 } from '@tanstack/react-router'
 
-import { StatusBadge } from '@/components/admin'
+import { AdminTableFrame, StatusBadge } from '@/components/admin'
 import { adminListAppointmentsFn } from '@/services/appointment-actions'
 import { APPOINTMENT_STATUSES } from '@/db/schema'
 
@@ -110,47 +110,51 @@ function AppointmentsList() {
         />
       </div>
 
-      <table className="mt-6 w-full text-left text-sm">
-        <thead>
-          <tr className="border-b border-line text-xs text-ink-soft uppercase">
-            <th className="py-2 pr-4">Starts (UTC)</th>
-            <th className="py-2 pr-4">Service</th>
-            <th className="py-2 pr-4">Sacred House</th>
-            <th className="py-2 pr-4">Status</th>
-            <th className="py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((appointment) => (
-            <tr key={appointment.id} className="border-b border-line">
-              <td className="py-3 pr-4 font-mono text-xs">
-                {appointment.startsAtUtc}
-              </td>
-              <td className="py-3 pr-4">{appointment.serviceNameSnapshot}</td>
-              <td className="py-3 pr-4">{appointment.houseNameSnapshot}</td>
-              <td className="py-3 pr-4">
-                <StatusBadge status={appointment.status} />
-              </td>
-              <td className="py-3 text-right">
-                <Link
-                  to="/admin/appointments/$id"
-                  params={{ id: appointment.id }}
-                  className="text-gold-deep hover:text-ink"
-                >
-                  Open
-                </Link>
-              </td>
+      <AdminTableFrame label="Appointments">
+        <table className="w-full min-w-[760px] text-left text-sm">
+          <thead>
+            <tr className="border-b border-line text-xs text-ink-soft uppercase">
+              <th className="py-2 pr-4">Starts (UTC)</th>
+              <th className="py-2 pr-4">Service</th>
+              <th className="py-2 pr-4">Sacred House</th>
+              <th className="py-2 pr-4">Status</th>
+              <th className="py-2" />
             </tr>
-          ))}
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={5} className="py-6 text-ink-soft">
-                No appointments match these filters.
-              </td>
-            </tr>
-          ) : null}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((appointment) => (
+              <tr key={appointment.id} className="border-b border-line">
+                <td className="py-3 pr-4 font-mono text-xs">
+                  {appointment.startsAtUtc}
+                </td>
+                <td className="py-3 pr-4">
+                  {appointment.serviceNameSnapshot}
+                </td>
+                <td className="py-3 pr-4">{appointment.houseNameSnapshot}</td>
+                <td className="py-3 pr-4">
+                  <StatusBadge status={appointment.status} />
+                </td>
+                <td className="py-3 text-right">
+                  <Link
+                    to="/admin/appointments/$id"
+                    params={{ id: appointment.id }}
+                    className="text-gold-deep hover:text-ink"
+                  >
+                    Open
+                  </Link>
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="py-6 text-ink-soft">
+                  No appointments match these filters.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </AdminTableFrame>
     </div>
   )
 }

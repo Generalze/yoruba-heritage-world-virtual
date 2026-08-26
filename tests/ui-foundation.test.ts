@@ -25,6 +25,40 @@ import { formatDurationMinutes, formatMinorAmount } from '@/lib/format'
 const read = (relativePath: string): string =>
   readFileSync(join(process.cwd(), relativePath), 'utf8')
 
+const jpegDimensions = (
+  relativePath: string,
+): { width: number; height: number } => {
+  const buffer = readFileSync(join(process.cwd(), relativePath))
+  if (buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+    throw new Error(`${relativePath} is not a JPEG`)
+  }
+
+  let offset = 2
+  while (offset < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1
+      continue
+    }
+    const marker = buffer[offset + 1]
+    const length = buffer.readUInt16BE(offset + 2)
+    const isStartOfFrame =
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc
+    if (isStartOfFrame) {
+      return {
+        height: buffer.readUInt16BE(offset + 5),
+        width: buffer.readUInt16BE(offset + 7),
+      }
+    }
+    offset += 2 + length
+  }
+
+  throw new Error(`${relativePath} has no JPEG size marker`)
+}
+
 /** Comments stripped, so prose ABOUT a rule cannot satisfy or violate
  * the rule — the house pattern from the deployment-topology suite. */
 const withoutComments = (source: string): string =>
@@ -214,6 +248,55 @@ describe('landing page (src/routes/index.tsx)', () => {
     expect(code).toContain('object-cover')
     expect(code).toContain('alt=""')
     expect(code).not.toMatch(/src="https?:/)
+  })
+
+  it('keeps the committed hero asset viable at Stage 8 audit widths', () => {
+    const dimensions = jpegDimensions('public/hero-sanctuary.jpg')
+    expect(dimensions).toEqual({ width: 1672, height: 941 })
+    expect(code).toContain('width={1672}')
+    expect(code).toContain('height={941}')
+    expect(code).toContain('object-[72%_center]')
+    expect(code).toContain('lg:object-center')
+
+    const subject = { x: 1240, y: 530 }
+    const frames = [
+      { width: 390, height: 640, objectX: 0.72 },
+      { width: 768, height: 700, objectX: 0.72 },
+      { width: 1024, height: 620, objectX: 0.5 },
+      { width: 1440, height: 680, objectX: 0.5 },
+      { width: 1920, height: 760, objectX: 0.5 },
+      { width: 2560, height: 900, objectX: 0.5 },
+    ] as const
+
+    for (const frame of frames) {
+      const frameAspect = frame.width / frame.height
+      const imageAspect = dimensions.width / dimensions.height
+      const crop =
+        frameAspect > imageAspect
+          ? {
+              left: 0,
+              right: dimensions.width,
+              top: (dimensions.height - dimensions.width / frameAspect) / 2,
+              bottom:
+                (dimensions.height + dimensions.width / frameAspect) / 2,
+            }
+          : {
+              left:
+                (dimensions.width - dimensions.height * frameAspect) *
+                frame.objectX,
+              right:
+                (dimensions.width - dimensions.height * frameAspect) *
+                  frame.objectX +
+                dimensions.height * frameAspect,
+              top: 0,
+              bottom: dimensions.height,
+            }
+
+      expect(subject.x).toBeGreaterThan(crop.left)
+      expect(subject.x).toBeLessThan(crop.right)
+      expect(subject.y).toBeGreaterThan(crop.top)
+      expect(subject.y).toBeLessThan(crop.bottom)
+    }
   })
 })
 
@@ -710,6 +793,29 @@ describe('the admin area wears the shared shell', () => {
       .map((name) => `src/routes/${name}`)
     for (const file of [...files, 'src/components/admin.tsx']) {
       expect(read(file)).not.toMatch(doubled)
+    }
+  })
+
+  it('keeps admin data tables contained and keyboard-scrollable on mobile', () => {
+    const adminComponents = read('src/components/admin.tsx')
+    expect(adminComponents).toContain('function AdminTableFrame')
+    expect(adminComponents).toContain('role="region"')
+    expect(adminComponents).toContain('aria-label={props.label}')
+    expect(adminComponents).toContain('tabIndex={0}')
+    expect(adminComponents).toContain('overflow-x-auto')
+    expect(adminComponents).toContain('focus-visible:ring-2')
+
+    const adminFiles = readdirSync(join(process.cwd(), 'src/routes'))
+      .filter((name) => name.startsWith('admin') && name.endsWith('.tsx'))
+      .map((name) => `src/routes/${name}`)
+    for (const file of adminFiles) {
+      const source = withoutComments(read(file))
+      for (const match of source.matchAll(/<table className="([^"]*)"/g)) {
+        const tableClass = match[1]
+        const beforeTable = source.slice(Math.max(0, match.index - 260), match.index)
+        expect(tableClass).toMatch(/\bmin-w-(?:\[|[a-z0-9-]+)/)
+        expect(beforeTable).toMatch(/AdminTableFrame|overflow-x-auto/)
+      }
     }
   })
 

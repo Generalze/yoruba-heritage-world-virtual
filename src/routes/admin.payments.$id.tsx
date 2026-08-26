@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 
+import { AdminTableFrame } from '@/components/admin'
 import {
   adminGetPaymentFn,
   adminReverifyPaymentFn,
@@ -168,7 +169,8 @@ function AdminPaymentDetailPage() {
             No webhook events linked to this attempt.
           </p>
         ) : (
-          <table className="mt-4 w-full text-left text-sm">
+          <AdminTableFrame label="Webhook history" className="mt-4">
+            <table className="w-full min-w-[760px] text-left text-sm">
             <thead>
               <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
                 <th className="py-2 pr-4">Event</th>
@@ -200,7 +202,8 @@ function AdminPaymentDetailPage() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </AdminTableFrame>
         )}
       </section>
     </div>

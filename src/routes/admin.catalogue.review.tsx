@@ -1,6 +1,6 @@
 import { Link, createFileRoute, redirect } from '@tanstack/react-router'
 
-import { StatusBadge } from '@/components/admin'
+import { AdminTableFrame, StatusBadge } from '@/components/admin'
 import { adminReviewQueueFn } from '@/services/admin-catalogue-actions'
 
 /**
@@ -40,63 +40,65 @@ function ReviewQueuePage() {
           Nothing is waiting for review.
         </p>
       ) : (
-        <table className="mt-6 w-full text-left text-sm">
-          <thead>
-            <tr className="border-b border-line text-xs text-ink-soft uppercase">
-              <th className="py-2 pr-4">Type</th>
-              <th className="py-2 pr-4">Name</th>
-              <th className="py-2 pr-4">Status</th>
-              <th className="py-2 pr-4">Last updated</th>
-              <th className="py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((item) => (
-              <tr
-                key={`${item.kind}-${item.id}`}
-                className="border-b border-line"
-              >
-                <td className="py-3 pr-4 text-ink-soft">
-                  {KIND_LABEL[item.kind]}
-                </td>
-                <td className="py-3 pr-4">{item.name}</td>
-                <td className="py-3 pr-4">
-                  <StatusBadge status="UNDER_REVIEW" />
-                </td>
-                <td className="py-3 pr-4 text-ink-soft">
-                  {new Date(item.updatedAt).toLocaleString()}
-                </td>
-                <td className="py-3 text-right">
-                  {item.kind === 'deity' ? (
-                    <Link
-                      to="/admin/catalogue/deities/$id"
-                      params={{ id: item.id }}
-                      className="text-gold-deep hover:text-ink"
-                    >
-                      Review
-                    </Link>
-                  ) : item.kind === 'sacred_house' ? (
-                    <Link
-                      to="/admin/catalogue/sacred-houses/$id"
-                      params={{ id: item.id }}
-                      className="text-gold-deep hover:text-ink"
-                    >
-                      Review
-                    </Link>
-                  ) : (
-                    <Link
-                      to="/admin/catalogue/services/$id"
-                      params={{ id: item.id }}
-                      className="text-gold-deep hover:text-ink"
-                    >
-                      Review
-                    </Link>
-                  )}
-                </td>
+        <AdminTableFrame label="Catalogue review queue">
+          <table className="w-full min-w-[680px] text-left text-sm">
+            <thead>
+              <tr className="border-b border-line text-xs text-ink-soft uppercase">
+                <th className="py-2 pr-4">Type</th>
+                <th className="py-2 pr-4">Name</th>
+                <th className="py-2 pr-4">Status</th>
+                <th className="py-2 pr-4">Last updated</th>
+                <th className="py-2" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr
+                  key={`${item.kind}-${item.id}`}
+                  className="border-b border-line"
+                >
+                  <td className="py-3 pr-4 text-ink-soft">
+                    {KIND_LABEL[item.kind]}
+                  </td>
+                  <td className="py-3 pr-4">{item.name}</td>
+                  <td className="py-3 pr-4">
+                    <StatusBadge status="UNDER_REVIEW" />
+                  </td>
+                  <td className="py-3 pr-4 text-ink-soft">
+                    {new Date(item.updatedAt).toLocaleString()}
+                  </td>
+                  <td className="py-3 text-right">
+                    {item.kind === 'deity' ? (
+                      <Link
+                        to="/admin/catalogue/deities/$id"
+                        params={{ id: item.id }}
+                        className="text-gold-deep hover:text-ink"
+                      >
+                        Review
+                      </Link>
+                    ) : item.kind === 'sacred_house' ? (
+                      <Link
+                        to="/admin/catalogue/sacred-houses/$id"
+                        params={{ id: item.id }}
+                        className="text-gold-deep hover:text-ink"
+                      >
+                        Review
+                      </Link>
+                    ) : (
+                      <Link
+                        to="/admin/catalogue/services/$id"
+                        params={{ id: item.id }}
+                        className="text-gold-deep hover:text-ink"
+                      >
+                        Review
+                      </Link>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </AdminTableFrame>
       )}
     </div>
   )
