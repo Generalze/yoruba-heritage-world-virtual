@@ -2688,4 +2688,78 @@ snapshotted on the subscription. It is never the server's date.
 
 ---
 
+# 48. Amendment — Notifications (Phase One, canon §42 item 23)
+
+Canon §3.1 fixes that notification jobs and appointment reminders run on
+a **MariaDB-backed job table, no Redis**, and §25 names a notifications
+table. The operating rules below were authorised explicitly by the
+platform owner and are binding.
+
+## 48.1 Channels
+
+Two channels exist: **IN_APP** and **EMAIL**.
+
+- IN_APP needs no transport — the row *is* the delivery.
+- EMAIL has **no approved vendor**. `NOTIFICATION_EMAIL_DRIVER` selects
+  `MOCK` (development and test; in-memory, makes no network call) or
+  `DISABLED` (the honest production statement that email is
+  unavailable). `MOCK` is refused in production by env validation. A
+  real adapter is a later, separately verified step.
+- A refused or failed email is **not a lost notification**: the in-app
+  copy is independent and has already been delivered.
+
+## 48.2 What raises one
+
+Three categories, and only these:
+
+- **APPOINTMENT** — confirmed, cancelled, rescheduled, reservation
+  expired.
+- **PRAYER_ROOM** — the generation job reached READY.
+- **PAYMENT** — payment verified, or payment received and held for
+  review.
+
+Subscription events were considered and **deliberately excluded** from
+this step.
+
+## 48.3 What a notification may say
+
+Only the safe snapshots the appointment and Prayer Room pages already
+show their owner: service name, Sacred House name, and the scheduled
+time in the member's own timezone.
+
+**Never** prayer or spiritual text, a content hash, a provider code, an
+object key, a job or upload id, a pipeline error, or the private request
+note. A delivery's `last_error` records an operator-facing code only,
+never the member's own content.
+
+## 48.4 Raising never breaks the event
+
+Raising a notification is **best-effort and never throws**. It runs
+outside the transaction it describes, exactly as audit recording does. A
+booking, a payment settlement or a completed render must never fail
+because someone could not be told about it.
+
+## 48.5 Preferences
+
+Members mute **per category, per channel**. Preferences are consulted
+when a notification is **raised**, not when a list is rendered, so a
+muted channel never becomes queued work.
+
+- Absence of a preference row means *not muted*; no backfill is required.
+- A muted channel is recorded **SUPPRESSED** rather than omitted, so
+  "we chose not to send this" stays visible and auditable.
+- The notification row is written **whatever the preferences say**:
+  muting a category can never erase the history of a payment or a
+  cancellation.
+
+## 48.6 The queue
+
+PENDING rows in `notification_deliveries` **are** canon §3.1's job
+table. There is no Redis and no second queue. One delivery row per
+channel per notification, enforced by a unique index, so re-running the
+dispatcher can never fan out duplicate sends. A deterministic refusal
+marks the row FAILED; a retryable one is left PENDING for the next pass.
+
+---
+
 **End of Technical Canon**

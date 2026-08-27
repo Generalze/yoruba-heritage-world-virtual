@@ -36,6 +36,10 @@ import {
 import { assignGuidanceForAppointmentUnderTx } from './guidance'
 import { enqueuePrayerGenerationUnderTx } from './generation-jobs'
 import type { GuidanceAssignmentSummary } from './guidance'
+import {
+  notifyAppointmentCancelled,
+  notifyAppointmentRescheduled,
+} from './notification-events'
 import type { MinuteInterval } from './scheduling'
 import type { RequestContext } from '@/auth/service'
 import type { AssignmentRole } from '@/db/schema'
@@ -794,6 +798,7 @@ export async function cancelAppointment(
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
   })
+  await notifyAppointmentCancelled(appointmentId)
 }
 
 /**
@@ -932,6 +937,7 @@ export async function rescheduleAppointment(
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
   })
+  await notifyAppointmentRescheduled(appointmentId)
 }
 
 export async function completeAppointment(

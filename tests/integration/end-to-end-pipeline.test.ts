@@ -1526,14 +1526,15 @@ describe('orchestration contract', () => {
     const rows = (await getDb().execute(
       'SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE()',
     )) as unknown as Array<Array<{ c: number }>>
-    // 55 at Step 18, plus the four daily subscription tables authorised
-    // by canon §42 item 22 (rules in §47). This pipeline still stores
-    // nothing of its own, which is what the guard is really for.
-    expect(Number(rows[0][0].c)).toBe(59)
+    // 55 at Step 18, plus four daily subscription tables (canon §42
+    // item 22, rules in §47) and three notification tables (§42 item 23,
+    // rules in §48). This pipeline still stores nothing of its own,
+    // which is what the guard is really for.
+    expect(Number(rows[0][0].c)).toBe(62)
     const migrations = readdirSync(join(process.cwd(), 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort()
-    expect(migrations).toHaveLength(17)
-    expect(migrations.at(-1)).toMatch(/^0016_/)
+    expect(migrations).toHaveLength(18)
+    expect(migrations.at(-1)).toMatch(/^0017_/)
   }, 240_000)
 })

@@ -28,6 +28,7 @@ import {
   renderedDurationMatchesPlan,
   verifyCompletedRender,
 } from './render-assembly'
+import { notifyPrayerRoomReady } from './notification-events'
 import type { RenderContext } from './render-assembly'
 import type { GenerationClock } from './generation-jobs'
 import type { ObjectStorageProvider } from '@/providers/object-storage/types'
@@ -755,6 +756,12 @@ export async function runUploadOnce(
         },
       },
     )
+    if (finalized) {
+      // The job genuinely reached READY under our lease, so the Prayer
+      // Room is open. Best-effort and outside the transition: a
+      // notification failure must never un-finish a finished render.
+      await notifyPrayerRoomReady(job.appointmentId)
+    }
     return finalized
       ? { status: 'COMPLETE', jobId: job.id }
       : { status: 'LEASE_LOST', jobId: job.id }

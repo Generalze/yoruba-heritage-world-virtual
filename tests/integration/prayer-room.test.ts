@@ -1697,10 +1697,11 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
     // TEETH: Step 18 stores nothing of its own — appointment, job and
     // upload state already say everything a Prayer Room needs.
     //
-    // The number moved from 55 to 59 exactly once, for the four daily
-    // subscription tables (canon §42 item 22, rules recorded in §47).
-    // Nothing else may move it without a canon section to point at.
-    expect(count).toBe(59)
+    // 55 at Step 18, plus four daily subscription tables (canon §42
+    // item 22, rules in §47) and three notification tables (§42 item 23,
+    // rules in §48). Nothing may move it without a canon section to
+    // point at.
+    expect(count).toBe(62)
   }, 240_000)
 })
 

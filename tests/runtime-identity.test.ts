@@ -52,6 +52,7 @@ const PRODUCTION: Record<string, string> = {
   RENDER_DRIVER: 'REMOTION',
   VISUAL_GENERATION_DRIVER: 'DISABLED',
   TTS_DRIVER: 'DISABLED',
+  NOTIFICATION_EMAIL_DRIVER: 'DISABLED',
 }
 
 function preflight(overrides: Record<string, string> = {}) {

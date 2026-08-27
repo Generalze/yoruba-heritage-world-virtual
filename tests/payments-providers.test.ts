@@ -1219,6 +1219,7 @@ describe('payment environment validation', () => {
     RENDER_DRIVER: 'REMOTION',
     VISUAL_GENERATION_DRIVER: 'DISABLED',
     TTS_DRIVER: 'DISABLED',
+    NOTIFICATION_EMAIL_DRIVER: 'DISABLED',
   }
 
   it('defaults everything payment to disabled', () => {

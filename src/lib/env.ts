@@ -68,6 +68,7 @@ const EMPTY_MEANS_UNSET: ReadonlySet<string> = new Set([
   'RENDER_DRIVER',
   'VISUAL_GENERATION_DRIVER',
   'TTS_DRIVER',
+  'NOTIFICATION_EMAIL_DRIVER',
   'REMOTION_CONCURRENCY',
   'REMOTION_TIMEOUT_MS',
 ])
@@ -225,6 +226,16 @@ const envObjectSchema = z
      * below in EVERY environment — a half-configured paid client must
      * not exist. */
     TTS_DRIVER: z.enum(['MOCK', 'DISABLED', '9JALINGO']).default('MOCK'),
+
+    /** Email channel for notifications (Step 23). No email vendor has
+     * been approved for this platform, so there is no real adapter yet:
+     * MOCK is the development/test channel that records messages in
+     * memory and makes no network call, and DISABLED is the honest
+     * production statement that email delivery is unavailable. The
+     * in-app channel is independent of this setting and always works. */
+    NOTIFICATION_EMAIL_DRIVER: z
+      .enum(['MOCK', 'DISABLED'])
+      .default('MOCK'),
 
     // --- 9jaLingo TTS (Phase One, Step 20) --------------------------------
     //
@@ -480,6 +491,14 @@ const envObjectSchema = z
         path: ['TTS_DRIVER'],
         message:
           'TTS_DRIVER=MOCK is invalid in production; set DISABLED until an approved adapter is selected',
+      })
+    }
+    if (cfg.NOTIFICATION_EMAIL_DRIVER === 'MOCK') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['NOTIFICATION_EMAIL_DRIVER'],
+        message:
+          'NOTIFICATION_EMAIL_DRIVER=MOCK is invalid in production; set DISABLED until an approved adapter is selected',
       })
     }
   })

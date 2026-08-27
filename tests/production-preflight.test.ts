@@ -44,6 +44,7 @@ const PRODUCTION_SOURCE: Record<string, string> = {
   RENDER_DRIVER: 'REMOTION',
   VISUAL_GENERATION_DRIVER: 'DISABLED',
   TTS_DRIVER: 'DISABLED',
+  NOTIFICATION_EMAIL_DRIVER: 'DISABLED',
 }
 
 function parse(overrides: Record<string, string | undefined> = {}): Env {
@@ -247,6 +248,7 @@ describe('9jaLingo TTS selection (Step 20)', () => {
    * in exactly one way. */
   const NAIJALINGO_SOURCE: Record<string, string> = {
     TTS_DRIVER: '9JALINGO',
+    NOTIFICATION_EMAIL_DRIVER: 'DISABLED',
     NAIJALINGO_API_KEY: 'test-key-placeholder',
     NAIJALINGO_API_BASE_URL: 'https://api.example-9jalingo.test/v1',
     NAIJALINGO_YO_VOICE_ID: 'adeola_yo',
@@ -313,6 +315,7 @@ describe('9jaLingo TTS selection (Step 20)', () => {
     const cfg = {
       ...parse(),
       TTS_DRIVER: '9JALINGO' as const,
+      NOTIFICATION_EMAIL_DRIVER: 'DISABLED' as const,
       NAIJALINGO_API_KEY: '',
       NAIJALINGO_API_BASE_URL: 'http://insecure.example',
       NAIJALINGO_YO_VOICE_ID: '',

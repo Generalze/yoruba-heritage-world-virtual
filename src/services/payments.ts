@@ -24,6 +24,10 @@ import { PaymentProviderError } from '@/providers/payments/types'
 import { AppointmentError, confirmReservationUnderLock } from './appointments'
 import type { GuidanceAssignmentSummary } from './guidance'
 import { getOrCreateBookingSettings, lockHouseScheduling } from './scheduling'
+import {
+  notifyAppointmentConfirmed,
+  notifyPaymentUnderReview,
+} from './notification-events'
 import type {
   PaymentAttemptStatus,
   PaymentProviderCode,
@@ -783,6 +787,7 @@ export async function settleVerifiedPayment(
           reason: result.reviewReason,
         },
       })
+      await notifyPaymentUnderReview(attempt.appointmentId)
     }
     if (result.confirmed) {
       await recordAuditEvent({
@@ -796,6 +801,10 @@ export async function settleVerifiedPayment(
           paymentAttemptId: result.attemptId,
         },
       })
+      // Best-effort, outside the settlement transaction: telling
+      // someone their appointment is confirmed must never be able to
+      // un-confirm it.
+      await notifyAppointmentConfirmed(attempt.appointmentId)
       if (result.guidance && !result.guidance.alreadyExisted) {
         await recordAuditEvent({
           actorUserId: null,
