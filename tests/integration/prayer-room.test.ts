@@ -1689,14 +1689,18 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
     expect(code).toContain("from '@/lib/spiritual-service-notice'")
   })
 
-  it('adds no table: the schema is still the Step 17 shape', async () => {
+  it('adds no table of its own, and the schema only grows when authorised', async () => {
     const rows = (await getDb().execute(
       "SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE()",
     )) as unknown as Array<Array<{ c: number }>>
     const count = Number(rows[0][0].c)
     // TEETH: Step 18 stores nothing of its own — appointment, job and
     // upload state already say everything a Prayer Room needs.
-    expect(count).toBe(55)
+    //
+    // The number moved from 55 to 59 exactly once, for the four daily
+    // subscription tables (canon §42 item 22, rules recorded in §47).
+    // Nothing else may move it without a canon section to point at.
+    expect(count).toBe(59)
   }, 240_000)
 })
 

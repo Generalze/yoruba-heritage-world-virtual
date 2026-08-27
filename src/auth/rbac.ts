@@ -41,6 +41,8 @@ export const PERMISSION_CODES = [
   'availability.manage',
   'payments.view',
   'payments.manage',
+  'subscriptions.view',
+  'subscriptions.manage',
   'spiritual_content.view',
   'spiritual_content.manage',
   'spiritual_content.approve',
@@ -151,6 +153,16 @@ export const PERMISSION_DEFINITIONS: Record<
     description:
       'Operational payment review and provider re-verification — never manual fabrication of successful payments',
   },
+  'subscriptions.view': {
+    name: 'View subscriptions',
+    description:
+      'Inspect subscription plans, subscriber terms and delivery history',
+  },
+  'subscriptions.manage': {
+    name: 'Manage subscriptions',
+    description:
+      'Configure prepaid plans and schedule APPROVED content to dates — never implies authoring or approving spiritual content',
+  },
   'spiritual_content.view': {
     name: 'View spiritual guidance content (staff)',
     description:
@@ -247,6 +259,11 @@ const SPIRITUAL_CONTENT_ALL: Array<PermissionCode> = [
   'sacred_content.rights_manage',
 ]
 
+const SUBSCRIPTION_PERMISSIONS: Array<PermissionCode> = [
+  'subscriptions.view',
+  'subscriptions.manage',
+]
+
 const CATALOGUE_VIEW: Array<PermissionCode> = [
   'deities.view',
   'sacred_houses.view',
@@ -296,6 +313,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'catalogue.publish',
     ...APPOINTMENT_PERMISSIONS,
     ...PAYMENT_PERMISSIONS,
+    ...SUBSCRIPTION_PERMISSIONS,
     ...SPIRITUAL_CONTENT_ALL,
     ...MEDIA_ALL,
   ],
@@ -309,6 +327,7 @@ export const ROLE_PERMISSION_MAP: Record<RoleCode, Array<PermissionCode>> = {
     'catalogue.publish',
     ...APPOINTMENT_PERMISSIONS,
     ...PAYMENT_PERMISSIONS,
+    ...SUBSCRIPTION_PERMISSIONS,
     ...SPIRITUAL_CONTENT_ALL,
     ...MEDIA_ALL,
   ],

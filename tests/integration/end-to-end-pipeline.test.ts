@@ -1522,15 +1522,18 @@ describe('orchestration contract', () => {
     expect(source).not.toContain('.set({ ' + 'status:')
   })
 
-  it('adds no table and no migration: the schema is still the Step 18 shape', async () => {
+  it('adds no table and no migration of its own', async () => {
     const rows = (await getDb().execute(
       'SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE()',
     )) as unknown as Array<Array<{ c: number }>>
-    expect(Number(rows[0][0].c)).toBe(55)
+    // 55 at Step 18, plus the four daily subscription tables authorised
+    // by canon §42 item 22 (rules in §47). This pipeline still stores
+    // nothing of its own, which is what the guard is really for.
+    expect(Number(rows[0][0].c)).toBe(59)
     const migrations = readdirSync(join(process.cwd(), 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort()
-    expect(migrations).toHaveLength(16)
-    expect(migrations.at(-1)).toMatch(/^0015_/)
+    expect(migrations).toHaveLength(17)
+    expect(migrations.at(-1)).toMatch(/^0016_/)
   }, 240_000)
 })

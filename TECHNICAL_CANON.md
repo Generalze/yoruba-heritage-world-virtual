@@ -2625,4 +2625,67 @@ Cost tracking for AI calls      REQUIRED
 
 ---
 
+# 47. Amendment — Daily Spiritual Subscriptions (Phase One, canon §42 item 22)
+
+Canon §2 fixes that daily spiritual subscriptions are a **distinct system
+from appointment bookings**, and §25 names their tables. The operating
+rules below were authorised explicitly by the platform owner and are
+binding; nothing here may be widened by inference.
+
+## 47.1 Delivery
+
+A subscriber receives **approved text/audio only**.
+
+- No video is generated for a subscriber-day, so no paid provider call
+  sits on the daily path.
+- The engine stores **no spiritual text of its own**. It references
+  versions already PUBLISHED through the existing approval workflow.
+- A version that is later archived **stops being delivered**: approval
+  remains authoritative after scheduling, not only at scheduling time.
+
+## 47.2 Purchase
+
+Purchase is a **prepaid fixed term** — never a recurring mandate.
+
+- No stored cards, no renewal attempts, no dunning.
+- The term window is inclusive: a term of N days covers its start date
+  and the N-1 days after it.
+- Plan commercial terms are **snapshotted onto the subscription** at
+  purchase, so later edits to a plan never rewrite what a member bought.
+- A plan may exist without a price, but an unpriced plan can never be
+  opened for subscription. **No price is ever invented, defaulted to
+  zero, or inferred.**
+
+## 47.3 Selection
+
+Each day is an **admin-scheduled sequence**, one approved item per plan
+per calendar date.
+
+- Two subscribers on the same plan receive the same item on the same
+  date.
+- **No AI selects spiritual content.** Canon §2 permits AI to
+  personalise the presentation of approved content; this system does not
+  exercise that permission.
+- A date with nothing scheduled delivers nothing. An empty day is a real
+  answer, never a substitute or a fallback.
+
+## 47.4 Calendars
+
+“Today” is a calendar date in the **subscriber's own timezone**, which is
+snapshotted on the subscription. It is never the server's date.
+
+## 47.5 Boundaries at this step
+
+- Subscription plans are **operational commercial config**, not cultural
+  content: ADMIN/SUPER_ADMIN manage them (`subscriptions.manage`) and
+  they carry no review or approval workflow.
+- Payment linkage is deliberately **absent**. `payment_attempts` is bound
+  to appointments; making it polymorphic is a separate, separately
+  verified change. Activation is an explicit service call, which is the
+  seam that change will use.
+- Delivery is recorded **at most once per subscription per date**, as an
+  audit trail rather than a hit counter.
+
+---
+
 **End of Technical Canon**
