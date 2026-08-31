@@ -1459,3 +1459,69 @@ describe('guards', () => {
     expect(MAX_SCENES).toBeGreaterThan(0)
   })
 })
+
+// ----------------------------------------------------------------------------
+// Step 24: an authored REQUIRED reference that cannot be resolved must stop
+// the storyboard BEFORE any executable visual task exists.
+// ----------------------------------------------------------------------------
+
+describe('reference-required generation fails closed at the storyboard', () => {
+  it('REQUIRED with no resolvable reference is GOVERNANCE_IMPOSSIBLE', async () => {
+    const serviceId = nextService()
+    const theme = `T24_REQ_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+    // CHANT with no library visual ⇒ the scene is GENERATION_REQUIRED.
+    await makeEligibleSacred({
+      themeCode: theme,
+      contentType: 'CHANT',
+      durationHintSeconds: 10,
+    })
+    // The slot AUTHORS a camera decision and demands a reference. The
+    // House's published Visual Bible is TEXT_ONLY and binds none, so no
+    // reference can resolve for WIDE_MASTER.
+    await makeServiceTemplate(serviceId, [
+      filterSlot({
+        themeCode: theme,
+        contentType: 'CHANT',
+        shotFamily: 'WIDE_MASTER',
+        referenceRequirement: 'REQUIRED',
+      }),
+    ])
+    const { jobId } = await makeStoryboardReadyJob(serviceId)
+
+    const built = await buildValidatedGenerationStoryboard(jobId)
+
+    expect(built.status).toBe('GOVERNANCE_IMPOSSIBLE')
+    if (built.status === 'GOVERNANCE_IMPOSSIBLE') {
+      expect(built.reasons).toContain('visual_reference_unavailable')
+    }
+
+    // AND nothing executable was produced: no storyboard row, no
+    // manifest, therefore no provider submission is reachable.
+    expect(await storyboardRows(jobId)).toHaveLength(0)
+    expect(await manifestRows(jobId)).toHaveLength(0)
+  }, 300_000)
+
+  it('the same fixture succeeds when the slot authors OPTIONAL', async () => {
+    // Isolates the cause: identical in every respect except the
+    // authored reference requirement.
+    const serviceId = nextService()
+    const theme = `T24_OPT_${crypto.randomUUID().slice(0, 6).toUpperCase()}`
+    await makeEligibleSacred({
+      themeCode: theme,
+      contentType: 'CHANT',
+      durationHintSeconds: 10,
+    })
+    await makeServiceTemplate(serviceId, [
+      filterSlot({
+        themeCode: theme,
+        contentType: 'CHANT',
+        shotFamily: 'WIDE_MASTER',
+        referenceRequirement: 'OPTIONAL',
+      }),
+    ])
+    const { jobId } = await makeStoryboardReadyJob(serviceId)
+
+    const built = await buildValidatedGenerationStoryboard(jobId)
+    expect(built.status).toBe('OK')
+  }, 300_000)
+})

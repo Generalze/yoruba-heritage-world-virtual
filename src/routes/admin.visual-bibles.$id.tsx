@@ -1,8 +1,11 @@
 import { useState } from 'react'
 import { Link, createFileRoute, useRouter } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
-
-import { VISUAL_BIBLE_RULE_CATEGORIES } from '@/db/schema'
+import {
+  VISUAL_BIBLE_REFERENCE_ROLES,
+  VISUAL_BIBLE_RULE_CATEGORIES,
+} from '@/db/schema'
+import type { VisualBibleReferenceRole } from '@/db/schema'
 import {
   approveVisualBibleVersionFn,
   archiveVisualBibleVersionFn,
@@ -182,7 +185,8 @@ function VisualBiblePage() {
       <ul className="mt-6 space-y-3">
         {data.versions.map((version) => {
           const versionRules = data.rulesByVersion[version.id] ?? []
-          const versionReferences = data.referencesByVersion[version.id] ?? []
+          const versionReferences =
+            data.referenceStateByVersion[version.id] ?? []
           return (
             <li
               key={version.id}
@@ -470,15 +474,6 @@ function VisualBiblePage() {
   }
 }
 
-const REFERENCE_ROLES = [
-  'WIDE_MASTER',
-  'MEDIUM_PRAYER',
-  'DIRECT_CAMERA',
-  'SIDE_PRAYER',
-  'WORKING_DETAIL',
-  'ENVIRONMENT_INSERT',
-] as const
-
 /**
  * Reference authoring for ONE Visual Bible version.
  *
@@ -499,14 +494,20 @@ function ReferencePanel(props: {
     role: string
     mediaAssetVersionId: number
     mediaFileSha256: string
+    eligible: boolean
+    failures: Array<string>
+    assetKind: string | null
+    rightsStatus: string | null
+    runtimeEnabled: boolean | null
+    externalAiPolicy: string | null
   }>
   busy: boolean
   onSetMode: (mode: 'TEXT_ONLY' | 'IMAGE_REFERENCE_REQUIRED') => Promise<void>
   onBind: (
-    role: (typeof REFERENCE_ROLES)[number],
+    role: VisualBibleReferenceRole,
     mediaAssetVersionId: number,
   ) => Promise<void>
-  onUnbind: (role: (typeof REFERENCE_ROLES)[number]) => Promise<void>
+  onUnbind: (role: VisualBibleReferenceRole) => Promise<void>
 }) {
   const [pending, setPending] = useState<Record<string, string>>({})
   const editable = props.status === 'DRAFT'
@@ -558,7 +559,7 @@ function ReferencePanel(props: {
             be submitted. {props.references.length}/6 bound.
           </p>
           <ul className="mt-2 space-y-1">
-            {REFERENCE_ROLES.map((role) => {
+            {VISUAL_BIBLE_REFERENCE_ROLES.map((role) => {
               const bound = byRole.get(role)
               return (
                 <li
@@ -571,6 +572,34 @@ function ReferencePanel(props: {
                       <span className="text-ink-soft">
                         media version {bound.mediaAssetVersionId} ·{' '}
                         {bound.mediaFileSha256.slice(0, 12)}…
+                      </span>
+                      <span
+                        className={
+                          bound.eligible
+                            ? 'rounded-full border border-affirm/40 bg-affirm/10 px-2 py-0.5 text-affirm'
+                            : 'rounded-full border border-alert/40 bg-alert/10 px-2 py-0.5 text-alert'
+                        }
+                      >
+                        {bound.eligible ? 'eligible' : 'not eligible'}
+                      </span>
+                      {bound.eligible ? null : (
+                        <span className="text-alert">
+                          {bound.failures.join(', ')}
+                        </span>
+                      )}
+                      <span className="text-ink-soft">
+                        {[
+                          bound.assetKind,
+                          bound.rightsStatus,
+                          bound.runtimeEnabled == null
+                            ? null
+                            : bound.runtimeEnabled
+                              ? 'runtime on'
+                              : 'runtime off',
+                          bound.externalAiPolicy,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
                       </span>
                       {editable ? (
                         <button

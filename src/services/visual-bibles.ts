@@ -13,6 +13,9 @@ import {
 } from '@/db/schema'
 import {
   assertReferencePackUsable,
+  describeReferenceState,
+  assertReferenceSnapshotUnchanged,
+  captureUsableReferenceSnapshot,
   listVisualBibleReferences,
 } from './visual-bible-references'
 import { recordAuditEvent } from '@/auth/audit'
@@ -318,10 +321,15 @@ export async function submitVisualBibleVersion(
   await requirePermission(actorId, 'media.manage')
   const current = await loadVisualBibleVersion(versionId)
   // Advancing past DRAFT freezes the references too, so prove they are
-  // complete and usable before they become immutable.
-  await assertReferencePackUsable(versionId)
+  // complete and usable first. That work reads storage and hashes
+  // bytes, so it CANNOT hold a row lock — which is exactly why what it
+  // proved is captured and re-checked under the lock below. Without
+  // that, an unbind landing in between would freeze a pack nobody
+  // validated.
+  const validated = await captureUsableReferenceSnapshot(versionId)
   await getDb().transaction(async (tx) => {
     await lockBible(tx, current.visualBibleId)
+    await assertReferenceSnapshotUnchanged(tx, versionId, validated)
     const result = await tx
       .update(visualBibleVersions)
       .set({
@@ -727,10 +735,36 @@ export async function getVisualBibleDetail(bibleId: number) {
     number,
     Awaited<ReturnType<typeof listVisualBibleReferences>>
   > = {}
+  // Current eligibility per binding, computed from service authority so
+  // a reviewer sees whether each reference is usable RIGHT NOW rather
+  // than whatever the browser last believed.
+  const referenceStateByVersion: Record<
+    number,
+    Array<{
+      role: string
+      mediaAssetVersionId: number
+      mediaFileSha256: string
+      eligible: boolean
+      failures: Array<string>
+      assetKind: string | null
+      rightsStatus: string | null
+      runtimeEnabled: boolean | null
+      externalAiPolicy: string | null
+    }>
+  > = {}
   for (const version of versions) {
     rulesByVersion[version.id] = await loadRules(version.id)
-    referencesByVersion[version.id] = await listVisualBibleReferences(
-      version.id,
+    const references = await listVisualBibleReferences(version.id)
+    referencesByVersion[version.id] = references
+    referenceStateByVersion[version.id] = await Promise.all(
+      references.map(async (reference) => {
+        const state = await describeReferenceState({
+          mediaAssetVersionId: reference.mediaAssetVersionId,
+          sacredHouseId: bible.bible.sacredHouseId,
+          boundFileSha256: reference.mediaFileSha256,
+        })
+        return { ...reference, ...state }
+      }),
     )
   }
   return {
@@ -739,5 +773,6 @@ export async function getVisualBibleDetail(bibleId: number) {
     versions,
     rulesByVersion,
     referencesByVersion,
+    referenceStateByVersion,
   }
 }

@@ -68,7 +68,9 @@ import {
   submitVisualBibleVersion,
 } from '@/services/visual-bibles'
 import {
+  assertReferenceSnapshotUnchanged,
   bindVisualBibleReference,
+  captureUsableReferenceSnapshot,
   isVisualBibleReferenceEligible,
   listVisualBibleReferences,
   setVisualBibleReferenceMode,
@@ -789,7 +791,7 @@ describe('the two role domains cannot diverge', () => {
     ])
   })
 
-  it('neither domain redeclares the list', () => {
+  it('no consumer redeclares the list — schema, services or admin UI', () => {
     const media = readFileSync(
       join(process.cwd(), 'src/db/schema/media.ts'),
       'utf8',
@@ -804,6 +806,21 @@ describe('the two role domains cannot diverge', () => {
     expect(templates).toContain('SLOT_SHOT_FAMILIES = SHOT_ROLES')
     expect(media).not.toMatch(/VISUAL_BIBLE_REFERENCE_ROLES = \[/)
     expect(templates).not.toMatch(/SLOT_SHOT_FAMILIES = \[/)
+
+    // Every other consumer — services, admin authoring, admin review —
+    // must IMPORT the vocabulary, never restate it. A second six-role
+    // literal anywhere is how the two domains would drift apart again.
+    for (const file of [
+      'src/routes/admin.visual-bibles.$id.tsx',
+      'src/routes/admin.prayer-templates.$id.tsx',
+      'src/services/visual-bible-references.ts',
+      'src/services/prayer-templates.ts',
+      'src/services/generation-storyboards.ts',
+    ]) {
+      const source = readFileSync(join(process.cwd(), file), 'utf8')
+      // No local array literal containing the canonical first role.
+      expect(source).not.toMatch(/=\s*\[[^\]]*'WIDE_MASTER'/)
+    }
   })
 })
 
@@ -1056,6 +1073,70 @@ describe('the text-to-video adapter refuses references at BOTH gates', () => {
       /image-to-video|image_url|first_frame|start_frame|init_image/i,
     )
   })
+})
+
+describe('an unbind cannot slip past a submission', () => {
+  it('refuses the submission if the pack changed after validation', async () => {
+    // The precise race: assertReferencePackUsable() must read storage
+    // and hash bytes, so it cannot hold a row lock. Whatever it proved
+    // is therefore stale by the time the lock is taken — unless the
+    // submission re-checks it under that lock, which is what the
+    // snapshot comparison does.
+    const { versionId, house } = await makeBibleDraft(
+      'IMAGE_REFERENCE_REQUIRED',
+    )
+    await bindFullPack(versionId, house, 'unbindrace')
+
+    const results = await Promise.allSettled([
+      submitVisualBibleVersion(adminId, ctx, versionId),
+      unbindVisualBibleReference(adminId, ctx, versionId, 'ENVIRONMENT_INSERT'),
+    ])
+
+    const version = (
+      await getDb()
+        .select({ status: visualBibleVersions.status })
+        .from(visualBibleVersions)
+        .where(eq(visualBibleVersions.id, versionId))
+        .limit(1)
+    ).at(0)!
+    const pack = await listVisualBibleReferences(versionId)
+
+    // THE INVARIANT: an incomplete pack must never sit behind a version
+    // that has left DRAFT. Either the submission won and the pack is
+    // whole, or the unbind won and the version is still a draft.
+    if (version.status !== 'DRAFT') {
+      expect(pack).toHaveLength(6)
+    } else {
+      expect(results.some((r) => r.status === 'rejected')).toBe(true)
+    }
+  }, 300_000)
+
+  it('a submission validated against a since-changed pack is rejected', async () => {
+    // Deterministic form of the same thing: validate, mutate, then let
+    // the submission try to freeze what it validated.
+    const { versionId, house } = await makeBibleDraft(
+      'IMAGE_REFERENCE_REQUIRED',
+    )
+    await bindFullPack(versionId, house, 'staleSnap')
+    const snapshot = await captureUsableReferenceSnapshot(versionId)
+
+    // The pack changes AFTER validation.
+    const replacement = await makeImage('staleSnapNew', { house })
+    await bindVisualBibleReference(
+      adminId,
+      ctx,
+      versionId,
+      'WIDE_MASTER',
+      replacement.versionId,
+    )
+
+    const error = await expectRejection(() =>
+      getDb().transaction(async (tx) =>
+        assertReferenceSnapshotUnchanged(tx, versionId, snapshot),
+      ),
+    )
+    expect(error.message).toContain('changed while this version was being')
+  }, 300_000)
 })
 
 describe('the compile stage re-proves the EXACT approved binding', () => {

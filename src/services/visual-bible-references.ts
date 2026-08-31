@@ -156,6 +156,52 @@ export async function isVisualBibleReferenceEligible(input: {
   return { eligible: failures.length === 0, failures }
 }
 
+/**
+ * Safe, reviewer-facing state for ONE bound reference.
+ *
+ * Deliberately narrow: role-level governance facts and bounded failure
+ * codes only. No storage key, no signed URL, no consent reference, no
+ * rights note — nothing that would leak a private location or a
+ * person's paperwork into an admin page.
+ */
+export interface ReferenceStateSummary {
+  eligible: boolean
+  failures: Array<string>
+  assetKind: string | null
+  rightsStatus: string | null
+  runtimeEnabled: boolean | null
+  externalAiPolicy: string | null
+}
+
+export async function describeReferenceState(input: {
+  mediaAssetVersionId: number
+  sacredHouseId: number
+  boundFileSha256: string | null
+}): Promise<ReferenceStateSummary> {
+  const eligibility = await isVisualBibleReferenceEligible(input)
+  const row = (
+    await getDb()
+      .select({
+        assetKind: mediaAssets.assetKind,
+        rightsStatus: mediaAssetVersions.rightsStatus,
+        runtimeEnabled: mediaAssetVersions.runtimeEnabled,
+        externalAiPolicy: mediaAssetVersions.externalAiPolicy,
+      })
+      .from(mediaAssetVersions)
+      .innerJoin(mediaAssets, eq(mediaAssets.id, mediaAssetVersions.assetId))
+      .where(eq(mediaAssetVersions.id, input.mediaAssetVersionId))
+      .limit(1)
+  ).at(0)
+  return {
+    eligible: eligibility.eligible,
+    failures: eligibility.failures,
+    assetKind: row?.assetKind ?? null,
+    rightsStatus: row?.rightsStatus ?? null,
+    runtimeEnabled: row?.runtimeEnabled ?? null,
+    externalAiPolicy: row?.externalAiPolicy ?? null,
+  }
+}
+
 /** The Visual Bible version plus the House it governs. */
 async function loadVersionContext(versionId: number) {
   const row = (
@@ -417,6 +463,114 @@ export async function setVisualBibleReferenceMode(
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
   })
+}
+
+/**
+ * What was actually validated, in canonical order — the thing a
+ * submission must still be looking at when it freezes the version.
+ */
+export interface ReferenceSnapshot {
+  referenceMode: string
+  references: Array<BoundReference>
+}
+
+/** Stable, order-independent identity of a pack, for exact comparison. */
+function snapshotFingerprint(snapshot: ReferenceSnapshot): string {
+  return JSON.stringify({
+    referenceMode: snapshot.referenceMode,
+    references: snapshot.references.map((reference) => [
+      reference.role,
+      reference.mediaAssetVersionId,
+      reference.mediaFileSha256,
+    ]),
+  })
+}
+
+/**
+ * Proves the pack usable and RETURNS exactly what was proved.
+ *
+ * The eligibility work reads storage and hashes bytes, so it must not
+ * run while holding a row lock. That means it necessarily happens
+ * before the lock — and therefore its result must be carried into the
+ * lock and re-checked, which is what the snapshot is for.
+ */
+export async function captureUsableReferenceSnapshot(
+  versionId: number,
+): Promise<ReferenceSnapshot> {
+  await assertReferencePackUsable(versionId)
+  const version = await loadVersionContext(versionId)
+  return {
+    referenceMode: version.referenceMode,
+    references: await listVisualBibleReferences(versionId),
+  }
+}
+
+/**
+ * Re-reads mode and bindings INSIDE the caller's transaction (which
+ * must already hold the Bible lock) and requires them to be exactly
+ * what was validated.
+ *
+ * This is what closes the submit/unbind race: an unbind, a rebind or a
+ * mode change that lands between validation and the status transition
+ * changes this fingerprint, and the submission is refused rather than
+ * freezing a pack nobody validated.
+ */
+export async function assertReferenceSnapshotUnchanged(
+  tx: DbClient,
+  versionId: number,
+  expected: ReferenceSnapshot,
+): Promise<void> {
+  const version = (
+    await tx
+      .select({ referenceMode: visualBibleVersions.referenceMode })
+      .from(visualBibleVersions)
+      .where(eq(visualBibleVersions.id, versionId))
+      .limit(1)
+  ).at(0)
+  if (!version) throw new MediaError('Visual Bible version not found.')
+
+  const rows = await tx
+    .select({
+      role: visualBibleReferenceMedia.role,
+      mediaAssetVersionId: visualBibleReferenceMedia.mediaAssetVersionId,
+      mediaFileSha256: visualBibleReferenceMedia.mediaFileSha256,
+    })
+    .from(visualBibleReferenceMedia)
+    .where(eq(visualBibleReferenceMedia.visualBibleVersionId, versionId))
+
+  const byRole = new Map(rows.map((row) => [row.role, row]))
+  const current: ReferenceSnapshot = {
+    referenceMode: version.referenceMode,
+    references: VISUAL_BIBLE_REFERENCE_ROLES.filter((role) =>
+      byRole.has(role),
+    ).map((role) => byRole.get(role)!),
+  }
+
+  // Structural completeness re-checked here too, so a pack that became
+  // incomplete cannot cross the boundary even if the fingerprint check
+  // were somehow satisfied.
+  if (current.referenceMode === 'IMAGE_REFERENCE_REQUIRED') {
+    const present = new Set(current.references.map((r) => r.role))
+    const missing = VISUAL_BIBLE_REFERENCE_ROLES.filter(
+      (role) => !present.has(role),
+    )
+    if (missing.length > 0) {
+      throw new MediaError(
+        `This Visual Bible requires the complete reference pack; missing: ${missing.join(', ')}.`,
+      )
+    }
+  }
+  if (current.referenceMode === 'TEXT_ONLY' && current.references.length > 0) {
+    throw new MediaError(
+      'A TEXT_ONLY Visual Bible version cannot carry reference bindings.',
+    )
+  }
+
+  if (snapshotFingerprint(current) !== snapshotFingerprint(expected)) {
+    throw new MediaError(
+      'The reference pack changed while this version was being submitted; review it and submit again.',
+    )
+  }
 }
 
 export async function assertReferencePackUsable(
