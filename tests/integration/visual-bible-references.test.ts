@@ -445,6 +445,13 @@ async function makeTemplateDraft(): Promise<number> {
   return version.id
 }
 
+/** Comments stripped, so prose ABOUT a rule cannot violate the rule. */
+function withoutComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+}
+
 /** expect().rejects.toThrow(Class) hangs under bun test here. */
 async function expectRejection(run: () => Promise<unknown>): Promise<Error> {
   let thrown: unknown = null
@@ -1136,6 +1143,132 @@ describe('an unbind cannot slip past a submission', () => {
       ),
     )
     expect(error.message).toContain('changed while this version was being')
+  }, 300_000)
+})
+
+describe('validation operates on the captured pack, not a re-read', () => {
+  /**
+   * The narrow ordering bug this guards against.
+   *
+   * Validating and THEN re-reading returns a pack that was never
+   * validated: an authorised DRAFT rebind landing in the gap would be
+   * adopted silently, and the submission would freeze a definition
+   * different from the one it reviewed. The under-lock comparison
+   * cannot catch that — it faithfully compares against whatever it was
+   * given, so the expectation itself has to be the validated thing.
+   *
+   * The gap is a scheduling window, so a timing test could pass on a
+   * lucky run. These assertions are structural instead: they read the
+   * service source and require the ordering to be impossible to invert.
+   */
+  const source = withoutComments(
+    readFileSync(
+      join(process.cwd(), 'src/services/visual-bible-references.ts'),
+      'utf8',
+    ),
+  )
+
+  /** Source text of one top-level function, brace-matched. */
+  function bodyOf(name: string): string {
+    const start = source.indexOf(`export async function ${name}(`)
+    expect(start).toBeGreaterThan(-1)
+    let depth = 0
+    for (let i = source.indexOf('{', start); i < source.length; i += 1) {
+      if (source[i] === '{') depth += 1
+      else if (source[i] === '}') {
+        depth -= 1
+        if (depth === 0) return source.slice(start, i + 1)
+      }
+    }
+    throw new Error(`unterminated function ${name}`)
+  }
+
+  it('captures once, validates the captured values, returns that same object', () => {
+    const body = bodyOf('captureUsableReferenceSnapshot')
+
+    // Read the world exactly once each. A second read is the bug.
+    expect(body.split('loadVersionContext(').length - 1).toBe(1)
+    expect(body.split('listVisualBibleReferences(').length - 1).toBe(1)
+
+    // Both reads must land in the snapshot, and the snapshot must be
+    // built before anything is checked.
+    const captured = body.indexOf('const snapshot: ReferenceSnapshot')
+    expect(captured).toBeGreaterThan(-1)
+    expect(captured).toBeLessThan(body.indexOf('assertSnapshotStructurallyCoherent'))
+    expect(captured).toBeLessThan(body.indexOf('isVisualBibleReferenceEligible'))
+
+    // Eligibility must iterate the captured set, not a fresh query.
+    expect(body).toContain('for (const reference of snapshot.references)')
+
+    // And the captured object is what comes back — not a re-read of it.
+    const lines = body.trimEnd().split(/\r?\n/)
+    expect(lines.at(-1)).toBe('}')
+    expect(lines.at(-2)?.trim()).toBe('return snapshot')
+
+    // The inverted order (validate, then capture) must not reappear.
+    expect(body).not.toContain('assertReferencePackUsable(')
+  })
+
+  it('there is only ONE pack-validation implementation', () => {
+    // assertReferencePackUsable exists for callers that do not need to
+    // freeze the pack. If it grew its own checks, "usable" could come
+    // to mean two different things on the two paths.
+    const body = bodyOf('assertReferencePackUsable')
+    expect(body).toContain('await captureUsableReferenceSnapshot(versionId)')
+    expect(body).not.toContain('isVisualBibleReferenceEligible')
+    expect(body).not.toContain('listVisualBibleReferences')
+    expect(body).not.toContain('VISUAL_BIBLE_REFERENCE_ROLES')
+  })
+
+  it('submission freezes only what it captured', () => {
+    // The captured snapshot must travel into the lock unchanged: no
+    // re-capture inside the transaction, and the comparison must use
+    // the value returned by the capture.
+    const submit = withoutComments(
+      readFileSync(join(process.cwd(), 'src/services/visual-bibles.ts'), 'utf8'),
+    )
+    const start = submit.indexOf('export async function submitVisualBibleVersion(')
+    expect(start).toBeGreaterThan(-1)
+    // Bounded by the next top-level declaration, so nothing from a
+    // neighbouring function can satisfy these assertions.
+    const region = submit.slice(
+      start,
+      submit.indexOf('export async function', start + 1),
+    )
+    const capture = region.indexOf('captureUsableReferenceSnapshot(versionId)')
+    const lock = region.indexOf('lockBible(tx,')
+    const compare = region.indexOf('assertReferenceSnapshotUnchanged(tx, versionId, validated)')
+    const transition = region.indexOf("status: 'UNDER_REVIEW'")
+
+    // capture -> lock -> compare -> transition, in that order.
+    expect(capture).toBeGreaterThan(-1)
+    expect(capture).toBeLessThan(lock)
+    expect(lock).toBeLessThan(compare)
+    expect(compare).toBeLessThan(transition)
+    expect(region.split('captureUsableReferenceSnapshot(').length - 1).toBe(1)
+  })
+
+  it('returns exactly the bound pack, and that value satisfies the lock check', async () => {
+    const { versionId, house } = await makeBibleDraft('IMAGE_REFERENCE_REQUIRED')
+    await bindFullPack(versionId, house, 'capturedPack')
+    const snapshot = await captureUsableReferenceSnapshot(versionId)
+
+    expect(snapshot.referenceMode).toBe('IMAGE_REFERENCE_REQUIRED')
+    expect(snapshot.references).toEqual(await listVisualBibleReferences(versionId))
+    expect(snapshot.references).toHaveLength(6)
+    expect(snapshot.references.map((r) => r.role)).toEqual([...ALL_ROLES])
+
+    // Unchanged in between, so the captured value is by construction a
+    // valid expectation for the under-lock comparison.
+    await getDb().transaction(async (tx) =>
+      assertReferenceSnapshotUnchanged(tx, versionId, snapshot),
+    )
+  }, 300_000)
+
+  it('a TEXT_ONLY version captures its mode with an empty pack', async () => {
+    const { versionId } = await makeBibleDraft('TEXT_ONLY')
+    const snapshot = await captureUsableReferenceSnapshot(versionId)
+    expect(snapshot).toEqual({ referenceMode: 'TEXT_ONLY', references: [] })
   }, 300_000)
 })
 

@@ -474,9 +474,11 @@ export async function publishVisualBibleVersion(
     }
     // The complete reference pack (when required) and the current
     // eligibility of every bound reference are publication
-    // preconditions, proved before the hash is computed over them.
-    await assertReferencePackUsable(versionId)
-    const references = await listVisualBibleReferences(versionId)
+    // preconditions, proved before the hash is computed over them. The
+    // hash is then computed over THAT captured pack rather than a fresh
+    // read of it, so the bytes sealed into the definition are provably
+    // the bytes that were just proved usable.
+    const { references } = await captureUsableReferenceSnapshot(versionId)
     const definitionSha256 = computeVisualBibleSha256({
       visualBibleId: preRead.visualBibleId,
       versionNumber: preRead.versionNumber,

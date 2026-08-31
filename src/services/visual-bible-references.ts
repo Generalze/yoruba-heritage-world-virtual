@@ -245,10 +245,7 @@ export async function listVisualBibleReferences(
     .from(visualBibleReferenceMedia)
     .where(eq(visualBibleReferenceMedia.visualBibleVersionId, versionId))
 
-  const byRole = new Map(rows.map((row) => [row.role, row]))
-  return VISUAL_BIBLE_REFERENCE_ROLES.filter((role) => byRole.has(role)).map(
-    (role) => byRole.get(role)!,
-  )
+  return orderReferences(rows)
 }
 
 /**
@@ -486,23 +483,109 @@ function snapshotFingerprint(snapshot: ReferenceSnapshot): string {
   })
 }
 
+/** Canonical role order for rows read anywhere — the single ordering
+ * authority, so a snapshot taken outside a transaction and one taken
+ * inside it are comparable by construction. */
+function orderReferences(
+  rows: Array<BoundReference>,
+): Array<BoundReference> {
+  const byRole = new Map(rows.map((row) => [row.role, row]))
+  return VISUAL_BIBLE_REFERENCE_ROLES.filter((role) => byRole.has(role)).map(
+    (role) => byRole.get(role)!,
+  )
+}
+
 /**
- * Proves the pack usable and RETURNS exactly what was proved.
+ * Is this snapshot internally coherent — mode and bindings agreeing?
  *
- * The eligibility work reads storage and hashes bytes, so it must not
- * run while holding a row lock. That means it necessarily happens
- * before the lock — and therefore its result must be carried into the
- * lock and re-checked, which is what the snapshot is for.
+ * Operates on captured values, never on the database, so the same rule
+ * is applied to the pack that was validated and to the pack found
+ * under the lock. One implementation, two call sites.
+ */
+function assertSnapshotStructurallyCoherent(snapshot: ReferenceSnapshot): void {
+  if (snapshot.referenceMode === 'TEXT_ONLY' && snapshot.references.length > 0) {
+    // A TEXT_ONLY version that carries imagery is incoherent: its hash
+    // would cover references its declared mode says do not exist.
+    throw new MediaError(
+      'A TEXT_ONLY Visual Bible version cannot carry reference bindings.',
+    )
+  }
+
+  if (snapshot.referenceMode === 'IMAGE_REFERENCE_REQUIRED') {
+    const present = new Set(
+      snapshot.references.map((reference) => reference.role),
+    )
+    const missing = VISUAL_BIBLE_REFERENCE_ROLES.filter(
+      (role) => !present.has(role),
+    )
+    if (missing.length > 0) {
+      throw new MediaError(
+        `This Visual Bible requires the complete reference pack; missing: ${missing.join(', ')}.`,
+      )
+    }
+  }
+}
+
+/**
+ * Captures the pack ONCE, proves that captured pack usable, and returns
+ * the very thing it proved.
+ *
+ * Order is the whole point. Validating and then re-reading would return
+ * a pack that was never validated: an authorised DRAFT rebind landing
+ * in between would be adopted silently, and the submission would freeze
+ * a definition different from the one it reviewed. So the read happens
+ * first, every check runs against those captured values, and the same
+ * object is handed back — nothing is re-read afterwards.
+ *
+ * The eligibility work reads storage and hashes bytes, so it cannot
+ * hold a row lock; that is why the captured snapshot must also be
+ * re-compared under the lock by assertReferenceSnapshotUnchanged().
  */
 export async function captureUsableReferenceSnapshot(
   versionId: number,
 ): Promise<ReferenceSnapshot> {
-  await assertReferencePackUsable(versionId)
+  // 1. Version context, read once.
   const version = await loadVersionContext(versionId)
-  return {
+
+  // 2. Bindings, read once. From here on this snapshot IS the subject:
+  //    no later read may replace or supplement it.
+  const snapshot: ReferenceSnapshot = {
     referenceMode: version.referenceMode,
     references: await listVisualBibleReferences(versionId),
   }
+
+  // 3. Mode and bindings must agree with each other.
+  assertSnapshotStructurallyCoherent(snapshot)
+
+  // 4. Every reference in THIS snapshot must be usable right now.
+  for (const reference of snapshot.references) {
+    const eligibility = await isVisualBibleReferenceEligible({
+      mediaAssetVersionId: reference.mediaAssetVersionId,
+      sacredHouseId: version.sacredHouseId,
+      boundFileSha256: reference.mediaFileSha256,
+    })
+    if (!eligibility.eligible) {
+      throw new MediaError(
+        `The ${reference.role} reference is not usable (${eligibility.failures.join(', ')}).`,
+      )
+    }
+  }
+
+  // 5. Exactly what was validated. Not a fresh read of it.
+  return snapshot
+}
+
+/**
+ * Proves the pack usable when the caller does not need to freeze it.
+ *
+ * Deliberately a thin delegation: a second pack-validation
+ * implementation is how the two paths would drift into disagreeing
+ * about what "usable" means.
+ */
+export async function assertReferencePackUsable(
+  versionId: number,
+): Promise<void> {
+  await captureUsableReferenceSnapshot(versionId)
 }
 
 /**
@@ -538,77 +621,19 @@ export async function assertReferenceSnapshotUnchanged(
     .from(visualBibleReferenceMedia)
     .where(eq(visualBibleReferenceMedia.visualBibleVersionId, versionId))
 
-  const byRole = new Map(rows.map((row) => [row.role, row]))
   const current: ReferenceSnapshot = {
     referenceMode: version.referenceMode,
-    references: VISUAL_BIBLE_REFERENCE_ROLES.filter((role) =>
-      byRole.has(role),
-    ).map((role) => byRole.get(role)!),
+    references: orderReferences(rows),
   }
 
-  // Structural completeness re-checked here too, so a pack that became
+  // Structural coherence re-checked here too, so a pack that became
   // incomplete cannot cross the boundary even if the fingerprint check
   // were somehow satisfied.
-  if (current.referenceMode === 'IMAGE_REFERENCE_REQUIRED') {
-    const present = new Set(current.references.map((r) => r.role))
-    const missing = VISUAL_BIBLE_REFERENCE_ROLES.filter(
-      (role) => !present.has(role),
-    )
-    if (missing.length > 0) {
-      throw new MediaError(
-        `This Visual Bible requires the complete reference pack; missing: ${missing.join(', ')}.`,
-      )
-    }
-  }
-  if (current.referenceMode === 'TEXT_ONLY' && current.references.length > 0) {
-    throw new MediaError(
-      'A TEXT_ONLY Visual Bible version cannot carry reference bindings.',
-    )
-  }
+  assertSnapshotStructurallyCoherent(current)
 
   if (snapshotFingerprint(current) !== snapshotFingerprint(expected)) {
     throw new MediaError(
       'The reference pack changed while this version was being submitted; review it and submit again.',
     )
-  }
-}
-
-export async function assertReferencePackUsable(
-  versionId: number,
-): Promise<void> {
-  const version = await loadVersionContext(versionId)
-  const bound = await listVisualBibleReferences(versionId)
-
-  if (version.referenceMode === 'TEXT_ONLY' && bound.length > 0) {
-    // A TEXT_ONLY version that carries imagery is incoherent: its hash
-    // would cover references its declared mode says do not exist.
-    throw new MediaError(
-      'A TEXT_ONLY Visual Bible version cannot carry reference bindings.',
-    )
-  }
-
-  if (version.referenceMode === 'IMAGE_REFERENCE_REQUIRED') {
-    const present = new Set(bound.map((reference) => reference.role))
-    const missing = VISUAL_BIBLE_REFERENCE_ROLES.filter(
-      (role) => !present.has(role),
-    )
-    if (missing.length > 0) {
-      throw new MediaError(
-        `This Visual Bible requires the complete reference pack; missing: ${missing.join(', ')}.`,
-      )
-    }
-  }
-
-  for (const reference of bound) {
-    const eligibility = await isVisualBibleReferenceEligible({
-      mediaAssetVersionId: reference.mediaAssetVersionId,
-      sacredHouseId: version.sacredHouseId,
-      boundFileSha256: reference.mediaFileSha256,
-    })
-    if (!eligibility.eligible) {
-      throw new MediaError(
-        `The ${reference.role} reference is not usable (${eligibility.failures.join(', ')}).`,
-      )
-    }
   }
 }
