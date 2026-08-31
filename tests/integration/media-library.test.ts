@@ -1024,7 +1024,9 @@ describe('visual bibles', () => {
         computeVisualBibleSha256({
           visualBibleId: bible.id,
           versionNumber: 1,
+          referenceMode: loaded.referenceMode,
           rules: loaded.rules,
+          references: loaded.references,
         }),
       ).toBe(loaded.definitionSha256)
     }

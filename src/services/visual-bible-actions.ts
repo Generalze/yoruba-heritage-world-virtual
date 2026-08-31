@@ -1,8 +1,13 @@
 import { createServerFn } from '@tanstack/react-start'
+import {
+  bindVisualBibleReference,
+  listVisualBibleReferences,
+  unbindVisualBibleReference,
+} from './visual-bible-references'
 import { z } from 'zod'
 
 import { getDb } from '@/db'
-import { sacredHouses } from '@/db/schema'
+import { VISUAL_BIBLE_REFERENCE_ROLES, sacredHouses } from '@/db/schema'
 import { getAuthenticatedUser, requirePermission } from '@/auth/guards'
 import { requestContext } from '@/server/request-context'
 import {
@@ -77,6 +82,57 @@ export const createVisualBibleVersionFn = createServerFn({ method: 'POST' })
       data.bibleId,
       data.version,
     )
+  })
+
+/**
+ * Reference binding surfaces (Step 24). DRAFT-only and permission
+ * checked in the service, exactly like every other mutation here — the
+ * admin screen showing or hiding a control is never the boundary.
+ */
+export const bindVisualBibleReferenceFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      versionId: idSchema,
+      role: z.enum(VISUAL_BIBLE_REFERENCE_ROLES),
+      mediaAssetVersionId: idSchema,
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireActor()
+    await bindVisualBibleReference(
+      actor.id,
+      requestContext(),
+      data.versionId,
+      data.role,
+      data.mediaAssetVersionId,
+    )
+    return { ok: true as const }
+  })
+
+export const unbindVisualBibleReferenceFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      versionId: idSchema,
+      role: z.enum(VISUAL_BIBLE_REFERENCE_ROLES),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireActor()
+    await unbindVisualBibleReference(
+      actor.id,
+      requestContext(),
+      data.versionId,
+      data.role,
+    )
+    return { ok: true as const }
+  })
+
+export const listVisualBibleReferencesFn = createServerFn({ method: 'GET' })
+  .validator(z.object({ versionId: idSchema }))
+  .handler(async ({ data }) => {
+    const actor = await requireActor()
+    await requirePermission(actor.id, 'media.view')
+    return listVisualBibleReferences(data.versionId)
   })
 
 export const updateVisualBibleDraftFn = createServerFn({ method: 'POST' })

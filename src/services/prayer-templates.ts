@@ -9,7 +9,9 @@ import {
   GUIDANCE_LANGUAGES,
   SACRED_RUNTIME_CONTENT_TYPES,
   SLOT_KINDS,
+  SLOT_REFERENCE_REQUIREMENTS,
   SLOT_SELECTOR_MODES,
+  SLOT_SHOT_FAMILIES,
   VARIANT_KINDS,
   prayerSessionTemplateSlots,
   prayerSessionTemplateVersions,
@@ -98,6 +100,13 @@ export const slotSchema = z.object({
     .max(600)
     .nullable()
     .default(null),
+  /** Human-authored camera authority. CONTENT slots must carry both;
+   * SILENCE slots must carry neither (validateSlotShape). */
+  shotFamily: z.enum(SLOT_SHOT_FAMILIES).nullable().default(null),
+  referenceRequirement: z
+    .enum(SLOT_REFERENCE_REQUIREMENTS)
+    .nullable()
+    .default(null),
   allowedScopes: z.array(z.enum(CONTENT_SCOPE_TYPES)).default([]),
   pinnedContentVersionIds: z
     .array(z.number().int().positive())
@@ -154,9 +163,35 @@ function validateSlotShape(slot: SlotInput): void {
         `Slot ${slot.slotKey}: SILENCE selects no content (min/max must be 0).`,
       )
     }
+    // A SILENCE segment holds the previous visual and never reaches
+    // generation, so a shot family here would be dead authority sitting
+    // inside the definition hash.
+    if (slot.shotFamily != null || slot.referenceRequirement != null) {
+      throw new PrayerTemplateError(
+        `Slot ${slot.slotKey}: SILENCE carries no shot family or reference requirement.`,
+      )
+    }
     return
   }
   // CONTENT
+  //
+  // Shot authority is AUTHORED, never inferred. The recipe's visualMode
+  // is derived at runtime from whichever media is currently eligible,
+  // so a media withdrawal could otherwise turn an already-approved
+  // CONTENT slot into generation with no approved camera or reference
+  // decision behind it. Both fields are therefore mandatory here even
+  // when a given recipe resolves this slot to LINKED_REFERENCE or
+  // LIBRARY_MEDIA, where they simply stay dormant.
+  if (slot.shotFamily == null) {
+    throw new PrayerTemplateError(
+      `Slot ${slot.slotKey}: CONTENT requires an authored shot family.`,
+    )
+  }
+  if (slot.referenceRequirement == null) {
+    throw new PrayerTemplateError(
+      `Slot ${slot.slotKey}: CONTENT requires an authored reference requirement.`,
+    )
+  }
   if (slot.silenceDurationSeconds != null) {
     throw new PrayerTemplateError(
       `Slot ${slot.slotKey}: CONTENT slots have no silence duration.`,
@@ -515,6 +550,8 @@ async function insertSlotRows(
       themeCode: slot.themeCode,
       variantKind: slot.variantKind,
       silenceDurationSeconds: slot.silenceDurationSeconds,
+      shotFamily: slot.shotFamily,
+      referenceRequirement: slot.referenceRequirement,
     })
     const slotId = inserted[0].insertId
     for (const scopeType of [...new Set(slot.allowedScopes)]) {
@@ -958,6 +995,8 @@ export interface TemplateDefinition {
     slotKey: string
     position: number
     slotKind: (typeof SLOT_KINDS)[number]
+    shotFamily: (typeof SLOT_SHOT_FAMILIES)[number] | null
+    referenceRequirement: (typeof SLOT_REFERENCE_REQUIREMENTS)[number] | null
     minSelect: number
     maxSelect: number
     contentType: string | null
@@ -1022,6 +1061,8 @@ export async function loadTemplateDefinition(
       themeCode: slot.themeCode,
       variantKind: slot.variantKind,
       silenceDurationSeconds: slot.silenceDurationSeconds,
+      shotFamily: slot.shotFamily,
+      referenceRequirement: slot.referenceRequirement,
       allowedScopes: scopeRows
         .filter((row) => row.slotId === slot.id)
         .map((row) => row.scopeType)
@@ -1069,6 +1110,8 @@ export function canonicalTemplateDefinition(
       themeCode: slot.themeCode,
       variantKind: slot.variantKind,
       silenceDurationSeconds: slot.silenceDurationSeconds,
+      shotFamily: slot.shotFamily,
+      referenceRequirement: slot.referenceRequirement,
       allowedScopes: slot.allowedScopes,
       pins: slot.pins.map((pin) => pin.contentVersionId),
     })),

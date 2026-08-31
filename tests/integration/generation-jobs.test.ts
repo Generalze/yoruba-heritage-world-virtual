@@ -468,6 +468,8 @@ beforeAll(async () => {
         themeCode: theme,
         variantKind: null,
         silenceDurationSeconds: null,
+        shotFamily: 'MEDIUM_PRAYER',
+        referenceRequirement: 'OPTIONAL',
         allowedScopes: ['PLATFORM'],
         pinnedContentVersionIds: [],
       },

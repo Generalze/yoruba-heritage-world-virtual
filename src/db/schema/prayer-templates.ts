@@ -45,6 +45,39 @@ import { users } from './users'
 export const SLOT_KINDS = ['CONTENT', 'SILENCE'] as const
 export type SlotKind = (typeof SLOT_KINDS)[number]
 
+/**
+ * The human-authored camera decision for a CONTENT slot (Step 24).
+ *
+ * Names match VISUAL_BIBLE_REFERENCE_ROLES one-for-one: a slot's shot
+ * family selects which approved reference the Visual Bible must supply
+ * if that slot ever reaches generation.
+ *
+ * AUTHORED, NEVER INFERRED. The recipe's visualMode is derived at
+ * runtime from whichever media happens to be eligible, so it must not
+ * decide whether an approved template carries shot authority — a media
+ * withdrawal could otherwise turn an already-approved CONTENT slot into
+ * generation with no approved camera or reference decision behind it.
+ * CONTENT slots therefore carry these fields even when a given recipe
+ * resolves them to LINKED_REFERENCE or LIBRARY_MEDIA, where they stay
+ * dormant.
+ */
+export const SLOT_SHOT_FAMILIES = [
+  'WIDE_MASTER',
+  'MEDIUM_PRAYER',
+  'DIRECT_CAMERA',
+  'SIDE_PRAYER',
+  'WORKING_DETAIL',
+  'ENVIRONMENT_INSERT',
+] as const
+export type SlotShotFamily = (typeof SLOT_SHOT_FAMILIES)[number]
+
+/** Whether generation for this slot may proceed without an approved
+ * reference. REQUIRED fails closed; OPTIONAL is an explicit human
+ * allowance and is never a default or an inference. */
+export const SLOT_REFERENCE_REQUIREMENTS = ['REQUIRED', 'OPTIONAL'] as const
+export type SlotReferenceRequirement =
+  (typeof SLOT_REFERENCE_REQUIREMENTS)[number]
+
 export const SLOT_SELECTOR_MODES = [
   'PINNED_VERSIONS',
   'ELIGIBLE_FILTER',
@@ -176,6 +209,14 @@ export const prayerSessionTemplateSlots = mysqlTable(
     silenceDurationSeconds: int('silence_duration_seconds', {
       unsigned: true,
     }),
+    /** CONTENT slots: required. SILENCE slots: MUST be null — a shot
+     * family that could never be honoured would be dead authority
+     * inside the definition hash. */
+    shotFamily: mysqlEnum('shot_family', SLOT_SHOT_FAMILIES),
+    referenceRequirement: mysqlEnum(
+      'reference_requirement',
+      SLOT_REFERENCE_REQUIREMENTS,
+    ),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (table) => [

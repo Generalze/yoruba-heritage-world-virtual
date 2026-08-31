@@ -219,6 +219,8 @@ function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
     themeCode: null,
     variantKind: null,
     silenceDurationSeconds: null,
+    shotFamily: 'MEDIUM_PRAYER',
+    referenceRequirement: 'OPTIONAL',
     allowedScopes: ['PLATFORM'],
     pinnedContentVersionIds: [],
     ...overrides,
@@ -237,6 +239,8 @@ function silenceSlot(position: number, seconds: number): SlotInput {
     themeCode: null,
     variantKind: null,
     silenceDurationSeconds: seconds,
+    shotFamily: null,
+    referenceRequirement: null,
     allowedScopes: [],
     pinnedContentVersionIds: [],
   }

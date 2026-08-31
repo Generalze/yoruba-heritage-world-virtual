@@ -11,6 +11,10 @@ import {
   visualBibleVersions,
   visualBibles,
 } from '@/db/schema'
+import {
+  assertReferencePackUsable,
+  listVisualBibleReferences,
+} from './visual-bible-references'
 import { recordAuditEvent } from '@/auth/audit'
 import { requirePermission } from '@/auth/guards'
 import { MediaError } from './media-assets'
@@ -261,18 +265,46 @@ async function loadRules(versionId: number, db: DbClient = getDb()) {
 
 /** Deterministic canonical representation of the authoritative rules
  * (stable key order, rules by position). */
+/**
+ * The canonical definition of a Visual Bible version.
+ *
+ * Covers the reference MODE and the ordered reference BINDINGS as well
+ * as the rules, because a bound image governs depiction exactly as a
+ * written rule does — a version whose imagery changed but whose hash
+ * did not would be a silently different Visual Bible.
+ *
+ * References are hashed by role, exact media VERSION id and the file
+ * hash frozen at bind time, in canonical role order, so the value never
+ * depends on insertion sequence.
+ *
+ * The publisher and the runtime loader MUST compute this identically;
+ * changing one without the other would fail every published Bible
+ * closed.
+ */
 export function computeVisualBibleSha256(definition: {
   visualBibleId: number
   versionNumber: number
+  referenceMode: string
   rules: Array<{ category: string; position: number; ruleText: string }>
+  references: Array<{
+    role: string
+    mediaAssetVersionId: number
+    mediaFileSha256: string
+  }>
 }): string {
   const canonical = JSON.stringify({
     visualBibleId: definition.visualBibleId,
     versionNumber: definition.versionNumber,
+    referenceMode: definition.referenceMode,
     rules: definition.rules.map((rule) => ({
       category: rule.category,
       position: rule.position,
       ruleText: rule.ruleText,
+    })),
+    references: definition.references.map((reference) => ({
+      role: reference.role,
+      mediaAssetVersionId: reference.mediaAssetVersionId,
+      mediaFileSha256: reference.mediaFileSha256,
     })),
   })
   return createHash('sha256').update(canonical, 'utf8').digest('hex')
@@ -285,6 +317,9 @@ export async function submitVisualBibleVersion(
 ): Promise<void> {
   await requirePermission(actorId, 'media.manage')
   const current = await loadVisualBibleVersion(versionId)
+  // Advancing past DRAFT freezes the references too, so prove they are
+  // complete and usable before they become immutable.
+  await assertReferencePackUsable(versionId)
   await getDb().transaction(async (tx) => {
     await lockBible(tx, current.visualBibleId)
     const result = await tx
@@ -366,6 +401,9 @@ export async function approveVisualBibleVersion(
 ): Promise<void> {
   await requirePermission(actorId, 'media.approve')
   const current = await loadVisualBibleVersion(versionId)
+  // Re-proved at approval: rights or runtime state may have changed
+  // while the version sat under review.
+  await assertReferencePackUsable(versionId)
   const result = await getDb()
     .update(visualBibleVersions)
     .set({ status: 'APPROVED', approvedBy: actorId, approvedAt: new Date() })
@@ -426,10 +464,17 @@ export async function publishVisualBibleVersion(
         )
       }
     }
+    // The complete reference pack (when required) and the current
+    // eligibility of every bound reference are publication
+    // preconditions, proved before the hash is computed over them.
+    await assertReferencePackUsable(versionId)
+    const references = await listVisualBibleReferences(versionId)
     const definitionSha256 = computeVisualBibleSha256({
       visualBibleId: preRead.visualBibleId,
       versionNumber: preRead.versionNumber,
+      referenceMode: preRead.referenceMode,
       rules,
+      references,
     })
     const currentPublished = (
       await tx
@@ -553,6 +598,13 @@ export type LoadedVisualBible =
         position: number
         ruleText: string
       }>
+      referenceMode: string
+      /** Approved reference identity only — never bytes or storage keys. */
+      references: Array<{
+        role: string
+        mediaAssetVersionId: number
+        mediaFileSha256: string
+      }>
     }
   | { status: 'NOT_FOUND' }
   | { status: 'INTEGRITY_FAILURE' }
@@ -584,10 +636,15 @@ export async function loadPublishedVisualBible(
   ).at(0)
   if (!row) return { status: 'NOT_FOUND' }
   const rules = await loadRules(row.version.id)
+  // Recomputed over the SAME inputs the publisher hashed — rules AND
+  // reference mode AND bindings. Any divergence fails closed.
+  const references = await listVisualBibleReferences(row.version.id)
   const recomputed = computeVisualBibleSha256({
     visualBibleId: row.bible.id,
     versionNumber: row.version.versionNumber,
+    referenceMode: row.version.referenceMode,
     rules,
+    references,
   })
   if (
     row.version.definitionSha256 == null ||
@@ -606,6 +663,11 @@ export async function loadPublishedVisualBible(
       position: rule.position,
       ruleText: rule.ruleText,
     })),
+    referenceMode: row.version.referenceMode,
+    /** Approved reference IDENTITY only — no bytes, no storage key.
+     * Callers that need the image resolve it later, after their own
+     * eligibility revalidation. */
+    references,
   }
 }
 
@@ -661,13 +723,21 @@ export async function getVisualBibleDetail(bibleId: number) {
     number,
     Awaited<ReturnType<typeof loadRules>>
   > = {}
+  const referencesByVersion: Record<
+    number,
+    Awaited<ReturnType<typeof listVisualBibleReferences>>
+  > = {}
   for (const version of versions) {
     rulesByVersion[version.id] = await loadRules(version.id)
+    referencesByVersion[version.id] = await listVisualBibleReferences(
+      version.id,
+    )
   }
   return {
     bible: bible.bible,
     houseName: bible.houseName,
     versions,
     rulesByVersion,
+    referencesByVersion,
   }
 }

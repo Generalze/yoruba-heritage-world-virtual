@@ -323,6 +323,8 @@ function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
     themeCode: null,
     variantKind: null,
     silenceDurationSeconds: null,
+    shotFamily: 'MEDIUM_PRAYER',
+    referenceRequirement: 'OPTIONAL',
     allowedScopes: ['PLATFORM'],
     pinnedContentVersionIds: [],
     ...overrides,

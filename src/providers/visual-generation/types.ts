@@ -46,6 +46,26 @@ export interface VisualGenerationRequest {
    * retrieved. Exact approved text only — never rewritten, translated
    * or extended (canon §10.1/§10.4). */
   approvedTextContext: string | null
+  /**
+   * The approved reference image this scene must be generated from,
+   * resolved from the published Visual Bible and RE-PROVED eligible
+   * immediately before submission.
+   *
+   * IDENTITY AND HASH ONLY. This deliberately carries no bytes, no
+   * storage key and no URL: how a reference is transported to a vendor
+   * (base64, multipart, ephemeral URL) is a provider-bound question,
+   * and the official Kling image-to-video contract has not been
+   * verified. An adapter that needs the image resolves it through
+   * private storage at submission time; nothing here commits the
+   * platform to a transport it has not read the documentation for.
+   *
+   * Null for text-driven scenes, which remain exactly as they were.
+   */
+  visualReference: {
+    role: string
+    mediaAssetVersionId: number
+    mediaFileSha256: string
+  } | null
 }
 
 export type VisualGenerationJobStatus = 'PENDING' | 'COMPLETED' | 'FAILED'

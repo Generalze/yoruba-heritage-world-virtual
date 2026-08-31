@@ -487,8 +487,11 @@ describe('notifications stay inside their lane', () => {
   })
 
   it('adds no ALTER or DROP to any existing table', () => {
+    // Pinned to the NOTIFICATIONS migration by name, not to "whatever
+    // is newest": later authorised steps legitimately alter their own
+    // tables, and this guard is about what THIS step did.
     const file = readdirSync(join(process.cwd(), 'migrations'))
-      .filter((n) => n.endsWith('.sql'))
+      .filter((n) => n.endsWith('.sql') && n.startsWith('0017_'))
       .sort()
       .at(-1)!
     const sql = readSource(`migrations/${file}`)

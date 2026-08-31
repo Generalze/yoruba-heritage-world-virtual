@@ -84,6 +84,25 @@ export interface SceneGenerationIntent {
   textContextAllowed: boolean
   contentVersionId: number
   contentSha256: string
+  /** The slot's AUTHORED camera decision, carried from the approved
+   * template definition. Never inferred here. */
+  shotFamily: string | null
+  referenceRequirement: string | null
+  /**
+   * The approved reference this scene must be generated from, resolved
+   * from the PUBLISHED Visual Bible by matching the authored shot
+   * family to a bound role.
+   *
+   * IDENTITY AND HASH ONLY — never bytes, never a storage key, never a
+   * provider URL. The submission stage re-proves eligibility and
+   * resolves the image itself; how it is transported to a vendor is a
+   * provider-bound question this layer deliberately does not answer.
+   */
+  visualReference: {
+    role: string
+    mediaAssetVersionId: number
+    mediaFileSha256: string
+  } | null
 }
 
 export interface SceneAudioRequirement {
@@ -121,6 +140,11 @@ export interface StoryboardScene {
   /** Presentational sub-scene index within one recipe segment. */
   splitIndex: number
   splitCount: number
+  /** Presentational splits of one segment INHERIT the segment's single
+   * authored shot family. There is no automatic camera rotation: a long
+   * prayer split into three scenes is three views of the same approved
+   * shot decision, not three different ones. */
+  shotFamily: string | null
   sourceMode: SceneSourceMode
   mediaAssetVersionId: number | null
   mediaAssetId: number | null
@@ -333,6 +357,11 @@ function planScenes(
     versionNumber: number
     definitionSha256: string
     rules: Array<{ id: number; category: string; position: number }>
+    references: Array<{
+      role: string
+      mediaAssetVersionId: number
+      mediaFileSha256: string
+    }>
   } | null,
 ): { scenes: Array<StoryboardScene>; totalDurationMs: number } {
   const scenes: Array<StoryboardScene> = []
@@ -359,6 +388,7 @@ function planScenes(
         order: scenes.length,
         recipeSegmentIndex: segment.segmentIndex,
         slotKey: segment.slotKey,
+        shotFamily: null,
         kind: 'SILENCE',
         contentVersionId: null,
         contentSha256: null,
@@ -453,6 +483,8 @@ function planScenes(
         order: scenes.length,
         recipeSegmentIndex: segment.segmentIndex,
         slotKey: segment.slotKey,
+        // Every split of this segment inherits the one authored family.
+        shotFamily: segment.shotFamily ?? null,
         kind: 'CONTENT',
         contentVersionId: segment.contentVersionId,
         contentSha256: segment.contentSha256,
@@ -486,6 +518,14 @@ function planScenes(
                 textContextAllowed: segment.generation.textContextAllowed,
                 contentVersionId: segment.contentVersionId!,
                 contentSha256: segment.contentSha256!,
+                shotFamily: segment.shotFamily ?? null,
+                referenceRequirement: segment.referenceRequirement ?? null,
+                // Resolved by matching the AUTHORED shot family to a
+                // bound role on the published Bible. Identity only.
+                visualReference:
+                  bible.references.find(
+                    (reference) => reference.role === segment.shotFamily,
+                  ) ?? null,
               }
             : null,
         audio:
@@ -686,6 +726,11 @@ export async function buildValidatedGenerationStoryboard(
     versionNumber: number
     definitionSha256: string
     rules: Array<{ id: number; category: string; position: number }>
+    references: Array<{
+      role: string
+      mediaAssetVersionId: number
+      mediaFileSha256: string
+    }>
   } | null = null
   if (needsGeneration) {
     const loaded = await loadPublishedVisualBible(job.sacredHouseIdSnapshot)
@@ -710,10 +755,33 @@ export async function buildValidatedGenerationStoryboard(
       versionNumber: loaded.versionNumber,
       definitionSha256: loaded.definitionSha256,
       rules: await loadBibleRuleIdentities(loaded.versionId),
+      references: loaded.references,
     }
   }
 
   const { scenes, totalDurationMs } = planScenes(recipe, bible)
+
+  // FAIL CLOSED, BEFORE ANY EXECUTABLE TASK EXISTS.
+  //
+  // A scene whose slot was authored referenceRequirement=REQUIRED must
+  // resolve an approved reference for its shot family. If it cannot,
+  // the storyboard is governance-impossible: there is deliberately NO
+  // silent fallback to text-to-video, because that would change what
+  // the paid call is without anyone approving the change, and would
+  // render one shot of the sequence in a visibly different room.
+  for (const scene of scenes) {
+    const intent = scene.generationIntent
+    if (!intent) continue
+    if (
+      intent.referenceRequirement === 'REQUIRED' &&
+      intent.visualReference === null
+    ) {
+      return {
+        status: 'GOVERNANCE_IMPOSSIBLE',
+        reasons: ['visual_reference_unavailable'],
+      }
+    }
+  }
   if (scenes.length > MAX_SCENES) {
     // Loud ceiling — never a silent truncation.
     return { status: 'SCENE_CEILING_EXCEEDED', sceneCount: scenes.length }

@@ -556,6 +556,17 @@ export function createKlingVisualGenerationProvider(
     validateRequest(request: VisualGenerationRequest) {
       // PURE and network-free: the executor turns a refusal here into
       // a provably NOT_SENT task failure with zero provider contact.
+      //
+      // THIS ADAPTER IS TEXT-TO-VIDEO ONLY. Its create body is a closed
+      // allowlist with no image input of any kind (canon §10.13), so a
+      // request carrying an approved visual reference is REFUSED rather
+      // than silently generated without it — quietly dropping the
+      // reference would spend money producing a shot the Visual Bible
+      // did not authorise. Image-to-video needs a verified official
+      // contract and a separate adapter capability.
+      if (request.visualReference !== null) {
+        return { ok: false, reasonCode: 'reference_input_unsupported' }
+      }
       if (klingDurationSeconds(request.durationMs) == null) {
         return { ok: false, reasonCode: 'duration_unsupported_by_provider' }
       }

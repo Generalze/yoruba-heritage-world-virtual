@@ -176,6 +176,7 @@ function VisualBiblePage() {
       <ul className="mt-6 space-y-3">
         {data.versions.map((version) => {
           const versionRules = data.rulesByVersion[version.id] ?? []
+          const versionReferences = data.referencesByVersion[version.id] ?? []
           return (
             <li
               key={version.id}
@@ -184,6 +185,9 @@ function VisualBiblePage() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">
                   v{version.versionNumber} · {versionRules.length} rules
+                  {version.referenceMode === 'IMAGE_REFERENCE_REQUIRED'
+                    ? ` · ${versionReferences.length}/6 references`
+                    : null}
                 </span>
                 <span className="rounded-full bg-gold/10 px-2.5 py-0.5 text-xs text-gold-deep">
                   {version.status.replaceAll('_', ' ')}
@@ -193,6 +197,16 @@ function VisualBiblePage() {
                 <p className="mt-1 text-xs break-all text-ink-soft">
                   Definition SHA-256: {version.definitionSha256}
                 </p>
+              ) : null}
+              {versionReferences.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {versionReferences.map((reference) => (
+                    <li key={reference.role} className="text-xs text-ink-soft">
+                      {reference.role.replaceAll('_', ' ')} — media version{' '}
+                      {reference.mediaAssetVersionId}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
               {version.reviewNote && version.status === 'DRAFT' ? (
                 <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">

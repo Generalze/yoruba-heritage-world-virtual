@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto'
 import { and, eq, gt, or } from 'drizzle-orm'
 
 import { getDb } from '@/db'
+import type {
+  SlotReferenceRequirement,
+  SlotShotFamily,
+} from '@/db/schema/prayer-templates'
 import {
   prayerSessionTemplateVersions,
   prayerSessionTemplates,
@@ -64,6 +68,10 @@ export interface ResolvedSlot {
   position: number
   slotKind: 'CONTENT' | 'SILENCE'
   silenceDurationSeconds: number | null
+  /** The template's AUTHORED camera decision, carried verbatim from the
+   * approved (and hash-verified) definition. Never inferred here. */
+  shotFamily: SlotShotFamily | null
+  referenceRequirement: SlotReferenceRequirement | null
   selections: Array<ResolvedContentSelection>
 }
 
@@ -348,6 +356,8 @@ async function tryResolveTemplate(
         position: slot.position,
         slotKind: 'SILENCE',
         silenceDurationSeconds: slot.silenceDurationSeconds,
+        shotFamily: null,
+        referenceRequirement: null,
         selections: [],
       })
       continue
@@ -422,6 +432,8 @@ async function tryResolveTemplate(
       position: slot.position,
       slotKind: 'CONTENT',
       silenceDurationSeconds: null,
+      shotFamily: slot.shotFamily,
+      referenceRequirement: slot.referenceRequirement,
       selections,
     })
   }

@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
 
 import { getDb } from '@/db'
+import { isVisualBibleReferenceEligible } from './visual-bible-references'
 import {
   GUIDANCE_LANGUAGES,
   SACRED_RUNTIME_CONTENT_TYPES,
@@ -338,6 +339,35 @@ export async function compileVisualGenerationRequest(
     return { status: 'FAILED', reasonCode: 'external_ai_policy_forbidden' }
   }
 
+  // REFERENCE AUTHORITY, RE-PROVED IMMEDIATELY BEFORE THE PAID CALL.
+  //
+  // The manifest froze WHICH reference was approved; it cannot know
+  // whether that reference is still usable now. Rights withdrawal,
+  // runtime disablement, an external-AI policy downgrade, a missing
+  // object or a changed file must all stop the call while it is
+  // provably NOT_SENT — the sacred-content policy above and this
+  // reference policy are distinct authorities and BOTH must pass.
+  let visualReference: VisualGenerationRequest['visualReference'] = null
+  if (intent.visualReference) {
+    const eligibility = await isVisualBibleReferenceEligible({
+      mediaAssetVersionId: intent.visualReference.mediaAssetVersionId,
+      sacredHouseId: intent.sacredHouseId,
+      boundFileSha256: intent.visualReference.mediaFileSha256,
+    })
+    if (!eligibility.eligible) {
+      return { status: 'FAILED', reasonCode: 'visual_reference_ineligible' }
+    }
+    visualReference = {
+      role: intent.visualReference.role,
+      mediaAssetVersionId: intent.visualReference.mediaAssetVersionId,
+      mediaFileSha256: intent.visualReference.mediaFileSha256,
+    }
+  } else if (intent.referenceRequirement === 'REQUIRED') {
+    // Authored as REQUIRED but nothing resolved: fail closed rather
+    // than quietly generating a differently-sourced shot.
+    return { status: 'FAILED', reasonCode: 'visual_reference_missing' }
+  }
+
   const request: VisualGenerationRequest = {
     // Reused verbatim from the ALREADY-validated manifest task — Step
     // 13 proved this is exactly
@@ -354,6 +384,7 @@ export async function compileVisualGenerationRequest(
     visualBibleRules: bible.rules,
     externalAiPolicy: intent.externalAiPolicy,
     approvedTextContext,
+    visualReference,
   }
   return { status: 'OK', request }
 }

@@ -2762,4 +2762,148 @@ marks the row FAILED; a retryable one is left PENDING for the next pass.
 
 ---
 
+# 49. Amendment — Visual Bible Reference Media (provider-neutral foundation)
+
+Written Visual Bible rules govern depiction in words. An approved
+reference image governs it by example. This section records how such a
+reference becomes authoritative, and is deliberately silent on how any
+vendor receives it.
+
+## 49.1 What a reference is bound to
+
+References are bound to a **Visual Bible VERSION**, never to a Bible.
+They are part of what gets approved, so a later version re-binds
+deliberately and approving v2 can never silently inherit v1's imagery.
+
+A reference names one **exact media asset VERSION** and freezes that
+version's file hash at bind time. An edited image is a new media
+version and cannot leak into an approved Bible.
+
+`sacred_content_media_links` is **not** reused: its `content_version_id`
+keys to `spiritual_content_versions` and binds a prayer TEXT to media.
+A Visual Bible reference is a different relationship and has its own
+table.
+
+## 49.2 Binding is DRAFT-only
+
+`bindVisualBibleReference` and `unbindVisualBibleReference` refuse any
+version that is not `DRAFT`. Once submitted, references are exactly as
+immutable as rules. A reference added after approval would alter the
+thing that was approved.
+
+## 49.3 Reference mode
+
+A version declares `TEXT_ONLY` or `IMAGE_REFERENCE_REQUIRED`.
+`TEXT_ONLY` is the default, so every pre-existing version keeps its
+exact meaning.
+
+For `IMAGE_REFERENCE_REQUIRED`, the **complete canonical six-role pack**
+must be present to advance past DRAFT: `WIDE_MASTER`, `MEDIUM_PRAYER`,
+`DIRECT_CAMERA`, `SIDE_PRAYER`, `WORKING_DETAIL`, `ENVIRONMENT_INSERT`
+— each exactly once. Validating only "the references that happen to
+exist" would let a version publish with none at all.
+
+## 49.4 The canonical hash covers imagery
+
+`definitionSha256` is computed over the reference MODE and the ordered
+reference BINDINGS as well as the rules. The publisher and the runtime
+loader compute it identically and the loader fails closed on mismatch.
+A version whose imagery changed but whose hash did not would be a
+silently different Visual Bible.
+
+## 49.5 Reference eligibility is stricter than media eligibility
+
+The shared media formula proves publication, rights clearance, consent,
+runtime enablement, mime type, storage presence and byte-hash integrity.
+It knows nothing about Sacred House scope or external-AI policy. A
+Visual Bible reference must additionally prove:
+
+- `assetKind = IMAGE`
+- `scopeType = SACRED_HOUSE` and the House matches the Bible's House —
+  a PLATFORM-scoped image is deliberately not acceptable, because a room
+  reference belongs to exactly one House
+- the exact bound media version, whose current file hash still equals
+  the hash frozen at bind time
+- **`externalAiPolicy = DERIVATIVE_GENERATION_ALLOWED`**
+
+`REFERENCE_ONLY` is **not** sufficient. Image-to-video derives a video
+FROM the image; it does not merely let an operator look at it.
+
+Sacred-content external-AI policy and reference-media external-AI policy
+are **distinct authorities and both must pass**.
+
+Eligibility is checked at DRAFT bind, at submission, at approval, at
+publication, and again immediately before provider submission. It is
+computed per call and never cached: a rights withdrawal, a runtime
+disablement or a policy downgrade removes eligibility immediately.
+
+## 49.6 Shot authority is authored, never inferred
+
+`shotFamily` and `referenceRequirement` are **human-authored columns on
+prayer session template slots**, and enter the template's authoritative
+definition hash.
+
+- SILENCE slots **must** carry neither — a shot family that could never
+  be honoured would be dead authority inside the hash.
+- CONTENT slots **must** carry both, *even when* a given recipe resolves
+  them to `LINKED_REFERENCE` or `LIBRARY_MEDIA`. The recipe's
+  `visualMode` is derived at runtime from whichever media is currently
+  eligible, so a media withdrawal could otherwise promote an
+  already-approved slot into generation with no approved camera or
+  reference decision behind it. The fields stay dormant unless
+  `visualMode` is `GENERATION_ALLOWED`.
+- Presentational splits of one segment **inherit the same authored shot
+  family**. There is no automatic camera rotation and no automatic shot
+  sequencing in Phase One.
+
+Template publication validates authored shot authority. It does **not**
+depend on the current existence of a Visual Bible image: a template
+defines approved shot intent, not media availability.
+
+## 49.7 Fail closed, never fall back
+
+A scene whose slot was authored `referenceRequirement = REQUIRED` must
+resolve an approved reference for its shot family. If it cannot, the
+storyboard is governance-impossible and no executable paid task is
+created.
+
+There is deliberately **no silent fallback to text-to-video**. Such a
+fallback would change what the paid call is without anyone approving the
+change, and would render one shot of a sequence in a visibly different
+room — the continuity failure the Visual Bible exists to prevent.
+
+## 49.8 What travels, and what does not
+
+The manifest freezes reference **identity and hashes only** — never
+bytes, never a storage key, never a provider URL.
+
+`VisualGenerationRequest.visualReference` likewise carries identity
+only. **How a reference is transported to a vendor (base64, multipart,
+ephemeral URL) is deliberately unresolved**, because the official Kling
+image-to-video contract has not been verified. Nothing in this
+foundation commits the platform to a transport it has not read the
+documentation for.
+
+## 49.9 The text-to-video adapter refuses references
+
+Canon §10.13 records the approved Kling contract as a closed allowlist
+with no image input of any kind. That adapter therefore **refuses** a
+request carrying a visual reference (`reference_input_unsupported`,
+provably NOT_SENT) rather than silently generating without it. Quietly
+dropping the reference would spend money producing a shot the Visual
+Bible did not authorise.
+
+Image-to-video requires a verified official contract, a canon amendment
+authorising image input, and a separate adapter capability. None of
+those exist yet.
+
+## 49.10 Unchanged
+
+Kling audio remains `off`. Prayer audio continues to come only from the
+approved human-recording/TTS pipeline. No lip-sync and no native vendor
+speech. The at-most-once paid-call reservation, the privacy rules and
+the sacred-content approval workflow are untouched.
+
+---
+
 **End of Technical Canon**

@@ -350,6 +350,8 @@ function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
     themeCode: null,
     variantKind: null,
     silenceDurationSeconds: null,
+    shotFamily: 'MEDIUM_PRAYER',
+    referenceRequirement: 'OPTIONAL',
     allowedScopes: ['PLATFORM'],
     pinnedContentVersionIds: [],
     ...overrides,
@@ -1698,10 +1700,10 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
     // upload state already say everything a Prayer Room needs.
     //
     // 55 at Step 18, plus four daily subscription tables (canon §42
-    // item 22, rules in §47) and three notification tables (§42 item 23,
-    // rules in §48). Nothing may move it without a canon section to
-    // point at.
-    expect(count).toBe(62)
+    // item 22, rules in §47), three notification tables (§42 item 23,
+    // rules in §48) and one Visual Bible reference-media table
+    // (Step 24). Nothing may move it without an authorised reason.
+    expect(count).toBe(63)
   }, 240_000)
 })
 

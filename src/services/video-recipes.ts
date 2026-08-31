@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto'
 import { and, asc, eq, gt } from 'drizzle-orm'
 
 import { getDb } from '@/db'
+import type {
+  SlotReferenceRequirement,
+  SlotShotFamily,
+} from '@/db/schema/prayer-templates'
 import {
   mediaAssetVersions,
   mediaAssets,
@@ -100,6 +104,12 @@ export interface RecipeSegment {
   slotPosition: number
   kind: 'CONTENT' | 'SILENCE'
   durationSeconds: number
+  /** The slot's AUTHORED camera decision, carried through unchanged.
+   * Null on SILENCE. Dormant unless visualMode is GENERATION_ALLOWED —
+   * but present regardless, so a media withdrawal can never promote a
+   * slot into generation without approved shot authority behind it. */
+  shotFamily: SlotShotFamily | null
+  referenceRequirement: SlotReferenceRequirement | null
   // SILENCE
   visualMode:
     | 'LINKED_REFERENCE'
@@ -223,6 +233,8 @@ export function canonicalRecipeRepresentation(
       slotPosition: segment.slotPosition,
       kind: segment.kind,
       durationSeconds: segment.durationSeconds,
+      shotFamily: segment.shotFamily,
+      referenceRequirement: segment.referenceRequirement,
       visualMode: segment.visualMode,
       contentItemId: segment.contentItemId,
       contentVersionId: segment.contentVersionId,
@@ -424,6 +436,8 @@ export async function buildValidatedVideoRecipe(
         slotPosition: slot.position,
         kind: 'SILENCE',
         durationSeconds: duration,
+        shotFamily: null,
+        referenceRequirement: null,
         visualMode: 'HOLD_PREVIOUS',
         contentItemId: null,
         contentVersionId: null,
@@ -671,6 +685,8 @@ export async function buildValidatedVideoRecipe(
         slotPosition: slot.position,
         kind: 'CONTENT',
         durationSeconds,
+        shotFamily: slot.shotFamily,
+        referenceRequirement: slot.referenceRequirement,
         visualMode: visualMode ?? 'HOLD_PREVIOUS',
         contentItemId: selection.contentItemId,
         contentVersionId: selection.contentVersionId,

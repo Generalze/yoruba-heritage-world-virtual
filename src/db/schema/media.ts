@@ -65,6 +65,41 @@ export const MEDIA_EXTERNAL_AI_POLICIES = [
 ] as const
 export type MediaExternalAiPolicy = (typeof MEDIA_EXTERNAL_AI_POLICIES)[number]
 
+/**
+ * The canonical shot families a Visual Bible may bind an approved
+ * reference image to (Step 24). Roles, never filenames: which file
+ * plays WIDE_MASTER is a binding decision recorded per version, so a
+ * replaced image is a new media version and therefore a new Visual
+ * Bible version.
+ */
+export const VISUAL_BIBLE_REFERENCE_ROLES = [
+  'WIDE_MASTER',
+  'MEDIUM_PRAYER',
+  'DIRECT_CAMERA',
+  'SIDE_PRAYER',
+  'WORKING_DETAIL',
+  'ENVIRONMENT_INSERT',
+] as const
+export type VisualBibleReferenceRole =
+  (typeof VISUAL_BIBLE_REFERENCE_ROLES)[number]
+
+/**
+ * Whether a Visual Bible version governs generation by written rules
+ * alone, or additionally requires the complete approved reference pack.
+ *
+ * TEXT_ONLY is the default so every pre-existing version keeps its
+ * exact meaning. IMAGE_REFERENCE_REQUIRED is an explicit human choice
+ * that makes the six-role pack a publication precondition — merely
+ * validating "whatever references happen to exist" would let a version
+ * publish with none at all.
+ */
+export const VISUAL_BIBLE_REFERENCE_MODES = [
+  'TEXT_ONLY',
+  'IMAGE_REFERENCE_REQUIRED',
+] as const
+export type VisualBibleReferenceMode =
+  (typeof VISUAL_BIBLE_REFERENCE_MODES)[number]
+
 export const SACRED_MEDIA_LINK_ROLES = [
   'PRIMARY_AUDIO',
   'ALTERNATE_AUDIO',
@@ -321,6 +356,12 @@ export const visualBibleVersions = mysqlTable(
       .notNull()
       .default('DRAFT'),
     definitionSha256: varchar('definition_sha256', { length: 64 }),
+    /** Governs whether the six-role reference pack is required to
+     * publish. Defaults to TEXT_ONLY so existing versions are unchanged
+     * in meaning. */
+    referenceMode: mysqlEnum('reference_mode', VISUAL_BIBLE_REFERENCE_MODES)
+      .notNull()
+      .default('TEXT_ONLY'),
     createdBy: bigint('created_by', { mode: 'number', unsigned: true }),
     submittedAt: timestamp('submitted_at'),
     reviewNote: varchar('review_note', { length: 500 }),
@@ -386,5 +427,76 @@ export const visualBibleRules = mysqlTable(
       foreignColumns: [visualBibleVersions.id],
       name: 'vbr_version_fk',
     }).onDelete('restrict'),
+  ],
+)
+
+/**
+ * Approved reference imagery bound to ONE Visual Bible version
+ * (Step 24, provider-neutral foundation).
+ *
+ * WHY NOT sacredContentMediaLinks: that table's contentVersionId keys
+ * to spiritualContentVersions — it binds a PRAYER TEXT to media. Its
+ * VISUAL_REFERENCE role means "reference for this sacred text", not
+ * "room reference for this House's Visual Bible". Reusing it would
+ * require a fictional content version and would misstate the domain.
+ *
+ * VERSION-BOUND, NOT BIBLE-BOUND. References are part of what gets
+ * approved, so they belong to the version and enter its canonical
+ * definition hash. A later version re-binds deliberately; approving v2
+ * can never silently inherit v1's imagery. Binding is DRAFT-only:
+ * once a version is submitted its references are as immutable as its
+ * rules.
+ *
+ * EXACT MEDIA VERSION, plus the file hash frozen at bind time. An
+ * edited image is a new media version and cannot leak into an approved
+ * Bible, and a changed file trips the stored-hash comparison
+ * independently of the media library's own integrity check.
+ */
+export const visualBibleReferenceMedia = mysqlTable(
+  'visual_bible_reference_media',
+  {
+    id: bigint('id', { mode: 'number', unsigned: true })
+      .autoincrement()
+      .primaryKey(),
+    visualBibleVersionId: bigint('visual_bible_version_id', {
+      mode: 'number',
+      unsigned: true,
+    }).notNull(),
+    mediaAssetVersionId: bigint('media_asset_version_id', {
+      mode: 'number',
+      unsigned: true,
+    }).notNull(),
+    role: mysqlEnum('role', VISUAL_BIBLE_REFERENCE_ROLES).notNull(),
+    /** The media version's file hash AT BIND TIME. Compared against the
+     * live value at every later gate: a second, independent tripwire. */
+    mediaFileSha256: varchar('media_file_sha256', { length: 64 }).notNull(),
+    boundBy: bigint('bound_by', { mode: 'number', unsigned: true }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => [
+    // One reference per role per version: "which image is the wide
+    // master" is never ambiguous and never order-dependent.
+    uniqueIndex('vbrm_version_role_unique').on(
+      table.visualBibleVersionId,
+      table.role,
+    ),
+    index('vbrm_media_idx').on(table.mediaAssetVersionId),
+    foreignKey({
+      columns: [table.visualBibleVersionId],
+      foreignColumns: [visualBibleVersions.id],
+      name: 'vbrm_version_fk',
+    }).onDelete('cascade'),
+    // RESTRICT: an approved reference cannot be deleted out from under
+    // the version that was approved with it.
+    foreignKey({
+      columns: [table.mediaAssetVersionId],
+      foreignColumns: [mediaAssetVersions.id],
+      name: 'vbrm_media_fk',
+    }).onDelete('restrict'),
+    foreignKey({
+      columns: [table.boundBy],
+      foreignColumns: [users.id],
+      name: 'vbrm_bound_by_fk',
+    }).onDelete('set null'),
   ],
 )

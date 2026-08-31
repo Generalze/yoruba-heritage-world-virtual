@@ -62,6 +62,7 @@ function request(
     visualBibleRules: RULES,
     externalAiPolicy: 'METADATA_ONLY',
     approvedTextContext: null,
+    visualReference: null,
     ...overrides,
   }
 }
