@@ -21,6 +21,8 @@ import {
   spiritualContentItems,
   spiritualContentVersions,
 } from './guidance'
+import { SHOT_ROLES } from './shot-roles'
+import type { ShotRole } from './shot-roles'
 import { users } from './users'
 
 /**
@@ -61,15 +63,8 @@ export type SlotKind = (typeof SLOT_KINDS)[number]
  * resolves them to LINKED_REFERENCE or LIBRARY_MEDIA, where they stay
  * dormant.
  */
-export const SLOT_SHOT_FAMILIES = [
-  'WIDE_MASTER',
-  'MEDIUM_PRAYER',
-  'DIRECT_CAMERA',
-  'SIDE_PRAYER',
-  'WORKING_DETAIL',
-  'ENVIRONMENT_INSERT',
-] as const
-export type SlotShotFamily = (typeof SLOT_SHOT_FAMILIES)[number]
+export const SLOT_SHOT_FAMILIES = SHOT_ROLES
+export type SlotShotFamily = ShotRole
 
 /** Whether generation for this slot may proceed without an approved
  * reference. REQUIRED fails closed; OPTIONAL is an explicit human

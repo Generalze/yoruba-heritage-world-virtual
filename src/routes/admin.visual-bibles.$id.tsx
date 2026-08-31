@@ -8,7 +8,10 @@ import {
   archiveVisualBibleVersionFn,
   createVisualBibleVersionFn,
   getVisualBibleFn,
+  bindVisualBibleReferenceFn,
   loadPublishedVisualBibleFn,
+  setVisualBibleReferenceModeFn,
+  unbindVisualBibleReferenceFn,
   publishVisualBibleVersionFn,
   returnVisualBibleVersionFn,
   submitVisualBibleVersionFn,
@@ -48,6 +51,9 @@ function VisualBiblePage() {
   const publish = useServerFn(publishVisualBibleVersionFn)
   const archive = useServerFn(archiveVisualBibleVersionFn)
   const verifiedLoad = useServerFn(loadPublishedVisualBibleFn)
+  const setReferenceMode = useServerFn(setVisualBibleReferenceModeFn)
+  const bindReference = useServerFn(bindVisualBibleReferenceFn)
+  const unbindReference = useServerFn(unbindVisualBibleReferenceFn)
 
   const canApprove = admin.permissions.includes('media.approve')
   const canPublish = admin.permissions.includes('media.publish')
@@ -198,16 +204,38 @@ function VisualBiblePage() {
                   Definition SHA-256: {version.definitionSha256}
                 </p>
               ) : null}
-              {versionReferences.length > 0 ? (
-                <ul className="mt-2 space-y-1">
-                  {versionReferences.map((reference) => (
-                    <li key={reference.role} className="text-xs text-ink-soft">
-                      {reference.role.replaceAll('_', ' ')} — media version{' '}
-                      {reference.mediaAssetVersionId}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+              <ReferencePanel
+                versionId={version.id}
+                status={version.status}
+                referenceMode={version.referenceMode}
+                references={versionReferences}
+                busy={busy}
+                onSetMode={async (mode) => {
+                  await run(() =>
+                    setReferenceMode({
+                      data: { versionId: version.id, referenceMode: mode },
+                    }),
+                  )
+                }}
+                onBind={async (role, mediaAssetVersionId) => {
+                  await run(() =>
+                    bindReference({
+                      data: {
+                        versionId: version.id,
+                        role,
+                        mediaAssetVersionId,
+                      },
+                    }),
+                  )
+                }}
+                onUnbind={async (role) => {
+                  await run(() =>
+                    unbindReference({
+                      data: { versionId: version.id, role },
+                    }),
+                  )
+                }}
+              />
               {version.reviewNote && version.status === 'DRAFT' ? (
                 <p className="mt-2 rounded-md border border-gold bg-gold/10 px-3 py-2 text-xs text-gold-deep">
                   Returned with reason: {version.reviewNote}
@@ -440,4 +468,157 @@ function VisualBiblePage() {
       ),
     )
   }
+}
+
+const REFERENCE_ROLES = [
+  'WIDE_MASTER',
+  'MEDIUM_PRAYER',
+  'DIRECT_CAMERA',
+  'SIDE_PRAYER',
+  'WORKING_DETAIL',
+  'ENVIRONMENT_INSERT',
+] as const
+
+/**
+ * Reference authoring for ONE Visual Bible version.
+ *
+ * Editable only while DRAFT — after that this is a read-only record of
+ * what was approved. The controls disappearing is a courtesy; the
+ * service refuses the same operations regardless.
+ *
+ * Binding accepts an existing GOVERNED media asset version id. There is
+ * deliberately no upload-by-file shortcut here: an image becomes usable
+ * by passing the media library's own review, rights and runtime gates,
+ * never by arriving through this screen.
+ */
+function ReferencePanel(props: {
+  versionId: number
+  status: string
+  referenceMode: string
+  references: Array<{
+    role: string
+    mediaAssetVersionId: number
+    mediaFileSha256: string
+  }>
+  busy: boolean
+  onSetMode: (mode: 'TEXT_ONLY' | 'IMAGE_REFERENCE_REQUIRED') => Promise<void>
+  onBind: (
+    role: (typeof REFERENCE_ROLES)[number],
+    mediaAssetVersionId: number,
+  ) => Promise<void>
+  onUnbind: (role: (typeof REFERENCE_ROLES)[number]) => Promise<void>
+}) {
+  const [pending, setPending] = useState<Record<string, string>>({})
+  const editable = props.status === 'DRAFT'
+  const byRole = new Map(props.references.map((r) => [r.role, r]))
+
+  return (
+    <div className="mt-3 rounded-md border border-line bg-surface-raised p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-semibold tracking-wide text-ink uppercase">
+          Reference imagery
+        </span>
+        {editable ? (
+          <label className="text-xs text-ink-soft">
+            Mode
+            <select
+              value={props.referenceMode}
+              disabled={props.busy}
+              onChange={(event) =>
+                void props.onSetMode(
+                  event.target.value as
+                    'TEXT_ONLY' | 'IMAGE_REFERENCE_REQUIRED',
+                )
+              }
+              className="ml-2 rounded-md border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink"
+            >
+              <option value="TEXT_ONLY">Text only</option>
+              <option value="IMAGE_REFERENCE_REQUIRED">
+                Image reference required
+              </option>
+            </select>
+          </label>
+        ) : (
+          <span className="rounded-full border border-line-strong px-2.5 py-0.5 text-xs text-ink-soft">
+            {props.referenceMode.replaceAll('_', ' ')} · read-only
+          </span>
+        )}
+      </div>
+
+      {props.referenceMode === 'TEXT_ONLY' ? (
+        <p className="mt-2 text-xs text-ink-soft">
+          This version is governed by its written rules alone. Switch the mode
+          to bind approved reference imagery.
+        </p>
+      ) : (
+        <>
+          <p className="mt-2 text-xs text-ink-soft">
+            All six roles must be bound to approved, rights-cleared,
+            runtime-enabled images for this Sacred House before the version can
+            be submitted. {props.references.length}/6 bound.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {REFERENCE_ROLES.map((role) => {
+              const bound = byRole.get(role)
+              return (
+                <li
+                  key={role}
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-line py-1.5 text-xs"
+                >
+                  <span className="text-ink">{role.replaceAll('_', ' ')}</span>
+                  {bound ? (
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="text-ink-soft">
+                        media version {bound.mediaAssetVersionId} ·{' '}
+                        {bound.mediaFileSha256.slice(0, 12)}…
+                      </span>
+                      {editable ? (
+                        <button
+                          type="button"
+                          disabled={props.busy}
+                          onClick={() => void props.onUnbind(role)}
+                          className="rounded-md border border-line-strong px-2 py-1 text-ink-soft hover:border-alert disabled:opacity-60"
+                        >
+                          Unbind
+                        </button>
+                      ) : null}
+                    </span>
+                  ) : editable ? (
+                    <span className="flex items-center gap-2">
+                      <input
+                        value={pending[role] ?? ''}
+                        onChange={(event) =>
+                          setPending((current) => ({
+                            ...current,
+                            [role]: event.target.value.replace(/[^0-9]/g, ''),
+                          }))
+                        }
+                        placeholder="media version id"
+                        className="w-36 rounded-md border border-line-strong bg-surface-raised px-2 py-1 text-xs text-ink"
+                      />
+                      <button
+                        type="button"
+                        disabled={props.busy || !pending[role]}
+                        onClick={() => {
+                          const id = Number(pending[role])
+                          if (Number.isInteger(id) && id > 0) {
+                            void props.onBind(role, id)
+                          }
+                        }}
+                        className="rounded-md border border-line-strong px-2 py-1 text-ink-soft hover:border-gold-deep disabled:opacity-60"
+                      >
+                        Bind
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="text-alert">not bound</span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
+    </div>
+  )
 }

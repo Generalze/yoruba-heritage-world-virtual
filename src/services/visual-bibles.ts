@@ -109,7 +109,7 @@ export async function createVisualBible(
   return { id: bibleId, publicId }
 }
 
-async function lockBible(tx: DbClient, bibleId: number) {
+export async function lockBible(tx: DbClient, bibleId: number) {
   const row = (
     await tx
       .select()

@@ -583,6 +583,18 @@ export function createKlingVisualGenerationProvider(
       // executor's NOT_SENT path they surface as quarantines, which is
       // the correct failure direction for gates that should have been
       // unreachable.
+      //
+      // Reference input is re-refused HERE too, before the prompt or
+      // body is built and before any socket is opened. submitScene is a
+      // public export reachable from any future caller, so it must not
+      // depend on validateRequest having run first.
+      if (request.visualReference !== null) {
+        throw new VisualGenerationProviderError(
+          'reference_input_unsupported',
+          'This adapter is text-to-video only and cannot accept a reference image.',
+          false,
+        )
+      }
       const duration = klingDurationSeconds(request.durationMs)
       if (duration == null) {
         throw new VisualGenerationProviderError(

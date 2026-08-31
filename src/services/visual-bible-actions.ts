@@ -2,12 +2,17 @@ import { createServerFn } from '@tanstack/react-start'
 import {
   bindVisualBibleReference,
   listVisualBibleReferences,
+  setVisualBibleReferenceMode,
   unbindVisualBibleReference,
 } from './visual-bible-references'
 import { z } from 'zod'
 
 import { getDb } from '@/db'
-import { VISUAL_BIBLE_REFERENCE_ROLES, sacredHouses } from '@/db/schema'
+import {
+  VISUAL_BIBLE_REFERENCE_MODES,
+  VISUAL_BIBLE_REFERENCE_ROLES,
+  sacredHouses,
+} from '@/db/schema'
 import { getAuthenticatedUser, requirePermission } from '@/auth/guards'
 import { requestContext } from '@/server/request-context'
 import {
@@ -123,6 +128,24 @@ export const unbindVisualBibleReferenceFn = createServerFn({ method: 'POST' })
       requestContext(),
       data.versionId,
       data.role,
+    )
+    return { ok: true as const }
+  })
+
+export const setVisualBibleReferenceModeFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      versionId: idSchema,
+      referenceMode: z.enum(VISUAL_BIBLE_REFERENCE_MODES),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireActor()
+    await setVisualBibleReferenceMode(
+      actor.id,
+      requestContext(),
+      data.versionId,
+      data.referenceMode,
     )
     return { ok: true as const }
   })

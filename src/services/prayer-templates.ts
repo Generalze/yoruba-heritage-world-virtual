@@ -794,6 +794,59 @@ export async function updateDraftTemplateVersion(
   })
 }
 
+/**
+ * Re-proves AUTHORED SHOT AUTHORITY against the authoritative stored
+ * rows at every gate past DRAFT.
+ *
+ * validateSlotShape guards the INPUT path. This guards the ROWS, because
+ * a row edited around the service — or written before these columns
+ * existed — would otherwise carry a CONTENT slot with no camera
+ * decision into an approved, hash-sealed template, where the recipe
+ * would later be entitled to generate from it.
+ *
+ * Fails closed and is never auto-healed.
+ */
+export async function assertStoredShotAuthority(
+  versionId: number,
+  tx: DbClient = getDb(),
+): Promise<void> {
+  const slots = await tx
+    .select({
+      slotKey: prayerSessionTemplateSlots.slotKey,
+      slotKind: prayerSessionTemplateSlots.slotKind,
+      shotFamily: prayerSessionTemplateSlots.shotFamily,
+      referenceRequirement: prayerSessionTemplateSlots.referenceRequirement,
+    })
+    .from(prayerSessionTemplateSlots)
+    .where(eq(prayerSessionTemplateSlots.templateVersionId, versionId))
+
+  for (const slot of slots) {
+    if (slot.slotKind === 'SILENCE') {
+      if (slot.shotFamily != null || slot.referenceRequirement != null) {
+        throw new PrayerTemplateError(
+          `Slot ${slot.slotKey}: SILENCE must carry no shot family or reference requirement.`,
+        )
+      }
+      continue
+    }
+    if (slot.shotFamily == null || slot.referenceRequirement == null) {
+      throw new PrayerTemplateError(
+        `Slot ${slot.slotKey}: CONTENT requires an authored shot family and reference requirement.`,
+      )
+    }
+    if (!SLOT_SHOT_FAMILIES.includes(slot.shotFamily)) {
+      throw new PrayerTemplateError(
+        `Slot ${slot.slotKey}: unknown shot family.`,
+      )
+    }
+    if (!SLOT_REFERENCE_REQUIREMENTS.includes(slot.referenceRequirement)) {
+      throw new PrayerTemplateError(
+        `Slot ${slot.slotKey}: unknown reference requirement.`,
+      )
+    }
+  }
+}
+
 export async function submitTemplateVersion(
   actorId: number,
   ctx: RequestContext,
@@ -803,6 +856,7 @@ export async function submitTemplateVersion(
   const current = await loadTemplateVersion(versionId)
   await getDb().transaction(async (tx) => {
     await lockTemplate(tx, current.templateId)
+    await assertStoredShotAuthority(versionId, tx)
     const slotCount = (
       await tx
         .select({ id: prayerSessionTemplateSlots.id })
@@ -906,6 +960,9 @@ export async function approveTemplateVersion(
 ): Promise<void> {
   await requirePermission(actorId, 'spiritual_content.approve')
   const current = await loadTemplateVersion(versionId)
+  // Re-proved here too: the rows may have been touched while the
+  // version sat under review.
+  await assertStoredShotAuthority(versionId)
   const result = await getDb()
     .update(prayerSessionTemplateVersions)
     .set({ status: 'APPROVED', approvedBy: actorId, approvedAt: new Date() })
@@ -1338,6 +1395,7 @@ export async function publishTemplateVersion(
       throw new PrayerTemplateError('Only approved versions can be published.')
     }
     const definition = await loadTemplateDefinition(versionId, tx)
+    await assertStoredShotAuthority(versionId, tx)
     await validateTemplateForPublication(definition, template)
     const definitionSha256 = computeDefinitionSha256(definition)
     const currentPublished = (

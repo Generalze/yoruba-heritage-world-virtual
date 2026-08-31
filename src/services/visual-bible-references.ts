@@ -10,10 +10,15 @@ import {
   visualBibles,
 } from '@/db/schema'
 import { MediaError, isMediaAssetRuntimeEligible } from './media-assets'
+import { lockBible } from './visual-bibles'
+import type { DbClient } from '@/db'
 import { recordAuditEvent } from '@/auth/audit'
 import { requirePermission } from '@/auth/guards'
 import type { RequestContext } from '@/auth/service'
-import type { VisualBibleReferenceRole } from '@/db/schema/media'
+import type {
+  VisualBibleReferenceMode,
+  VisualBibleReferenceRole,
+} from '@/db/schema/media'
 
 /**
  * Approved reference imagery for Visual Bible versions (Step 24,
@@ -207,6 +212,42 @@ export async function listVisualBibleReferences(
  * as a rule. Eligibility is proved here so an unusable image cannot sit
  * in a draft waiting to fail at publication.
  */
+/**
+ * Re-reads the version INSIDE the transaction, under the Bible lock,
+ * and refuses unless it is still DRAFT.
+ *
+ * A pre-read status is not enough: submitVisualBibleVersion() takes the
+ * same lock, so a reference operation that began against a DRAFT could
+ * otherwise commit after the version had already crossed to
+ * UNDER_REVIEW. Reading the status inside the same lock the lifecycle
+ * transition uses is what makes the freeze atomic.
+ */
+async function requireDraftUnderLock(tx: DbClient, versionId: number) {
+  const row = (
+    await tx
+      .select({
+        status: visualBibleVersions.status,
+        referenceMode: visualBibleVersions.referenceMode,
+        visualBibleId: visualBibleVersions.visualBibleId,
+        sacredHouseId: visualBibles.sacredHouseId,
+      })
+      .from(visualBibleVersions)
+      .innerJoin(
+        visualBibles,
+        eq(visualBibles.id, visualBibleVersions.visualBibleId),
+      )
+      .where(eq(visualBibleVersions.id, versionId))
+      .limit(1)
+  ).at(0)
+  if (!row) throw new MediaError('Visual Bible version not found.')
+  if (row.status !== 'DRAFT') {
+    throw new MediaError(
+      'References can only be changed while the Visual Bible version is a draft.',
+    )
+  }
+  return row
+}
+
 export async function bindVisualBibleReference(
   actorId: number,
   ctx: RequestContext,
@@ -215,16 +256,13 @@ export async function bindVisualBibleReference(
   mediaAssetVersionId: number,
 ): Promise<void> {
   await requirePermission(actorId, 'media.manage')
-  const version = await loadVersionContext(versionId)
-  if (version.status !== 'DRAFT') {
-    throw new MediaError(
-      'References can only be bound while the Visual Bible version is a draft.',
-    )
-  }
+  const outer = await loadVersionContext(versionId)
 
+  // Eligibility is proved before the lock is taken: it reads storage and
+  // hashes bytes, which must not happen while holding a row lock.
   const eligibility = await isVisualBibleReferenceEligible({
     mediaAssetVersionId,
-    sacredHouseId: version.sacredHouseId,
+    sacredHouseId: outer.sacredHouseId,
     // Nothing is frozen yet; this call establishes what will be.
     boundFileSha256: null,
   })
@@ -243,20 +281,31 @@ export async function bindVisualBibleReference(
   ).at(0)
   if (!media) throw new MediaError('Media version not found.')
 
-  await getDb()
-    .delete(visualBibleReferenceMedia)
-    .where(
-      and(
-        eq(visualBibleReferenceMedia.visualBibleVersionId, versionId),
-        eq(visualBibleReferenceMedia.role, role),
-      ),
-    )
-  await getDb().insert(visualBibleReferenceMedia).values({
-    visualBibleVersionId: versionId,
-    mediaAssetVersionId,
-    role,
-    mediaFileSha256: media.fileSha256,
-    boundBy: actorId,
+  await getDb().transaction(async (tx) => {
+    await lockBible(tx, outer.visualBibleId)
+    const version = await requireDraftUnderLock(tx, versionId)
+    // A TEXT_ONLY version governs by written rules alone; binding
+    // imagery to it would make its declared mode a lie.
+    if (version.referenceMode !== 'IMAGE_REFERENCE_REQUIRED') {
+      throw new MediaError(
+        'This Visual Bible version is TEXT_ONLY; switch its reference mode before binding imagery.',
+      )
+    }
+    await tx
+      .delete(visualBibleReferenceMedia)
+      .where(
+        and(
+          eq(visualBibleReferenceMedia.visualBibleVersionId, versionId),
+          eq(visualBibleReferenceMedia.role, role),
+        ),
+      )
+    await tx.insert(visualBibleReferenceMedia).values({
+      visualBibleVersionId: versionId,
+      mediaAssetVersionId,
+      role,
+      mediaFileSha256: media.fileSha256,
+      boundBy: actorId,
+    })
   })
 
   await recordAuditEvent({
@@ -278,20 +327,19 @@ export async function unbindVisualBibleReference(
   role: VisualBibleReferenceRole,
 ): Promise<void> {
   await requirePermission(actorId, 'media.manage')
-  const version = await loadVersionContext(versionId)
-  if (version.status !== 'DRAFT') {
-    throw new MediaError(
-      'References can only be unbound while the Visual Bible version is a draft.',
-    )
-  }
-  await getDb()
-    .delete(visualBibleReferenceMedia)
-    .where(
-      and(
-        eq(visualBibleReferenceMedia.visualBibleVersionId, versionId),
-        eq(visualBibleReferenceMedia.role, role),
-      ),
-    )
+  const outer = await loadVersionContext(versionId)
+  await getDb().transaction(async (tx) => {
+    await lockBible(tx, outer.visualBibleId)
+    await requireDraftUnderLock(tx, versionId)
+    await tx
+      .delete(visualBibleReferenceMedia)
+      .where(
+        and(
+          eq(visualBibleReferenceMedia.visualBibleVersionId, versionId),
+          eq(visualBibleReferenceMedia.role, role),
+        ),
+      )
+  })
   await recordAuditEvent({
     actorUserId: actorId,
     action: 'visual_bible.reference_unbound',
@@ -314,11 +362,76 @@ export async function unbindVisualBibleReference(
  * TEXT_ONLY versions still validate whatever they have bound: a bound
  * reference is an approval statement even when it is not mandatory.
  */
+/**
+ * Changes a DRAFT version's reference mode.
+ *
+ * The ONLY production path for this value — there is deliberately no
+ * direct-SQL alternative. Permission-checked, audited, DRAFT-only, and
+ * decided inside the same Bible lock the lifecycle transitions use.
+ *
+ * Switching to TEXT_ONLY while bindings remain is refused rather than
+ * silently discarding approved imagery: unbinding is an explicit
+ * decision a person makes, not a side effect of changing a dropdown.
+ */
+export async function setVisualBibleReferenceMode(
+  actorId: number,
+  ctx: RequestContext,
+  versionId: number,
+  referenceMode: VisualBibleReferenceMode,
+): Promise<void> {
+  await requirePermission(actorId, 'media.manage')
+  const outer = await loadVersionContext(versionId)
+
+  await getDb().transaction(async (tx) => {
+    await lockBible(tx, outer.visualBibleId)
+    await requireDraftUnderLock(tx, versionId)
+    if (referenceMode === 'TEXT_ONLY') {
+      const bound = await tx
+        .select({ role: visualBibleReferenceMedia.role })
+        .from(visualBibleReferenceMedia)
+        .where(eq(visualBibleReferenceMedia.visualBibleVersionId, versionId))
+      if (bound.length > 0) {
+        throw new MediaError(
+          `Unbind the ${bound.length} existing reference(s) before switching this version to TEXT_ONLY.`,
+        )
+      }
+    }
+    await tx
+      .update(visualBibleVersions)
+      .set({ referenceMode })
+      .where(
+        and(
+          eq(visualBibleVersions.id, versionId),
+          // CAS: the row must STILL be DRAFT at write time.
+          eq(visualBibleVersions.status, 'DRAFT'),
+        ),
+      )
+  })
+
+  await recordAuditEvent({
+    actorUserId: actorId,
+    action: 'visual_bible.reference_mode_set',
+    entityType: 'visual_bible_version',
+    entityId: String(versionId),
+    metadata: { referenceMode },
+    ipAddress: ctx.ipAddress,
+    userAgent: ctx.userAgent,
+  })
+}
+
 export async function assertReferencePackUsable(
   versionId: number,
 ): Promise<void> {
   const version = await loadVersionContext(versionId)
   const bound = await listVisualBibleReferences(versionId)
+
+  if (version.referenceMode === 'TEXT_ONLY' && bound.length > 0) {
+    // A TEXT_ONLY version that carries imagery is incoherent: its hash
+    // would cover references its declared mode says do not exist.
+    throw new MediaError(
+      'A TEXT_ONLY Visual Bible version cannot carry reference bindings.',
+    )
+  }
 
   if (version.referenceMode === 'IMAGE_REFERENCE_REQUIRED') {
     const present = new Set(bound.map((reference) => reference.role))

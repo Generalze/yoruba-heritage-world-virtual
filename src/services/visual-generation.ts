@@ -349,18 +349,47 @@ export async function compileVisualGenerationRequest(
   // reference policy are distinct authorities and BOTH must pass.
   let visualReference: VisualGenerationRequest['visualReference'] = null
   if (intent.visualReference) {
+    const reference = intent.visualReference
+
+    // (a) The manifest's own two halves must agree. A task claiming one
+    // shot family while carrying another family's reference is
+    // internally inconsistent and is never resolved in either
+    // direction.
+    if (intent.shotFamily !== reference.role) {
+      return { status: 'FAILED', reasonCode: 'visual_reference_role_mismatch' }
+    }
+
+    // (b) The CURRENT published Visual Bible must still bind exactly
+    // this role to exactly this media version and exactly these bytes.
+    // General media eligibility is not enough: it would happily approve
+    // an image that is perfectly valid but is no longer the one the
+    // approved Bible names for this role.
+    const authoritative = bible.references.find(
+      (candidate) => candidate.role === reference.role,
+    )
+    if (!authoritative) {
+      return { status: 'FAILED', reasonCode: 'visual_reference_role_absent' }
+    }
+    if (
+      authoritative.mediaAssetVersionId !== reference.mediaAssetVersionId ||
+      authoritative.mediaFileSha256 !== reference.mediaFileSha256
+    ) {
+      return { status: 'FAILED', reasonCode: 'visual_reference_superseded' }
+    }
+
+    // (c) And that binding must still be usable right now.
     const eligibility = await isVisualBibleReferenceEligible({
-      mediaAssetVersionId: intent.visualReference.mediaAssetVersionId,
+      mediaAssetVersionId: reference.mediaAssetVersionId,
       sacredHouseId: intent.sacredHouseId,
-      boundFileSha256: intent.visualReference.mediaFileSha256,
+      boundFileSha256: reference.mediaFileSha256,
     })
     if (!eligibility.eligible) {
       return { status: 'FAILED', reasonCode: 'visual_reference_ineligible' }
     }
     visualReference = {
-      role: intent.visualReference.role,
-      mediaAssetVersionId: intent.visualReference.mediaAssetVersionId,
-      mediaFileSha256: intent.visualReference.mediaFileSha256,
+      role: reference.role,
+      mediaAssetVersionId: reference.mediaAssetVersionId,
+      mediaFileSha256: reference.mediaFileSha256,
     }
   } else if (intent.referenceRequirement === 'REQUIRED') {
     // Authored as REQUIRED but nothing resolved: fail closed rather

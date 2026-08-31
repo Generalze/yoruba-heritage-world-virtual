@@ -19,6 +19,8 @@ import {
   RIGHTS_STATUSES,
   spiritualContentVersions,
 } from './guidance'
+import { SHOT_ROLES } from './shot-roles'
+import type { ShotRole } from './shot-roles'
 import { users } from './users'
 
 /**
@@ -72,16 +74,11 @@ export type MediaExternalAiPolicy = (typeof MEDIA_EXTERNAL_AI_POLICIES)[number]
  * replaced image is a new media version and therefore a new Visual
  * Bible version.
  */
-export const VISUAL_BIBLE_REFERENCE_ROLES = [
-  'WIDE_MASTER',
-  'MEDIUM_PRAYER',
-  'DIRECT_CAMERA',
-  'SIDE_PRAYER',
-  'WORKING_DETAIL',
-  'ENVIRONMENT_INSERT',
-] as const
-export type VisualBibleReferenceRole =
-  (typeof VISUAL_BIBLE_REFERENCE_ROLES)[number]
+/** The shared canonical vocabulary — see ./shot-roles. Re-exported
+ * under the Visual Bible's own name so call sites read naturally, but
+ * it is the SAME list the prayer template authors against. */
+export const VISUAL_BIBLE_REFERENCE_ROLES = SHOT_ROLES
+export type VisualBibleReferenceRole = ShotRole
 
 /**
  * Whether a Visual Bible version governs generation by written rules
@@ -485,7 +482,10 @@ export const visualBibleReferenceMedia = mysqlTable(
       columns: [table.visualBibleVersionId],
       foreignColumns: [visualBibleVersions.id],
       name: 'vbrm_version_fk',
-    }).onDelete('cascade'),
+      // RESTRICT, not cascade: an approved reference must not vanish
+      // because a version row was deleted out from under it. Removing a
+      // binding is an explicit DRAFT-only unbind.
+    }).onDelete('restrict'),
     // RESTRICT: an approved reference cannot be deleted out from under
     // the version that was approved with it.
     foreignKey({

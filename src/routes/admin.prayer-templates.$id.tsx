@@ -6,6 +6,8 @@ import {
   CONTENT_SCOPE_TYPES,
   GUIDANCE_LANGUAGES,
   SACRED_RUNTIME_CONTENT_TYPES,
+  SLOT_REFERENCE_REQUIREMENTS,
+  SLOT_SHOT_FAMILIES,
   SLOT_KINDS,
   SLOT_SELECTOR_MODES,
   VARIANT_KINDS,
@@ -52,6 +54,9 @@ interface SlotForm {
   themeCode: string
   variantKind: string
   silenceDurationSeconds: string
+  /** Human-authored camera decision. CONTENT only; SILENCE keeps ''. */
+  shotFamily: string
+  referenceRequirement: string
   allowedScopes: Array<string>
   pinnedContentVersionIds: string
 }
@@ -67,6 +72,11 @@ const EMPTY_SLOT: SlotForm = {
   themeCode: '',
   variantKind: '',
   silenceDurationSeconds: '',
+  // Deliberately EMPTY, never 'OPTIONAL': the author must choose. A
+  // default here would be the platform quietly making a camera and
+  // reference decision on leadership's behalf.
+  shotFamily: '',
+  referenceRequirement: '',
   allowedScopes: ['PLATFORM'],
   pinnedContentVersionIds: '',
 }
@@ -203,9 +213,8 @@ function SlotTable({ definition }: { definition: DefinitionRow }) {
             <th className="border-b border-line px-2 py-1">Type</th>
             <th className="border-b border-line px-2 py-1">Min/Max</th>
             <th className="border-b border-line px-2 py-1">Scopes</th>
-            <th className="border-b border-line px-2 py-1">
-              Pins / Silence
-            </th>
+            <th className="border-b border-line px-2 py-1">Shot / reference</th>
+            <th className="border-b border-line px-2 py-1">Pins / Silence</th>
           </tr>
         </thead>
         <tbody>
@@ -214,9 +223,7 @@ function SlotTable({ definition }: { definition: DefinitionRow }) {
               <td className="border-b border-line px-2 py-1">
                 {slot.position}
               </td>
-              <td className="border-b border-line px-2 py-1">
-                {slot.slotKey}
-              </td>
+              <td className="border-b border-line px-2 py-1">{slot.slotKey}</td>
               <td className="border-b border-line px-2 py-1">
                 {slot.slotKind}
               </td>
@@ -233,6 +240,21 @@ function SlotTable({ definition }: { definition: DefinitionRow }) {
               </td>
               <td className="border-b border-line px-2 py-1">
                 {slot.allowedScopes.join(', ') || '—'}
+              </td>
+              <td className="border-b border-line px-2 py-1">
+                {slot.slotKind === 'SILENCE' ? (
+                  '—'
+                ) : slot.shotFamily && slot.referenceRequirement ? (
+                  <>
+                    {slot.shotFamily.replaceAll('_', ' ')}
+                    <span className="text-ink-soft">
+                      {' · '}
+                      {slot.referenceRequirement}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-alert">not authored</span>
+                )}
               </td>
               <td className="border-b border-line px-2 py-1">
                 {slot.slotKind === 'SILENCE'
@@ -313,6 +335,8 @@ function TemplateLanguageSection({
             ? String(slot.silenceDurationSeconds)
             : '',
         allowedScopes: slot.allowedScopes,
+        shotFamily: slot.shotFamily ?? '',
+        referenceRequirement: slot.referenceRequirement ?? '',
         pinnedContentVersionIds: slot.pins
           .map((pin) => pin.contentVersionId)
           .join(','),
@@ -352,6 +376,17 @@ function TemplateLanguageSection({
       variantKind:
         !silence && slot.selectorMode === 'ELIGIBLE_FILTER' && slot.variantKind
           ? (slot.variantKind as (typeof VARIANT_KINDS)[number])
+          : null,
+      // SILENCE carries neither; CONTENT sends exactly what the author
+      // chose, and null if they chose nothing — so the service refuses
+      // rather than the UI inventing a default.
+      shotFamily:
+        !silence && slot.shotFamily
+          ? (slot.shotFamily as (typeof SLOT_SHOT_FAMILIES)[number])
+          : null,
+      referenceRequirement:
+        !silence && slot.referenceRequirement
+          ? (slot.referenceRequirement as (typeof SLOT_REFERENCE_REQUIREMENTS)[number])
           : null,
       silenceDurationSeconds: silence
         ? Number(slot.silenceDurationSeconds) || 0
@@ -598,6 +633,49 @@ function TemplateLanguageSection({
                     ))}
                   </select>
                 </label>
+                {/* Camera authority: CONTENT only, and never defaulted.
+                    A SILENCE segment holds the previous visual and can
+                    never generate, so it shows neither control. */}
+                {slot.slotKind === 'CONTENT' ? (
+                  <>
+                    <label className="block text-xs text-ink-soft">
+                      Shot family
+                      <select
+                        value={slot.shotFamily}
+                        onChange={(event) =>
+                          updateSlot(index, { shotFamily: event.target.value })
+                        }
+                        className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
+                      >
+                        <option value="">Choose…</option>
+                        {SLOT_SHOT_FAMILIES.map((family) => (
+                          <option key={family} value={family}>
+                            {family.replaceAll('_', ' ')}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block text-xs text-ink-soft">
+                      Reference
+                      <select
+                        value={slot.referenceRequirement}
+                        onChange={(event) =>
+                          updateSlot(index, {
+                            referenceRequirement: event.target.value,
+                          })
+                        }
+                        className="mt-1 w-full rounded-md border border-line-strong bg-surface-raised px-2 py-1.5 text-sm text-ink"
+                      >
+                        <option value="">Choose…</option>
+                        {SLOT_REFERENCE_REQUIREMENTS.map((requirement) => (
+                          <option key={requirement} value={requirement}>
+                            {requirement}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : null}
                 {slot.slotKind === 'SILENCE' ? (
                   <NumField
                     small
