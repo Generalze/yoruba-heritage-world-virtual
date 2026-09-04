@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { eq, inArray } from 'drizzle-orm'
@@ -179,8 +179,7 @@ interface HouseFixture {
 let housePack: HouseFixture
 let otherHouse: HouseFixture
 let emptyHouse: HouseFixture
-let packTemplateCode: string
-let otherTemplateCode: string
+let sharedTemplateCode: string
 const serviceCursor = new Map<number, number>()
 
 const today = currentLocalDate(HOUSE_TZ, Date.now())
@@ -481,24 +480,26 @@ const SHARED_SLOTS: Array<SlotInput> = [
 ]
 
 /**
- * The SAME authored structure, published per House.
+ * ONE PLATFORM template, for every House there will ever be.
  *
- * It is deliberately NOT one PLATFORM row. A PLATFORM template whose
- * slots admit only SACRED_HOUSE content cannot be published at all —
- * publication validates against a PLATFORM-only candidate pool, so such
- * a template always reads as unsatisfiable. That gap is pinned by its
- * own test below rather than described in a comment.
+ * Its CONTENT slots admit only SACRED_HOUSE content, which makes every
+ * one of them a CONTEXT-DEFERRED selector: publication proves the
+ * selector contract, and which House satisfies it is an appointment
+ * fact settled at resolution time. Structure is authored once; a House
+ * that receives approved content later needs no new template and no new
+ * version.
  *
- * What is shared here is the DEFINITION: every House gets byte-identical
- * slot structure, order, silence and authored camera decisions, which is
- * what the arrangement actually needs. Only the row differs.
+ * priority 100 puts it first in the PLATFORM attempt order, so when it
+ * CAN resolve it is the template that does — which keeps the assertions
+ * below deterministic in a development database holding other suites'
+ * leftovers.
  */
-async function makeHouseTemplate(houseId: number): Promise<string> {
-  const code = nextCode('TPL')
+async function makeSharedTemplate(): Promise<string> {
+  const code = nextCode('SHARED')
   const template = await createPrayerTemplate(adminId, ctx, {
     code,
-    scopeType: 'SACRED_HOUSE',
-    sacredHouseId: houseId,
+    scopeType: 'PLATFORM',
+    sacredHouseId: null,
     serviceId: null,
   })
   createdTemplateIds.push(template.id)
@@ -702,8 +703,7 @@ beforeAll(async () => {
   housePack = await makeHouse({ withContent: true, serviceCount: 6 })
   otherHouse = await makeHouse({ withContent: true, serviceCount: 2 })
   emptyHouse = await makeHouse({ withContent: false, serviceCount: 2 })
-  packTemplateCode = await makeHouseTemplate(housePack.houseId)
-  otherTemplateCode = await makeHouseTemplate(otherHouse.houseId)
+  sharedTemplateCode = await makeSharedTemplate()
 }, 600_000)
 
 afterAll(async () => {
@@ -772,7 +772,7 @@ afterAll(async () => {
 
 // --- 1. One shared template, resolving per House ----------------------------
 
-describe('one authored structure, resolving per House', () => {
+describe('one shared PLATFORM template serves every House', () => {
   it('resolves a House against that House’s own approved content', async () => {
     const resolved = await resolveApprovedPrayerSession({
       serviceId: housePack.serviceIds[0],
@@ -782,8 +782,8 @@ describe('one authored structure, resolving per House', () => {
     expect(resolved.status).toBe('RESOLVED')
     if (resolved.status !== 'RESOLVED') return
 
-    expect(resolved.templateCode).toBe(packTemplateCode)
-    expect(resolved.templateScopeType).toBe('SACRED_HOUSE')
+    expect(resolved.templateCode).toBe(sharedTemplateCode)
+    expect(resolved.templateScopeType).toBe('PLATFORM')
     expect(resolved.slots).toHaveLength(8)
 
     // Every selection is this House's, by scope AND by identity.
@@ -837,13 +837,12 @@ describe('one authored structure, resolving per House', () => {
     expect(resolved.status).toBe('RESOLVED')
     if (resolved.status !== 'RESOLVED') return
 
-    // A different row, the SAME authored structure.
-    expect(resolved.templateCode).toBe(otherTemplateCode)
+    // THE SAME ROW. Not a copy, not a sibling — one published
+    // definition serving two Houses from two different content pools.
+    expect(resolved.templateCode).toBe(sharedTemplateCode)
+    expect(resolved.templateScopeType).toBe('PLATFORM')
     expect(resolved.slots.map((slot) => slot.slotKey)).toEqual(
       SHARED_SLOTS.map((slot) => slot.slotKey),
-    )
-    expect(resolved.slots.map((slot) => slot.shotFamily)).toEqual(
-      SHARED_SLOTS.map((slot) => slot.shotFamily),
     )
 
     const own = new Set(otherHouse.contentVersionIds)
@@ -870,8 +869,7 @@ describe('a House with nothing approved borrows nothing', () => {
     // The shared template CANNOT be the answer: its slots admit only
     // SACRED_HOUSE content and this House has none.
     if (resolved.status === 'RESOLVED') {
-      expect(resolved.templateCode).not.toBe(packTemplateCode)
-      expect(resolved.templateCode).not.toBe(otherTemplateCode)
+      expect(resolved.templateCode).not.toBe(sharedTemplateCode)
       // Whatever a leftover template in the development database might
       // resolve, it can never be another House's material: any
       // SACRED_HOUSE-scoped selection here would BE a borrowed one,
@@ -1073,58 +1071,186 @@ describe('the static path reaches no generation provider', () => {
   }, 600_000)
 })
 
-// --- 8. The gap that blocks ONE shared PLATFORM template --------------------
 
-describe('a PLATFORM template cannot yet own House-scoped slots', () => {
-  it('refuses publication because it validates against a PLATFORM-only pool', async () => {
-    // THE FINDING, pinned so it cannot be mistaken for a fixture
-    // mistake later.
-    //
-    // The arrangement wants ONE PLATFORM template whose slots admit
-    // only SACRED_HOUSE content, so structure is authored once and
-    // content fills in per House. The schema expresses that. Publication
-    // refuses it: validateTemplateForPublication() derives its candidate
-    // context from the TEMPLATE's own scope, and a PLATFORM template
-    // yields an empty context — which the eligibility query reads as
-    // "PLATFORM rows only". House-scoped content is therefore invisible
-    // to the check, and every slot looks unsatisfiable however much
-    // approved content exists.
-    //
-    // The runtime resolver asks a different and correct question: it
-    // derives the context from the APPOINTMENT. So the template would
-    // resolve perfectly at runtime; it simply cannot be published to get
-    // there.
+// --- 8. Context-deferred selector semantics ---------------------------------
+
+describe('publication proves the selector contract, not a House', () => {
+  /**
+   * The shared template above already published with SACRED_HOUSE-only
+   * slots and zero PLATFORM candidates — that IS the deferral working.
+   * These pin the boundaries around it.
+   */
+  async function publishAttempt(
+    slots: Array<SlotInput>,
+    scope: {
+      scopeType: 'PLATFORM' | 'SACRED_HOUSE'
+      sacredHouseId: number | null
+    },
+  ): Promise<Error | null> {
     const template = await createPrayerTemplate(adminId, ctx, {
-      code: nextCode('PLATGAP'),
-      scopeType: 'PLATFORM',
-      sacredHouseId: null,
+      code: nextCode('SEM'),
+      scopeType: scope.scopeType,
+      sacredHouseId: scope.sacredHouseId,
       serviceId: null,
     })
     createdTemplateIds.push(template.id)
     const version = await createTemplateVersion(adminId, ctx, template.id, {
       language: 'en',
-      priority: 100,
+      priority: 1,
       selectionWeight: 1,
       targetMinSeconds: 90,
       targetMaxSeconds: 120,
-      slots: SHARED_SLOTS,
+      slots,
       forbiddenPairs: [],
     })
     await submitTemplateVersion(adminId, ctx, version.id)
     await approveTemplateVersion(adminId, ctx, version.id)
-
-    let error: Error | null = null
     try {
       await publishTemplateVersion(adminId, ctx, version.id)
+      return null
     } catch (caught) {
-      error = caught as Error
+      return caught as Error
     }
+  }
+
+  it('publishes a PLATFORM template whose slots defer to a House', async () => {
+    // No House content is visible from a PLATFORM context — that is the
+    // whole point, and it must no longer read as unsatisfiable.
+    const error = await publishAttempt(SHARED_SLOTS, {
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+    })
+    expect(error).toBeNull()
+  }, 300_000)
+
+  it('still counts candidates when the context CAN see the scope', async () => {
+    // A slot admitting PLATFORM on a PLATFORM template is not deferred:
+    // the context can observe that scope, so the old satisfiability
+    // check applies unchanged. A selector never widens its own reach by
+    // being harder to check.
+    const error = await publishAttempt(
+      [
+        {
+          ...contentSlot('OPENING', 1, 'OPENING', 'WIDE_MASTER'),
+          allowedScopes: ['SACRED_HOUSE', 'PLATFORM'],
+        },
+      ],
+      { scopeType: 'PLATFORM', sacredHouseId: null },
+    )
     expect(error).not.toBeNull()
     expect(error?.message ?? '').toContain('currently eligible candidates')
-
-    // And the reason really is the scope pool, not the content: the
-    // House-scoped blocks these slots want are approved and eligible
-    // right now — the same ones the per-House templates above resolve.
-    expect(housePack.contentVersionIds).toHaveLength(6)
   }, 300_000)
+
+  it('leaves House-scoped templates counting exactly as before', async () => {
+    // A SACRED_HOUSE template CAN see House content, so nothing defers.
+    // It publishes for the House that has content...
+    const ok = await publishAttempt(SHARED_SLOTS, {
+      scopeType: 'SACRED_HOUSE',
+      sacredHouseId: housePack.houseId,
+    })
+    expect(ok).toBeNull()
+
+    // ...and is still refused for the House that has none.
+    const refused = await publishAttempt(SHARED_SLOTS, {
+      scopeType: 'SACRED_HOUSE',
+      sacredHouseId: emptyHouse.houseId,
+    })
+    expect(refused).not.toBeNull()
+    expect(refused?.message ?? '').toContain('currently eligible candidates')
+  }, 300_000)
+
+  it('leaves PINNED_VERSIONS untouched', async () => {
+    // Pins name exact versions, so there is nothing to defer: whether a
+    // named version is eligible is knowable without a House.
+    const pinned: SlotInput = {
+      slotKey: 'PINNED_OPENING',
+      position: 1,
+      slotKind: 'CONTENT',
+      minSelect: 1,
+      maxSelect: 1,
+      contentType: null,
+      selectorMode: 'PINNED_VERSIONS',
+      themeCode: null,
+      variantKind: null,
+      silenceDurationSeconds: null,
+      shotFamily: 'WIDE_MASTER',
+      referenceRequirement: 'REQUIRED',
+      allowedScopes: [],
+      pinnedContentVersionIds: [housePack.contentVersionIds[0]],
+    }
+    const error = await publishAttempt([pinned], {
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+    })
+    expect(error).toBeNull()
+  }, 300_000)
+
+  it('relaxes satisfiability, never authorship', async () => {
+    // A slot with no allowed scopes is not deferred — it is incomplete,
+    // and is refused before it can ever reach publication.
+    let authoringError: Error | null = null
+    const template = await createPrayerTemplate(adminId, ctx, {
+      code: nextCode('SEMBAD'),
+      scopeType: 'PLATFORM',
+      sacredHouseId: null,
+      serviceId: null,
+    })
+    createdTemplateIds.push(template.id)
+    try {
+      await createTemplateVersion(adminId, ctx, template.id, {
+        language: 'en',
+        priority: 1,
+        selectionWeight: 1,
+        targetMinSeconds: 90,
+        targetMaxSeconds: 120,
+        slots: [
+          {
+            ...contentSlot('OPENING', 1, 'OPENING', 'WIDE_MASTER'),
+            allowedScopes: [],
+          },
+        ],
+        forbiddenPairs: [],
+      })
+    } catch (caught) {
+      authoringError = caught as Error
+    }
+    expect(authoringError).not.toBeNull()
+    expect(authoringError?.message ?? '').toContain('explicit allowed scopes')
+  }, 300_000)
+})
+
+// --- 9. Shot family is Visual Bible authority, not library authority --------
+
+describe('shotFamily governs references, and library media is agnostic', () => {
+  it('is never consulted by static library-media selection', () => {
+    const recipes = readFileSync(
+      join(process.cwd(), 'src/services/video-recipes.ts'),
+      'utf8',
+    )
+    // The library fallback filters on asset kind, content type, theme
+    // and scope. shotFamily appearing there would be a SECOND role
+    // authority competing with the Visual Bible's, so the block that
+    // picks a library bed must not mention it.
+    const start = recipes.indexOf('// B. Library IMAGE/VIDEO fallback')
+    expect(start).toBeGreaterThan(-1)
+    const end = recipes.indexOf('visualMode = ', start)
+    expect(end).toBeGreaterThan(start)
+    expect(recipes.slice(start, end)).not.toContain('shotFamily')
+  })
+
+  it('IS the key the Visual Bible reference path matches on', () => {
+    const storyboards = readFileSync(
+      join(process.cwd(), 'src/services/generation-storyboards.ts'),
+      'utf8',
+    )
+    const visual = readFileSync(
+      join(process.cwd(), 'src/services/visual-generation.ts'),
+      'utf8',
+    )
+    // ONE authority for the six roles: a slot's shot family selects the
+    // Visual Bible reference carrying that exact role. Both the compile
+    // stage and the submission gate match on it.
+    expect(storyboards).toContain('reference.role === segment.shotFamily')
+    expect(visual).toContain('intent.shotFamily !== reference.role')
+  })
 })

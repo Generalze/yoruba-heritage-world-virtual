@@ -1187,6 +1187,50 @@ export function computeDefinitionSha256(
 
 // --- Publication ------------------------------------------------------------
 
+/**
+ * Which content scopes a given publication context can actually see.
+ *
+ * The eligibility query mirrors Step 8: PLATFORM rows always, and
+ * SERVICE / SACRED_HOUSE rows only when the matching id is supplied. So
+ * a context without a House id cannot observe House-scoped content —
+ * not because none exists, but because it did not ask about a House.
+ */
+function contextSuppliedScopes(context: {
+  serviceId?: number
+  sacredHouseId?: number
+}): Set<ContentScopeType> {
+  const scopes = new Set<ContentScopeType>(['PLATFORM'])
+  if (context.serviceId != null) scopes.add('SERVICE')
+  if (context.sacredHouseId != null) scopes.add('SACRED_HOUSE')
+  return scopes
+}
+
+/**
+ * Is this selector CONTEXT-DEFERRED — authored to be satisfied by a
+ * scope the template's own context cannot supply?
+ *
+ * A PLATFORM template whose slot admits only SACRED_HOUSE content is
+ * the case that matters: it is not unsatisfiable, it is deliberately
+ * deferred. Which House satisfies it is an APPOINTMENT fact, and asking
+ * at publication time can only ever produce the wrong answer — "no
+ * House content exists in a PLATFORM-only view", which is true and
+ * irrelevant.
+ *
+ * Deferral is decided ENTIRELY by the authored allowed scopes. A slot
+ * that also admits a scope the context can supply is not deferred, and
+ * is counted exactly as before: a selector can never widen its own
+ * reach by being harder to check.
+ */
+function isContextDeferredSelector(
+  slot: { allowedScopes: Array<ContentScopeType> },
+  supplied: Set<ContentScopeType>,
+): boolean {
+  return (
+    slot.allowedScopes.length > 0 &&
+    slot.allowedScopes.every((scope) => !supplied.has(scope))
+  )
+}
+
 /** Publication-time eligibility context: scoped candidate counting
  * uses the template's own scope references. */
 async function templateCandidateContext(template: {
@@ -1250,6 +1294,7 @@ export async function validateTemplateForPublication(
     throw new PrayerTemplateError('Selection weight must be 1–100.')
   }
   const context = await templateCandidateContext(template)
+  const suppliedScopes = contextSuppliedScopes(context)
   const eligible = await listAllEligibleSacredRuntimeContent({
     language: version.language,
     ...context,
@@ -1282,6 +1327,16 @@ export async function validateTemplateForPublication(
     if (slot.minSelect > slot.maxSelect) {
       throw new PrayerTemplateError(
         `Slot ${slot.slotKey}: min_select exceeds max_select.`,
+      )
+    }
+    // Shot authority is re-proved HERE, from the stored rows, not only
+    // at authoring time. Publication is the moment the definition
+    // becomes citable by a recipe, so it is the moment the camera
+    // decision must be present — a deferred selector is checked less
+    // for satisfiability, never less for authorship.
+    if (slot.shotFamily == null || slot.referenceRequirement == null) {
+      throw new PrayerTemplateError(
+        `Slot ${slot.slotKey}: CONTENT requires authored shot authority.`,
       )
     }
     if (slot.selectorMode === 'PINNED_VERSIONS') {
@@ -1345,6 +1400,33 @@ export async function validateTemplateForPublication(
         )
       }
     } else {
+      // The selector CONTRACT, proved from the stored rows whether or
+      // not anything can satisfy it yet.
+      if (slot.contentType == null) {
+        throw new PrayerTemplateError(
+          `Slot ${slot.slotKey}: ELIGIBLE_FILTER requires a sacred content type.`,
+        )
+      }
+      if (slot.allowedScopes.length === 0) {
+        throw new PrayerTemplateError(
+          `Slot ${slot.slotKey}: ELIGIBLE_FILTER requires explicit allowed scopes.`,
+        )
+      }
+      if (slot.pins.length > 0) {
+        throw new PrayerTemplateError(
+          `Slot ${slot.slotKey}: filter slots cannot also pin versions.`,
+        )
+      }
+      if (isContextDeferredSelector(slot, suppliedScopes)) {
+        // SATISFIABILITY IS DEFERRED, NOT WAIVED. Nothing in this
+        // template's own context can observe the scope this slot was
+        // authored for, so counting candidates here would answer a
+        // question nobody asked. The answer comes from the appointment:
+        // resolution constrains every SACRED_HOUSE lookup to
+        // appointment.sacredHouseId, a House with nothing approved
+        // resolves nothing, and nothing at all is what it then gets.
+        continue
+      }
       const matching = eligible.filter(
         (candidate) =>
           candidate.contentType === slot.contentType &&
