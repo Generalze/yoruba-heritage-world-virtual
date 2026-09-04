@@ -3505,3 +3505,117 @@ describe('red-team: the synchronous COMPLETED path through the JOB LOOP (DB-driv
     expect(submits).toBe(1)
   }, 240_000)
 })
+
+describe('red-team: nothing personal can become sacred speech', () => {
+  /**
+   * THE BOUNDARY THIS PINS, and why it is worth a test rather than a
+   * comment.
+   *
+   * Phase One personalization is governed SELECTION and appointment-
+   * specific COMPOSITION — which approved blocks, in which order, over
+   * which approved imagery, seeded from the appointment. It is not, and
+   * must not silently become, textual substitution into approved sacred
+   * wording.
+   *
+   * That distinction is currently kept by ABSENCE: there is no merge
+   * field, no placeholder syntax, no interpolation step, and no field on
+   * the provider contract a recipient's name could travel through.
+   * Absence is fragile — a single well-meaning `body.replace(...)` would
+   * end it without any governance decision being taken. So the absence
+   * is asserted.
+   *
+   * Spoken recipient-name address may well be wanted later. When it is,
+   * it should arrive as an approved capability with its own authority
+   * and its own evidence — and this test should fail loudly and be
+   * changed deliberately, which is exactly the point.
+   */
+  function sourceOf(relativePath: string): string {
+    return readFileSync(join(process.cwd(), relativePath), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  }
+
+  const SPEECH_PATH = [
+    'src/services/audio-generation.ts',
+    'src/providers/tts/types.ts',
+    'src/providers/tts/naijalingo.ts',
+    'src/providers/tts/mock.ts',
+    'src/providers/tts/disabled.ts',
+  ]
+
+  it('carries no personal appointment field anywhere near synthesis', () => {
+    for (const file of SPEECH_PATH) {
+      const source = sourceOf(file)
+      for (const forbidden of [
+        'preferredName',
+        'recipientName',
+        'fullName',
+        'privateRequestNote',
+        'dateOfBirth',
+        'phone',
+      ]) {
+        expect(`${file}:${forbidden}`).toBe(
+          source.includes(forbidden) ? `${file}:LEAKED` : `${file}:${forbidden}`,
+        )
+      }
+    }
+  })
+
+  it('has no substitution mechanism the approved body passes through', () => {
+    for (const file of SPEECH_PATH) {
+      const source = sourceOf(file)
+      // Template-ish syntaxes a merge field would plausibly use.
+      expect(source).not.toContain('{{')
+      expect(source).not.toContain('%NAME%')
+      // And no rewriting of the body itself. The body is read, hashed
+      // and handed over; it is never edited.
+      expect(source).not.toMatch(/\bbody\s*\.\s*(replace|replaceAll)\b/)
+      expect(source).not.toMatch(/\bapprovedText\s*\.\s*(replace|replaceAll)\b/)
+      expect(source).not.toMatch(/approvedText\s*:\s*`/)
+    }
+  })
+
+  it('hands the provider the approved body itself, unmodified', () => {
+    const source = sourceOf('src/services/audio-generation.ts')
+    // The compiled request names the body directly — not a derived
+    // string, not a formatted one.
+    expect(source).toContain('approvedText: body')
+  })
+
+  it('offers the vendor no field a name or a voice sample could enter', () => {
+    const contract = sourceOf('src/providers/tts/types.ts')
+    const request = contract.slice(
+      contract.indexOf('export interface SpeechSynthesisRequest'),
+      contract.indexOf('export type SpeechSynthesisJobStatus'),
+    )
+    expect(request.length).toBeGreaterThan(0)
+    for (const forbidden of [
+      'speakerSample',
+      'referenceAudio',
+      'voiceSample',
+      'personalization',
+      'variables',
+      'context',
+    ]) {
+      expect(request).not.toContain(forbidden)
+    }
+    // The adapter's outbound body is a closed allowlist; nothing that
+    // is not one of these five fields can reach the vendor.
+    const adapter = sourceOf('src/providers/tts/naijalingo.ts')
+    expect(adapter).toContain('input')
+    expect(adapter).toContain('response_format')
+    expect(adapter).not.toContain('temperature')
+    expect(adapter).not.toContain('top_p')
+    expect(adapter).not.toContain('repetition_penalty')
+  })
+
+  it('never lets the preflight reach the synthesis endpoint', () => {
+    // The configuration probe must remain unable to spend: no speech
+    // endpoint, no provider submit call, no approved text.
+    const preflight = sourceOf('scripts/tts-preflight.ts')
+    expect(preflight).not.toContain('audio/speech')
+    expect(preflight).not.toContain('submitSpeech')
+    expect(preflight).not.toContain('approvedText')
+    expect(preflight).toContain('/models')
+  })
+})
