@@ -16,6 +16,8 @@ import {
   sacredHouseBookingSettings,
   sacredHouses,
   services,
+  prayerSessionTemplateVersions,
+  visualBibleVersions,
   spiritualContentItems,
   spiritualContentVersions,
   users,
@@ -1591,6 +1593,203 @@ describe('cross-domain item authority', () => {
       const metadata = JSON.stringify(row.metadataJson ?? {})
       expect(metadata).not.toContain('Integration-test prayer block')
       expect(metadata).not.toContain('synthetic')
+    }
+  })
+})
+
+describe('the V3 launch pack keeps its governed identity', () => {
+  /**
+   * The 24-block platform-authored launch pack, registered under client
+   * authority on 2026-09-04.
+   *
+   * These assertions run against production rows, so they return early
+   * on a database that has none — a fresh CI schema must not fail for
+   * lacking launch content. Where the rows DO exist they are asserted
+   * hard, because every property below was a deliberate governance
+   * decision rather than a default.
+   */
+  const REQUIRED = [
+    'OPENING',
+    'INVOCATION',
+    'CHANT',
+    'PRAYER',
+    'BLESSING',
+    'CLOSING',
+  ]
+  const HOUSES = [
+    { id: 1, code: 'ABULE_OSUN' },
+    { id: 2, code: 'ABULE_AJE' },
+    { id: 3, code: 'ABULE_OSANYIN_AJA' },
+    { id: 4, code: 'ILE_AWON_BABALAWO' },
+  ]
+
+  async function v3Rows() {
+    return getDb()
+      .select({
+        code: spiritualContentItems.code,
+        houseId: spiritualContentItems.sacredHouseId,
+        scopeType: spiritualContentItems.scopeType,
+        contentType: spiritualContentItems.contentType,
+        versionId: spiritualContentVersions.id,
+        language: spiritualContentVersions.language,
+        status: spiritualContentVersions.status,
+        body: spiritualContentVersions.body,
+        variantKind: sacredContentVersionProfiles.variantKind,
+        voicePolicy: sacredContentVersionProfiles.voicePolicy,
+        externalAiPolicy: sacredContentVersionProfiles.externalAiPolicy,
+        accessPolicy: sacredContentVersionProfiles.accessPolicy,
+        rightsStatus: sacredContentVersionProfiles.rightsStatus,
+        runtimeEnabled: sacredContentVersionProfiles.runtimeEnabled,
+        storageOk: sacredContentVersionProfiles.digitalStorageAuthorized,
+        provenanceType: sacredContentVersionProfiles.provenanceType,
+        note: sacredContentVersionProfiles.internalProvenanceNote,
+        contentSha256: sacredContentVersionProfiles.contentSha256,
+      })
+      .from(spiritualContentItems)
+      .innerJoin(
+        spiritualContentVersions,
+        eq(spiritualContentVersions.contentItemId, spiritualContentItems.id),
+      )
+      .innerJoin(
+        sacredContentVersionProfiles,
+        eq(
+          sacredContentVersionProfiles.contentVersionId,
+          spiritualContentVersions.id,
+        ),
+      )
+      .where(like(spiritualContentItems.code, 'V3\\_%'))
+  }
+
+  it('is 24 Yoruba production rows and 24 English companions', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    expect(rows).toHaveLength(48)
+    expect(rows.filter((r) => r.language === 'yo')).toHaveLength(24)
+    expect(rows.filter((r) => r.language === 'en')).toHaveLength(24)
+  })
+
+  it('speaks Yoruba and never English', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    for (const row of rows) {
+      if (row.language === 'yo') {
+        expect(row.voicePolicy).toBe('APPROVED_TTS_ALLOWED')
+        expect(row.variantKind).toBe('ORIGINAL')
+      } else {
+        // TEXT_ONLY is what makes English structurally unspeakable. A
+        // Yoruba template would not select it anyway, but the policy is
+        // the lock rather than the language filter.
+        expect(row.voicePolicy).toBe('TEXT_ONLY')
+        expect(row.variantKind).toBe('TRANSLATION')
+      }
+    }
+  })
+
+  it('claims platform authorship and never tradition', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    for (const row of rows) {
+      expect(row.provenanceType).toBe('ORIGINAL_AUTHORED')
+      // The value that WOULD misrepresent this material.
+      expect(row.provenanceType).not.toBe('TRADITIONAL_ORAL')
+      expect(row.note).toContain('PLATFORM_AUTHORED_LAUNCH_CONTENT')
+    }
+  })
+
+  it('carries METADATA_ONLY, which is not a speech permission', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    for (const row of rows) {
+      expect(row.externalAiPolicy).toBe('METADATA_ONLY')
+    }
+    // The distinction that matters: the speech executor never consults
+    // externalAiPolicy. voicePolicy is the sole authority over whether
+    // approved text may reach a speech vendor, so METADATA_ONLY must
+    // never be read as authorising or forbidding synthesis.
+    const audio = readFileSync(
+      join(process.cwd(), 'src/services/audio-generation.ts'),
+      'utf8',
+    )
+    expect(audio).not.toContain('externalAiPolicy')
+  })
+
+  it('stores the exact bytes it hashed, with no normalisation', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    for (const row of rows) {
+      const recomputed = createHash('sha256')
+        .update(row.body, 'utf8')
+        .digest('hex')
+      expect(row.contentSha256).toBe(recomputed)
+    }
+    // Yoruba orthography survives: dot-below letters plus COMBINING
+    // tone marks. Normalising to NFD would decompose the dots and
+    // change every hash above.
+    const yoruba = rows
+      .filter((r) => r.language === 'yo')
+      .map((r) => r.body)
+      .join('')
+    expect(yoruba).toContain('ọ̀')
+    expect(yoruba.normalize('NFC')).toBe(yoruba)
+    expect(yoruba).not.toContain('�')
+  })
+
+  it('gives every House its own six and none from a neighbour', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    const yoruba = rows.filter((r) => r.language === 'yo')
+
+    for (const house of HOUSES) {
+      const mine = yoruba.filter((r) => r.houseId === house.id)
+      expect(mine.map((r) => r.contentType).sort()).toEqual([...REQUIRED].sort())
+      for (const row of mine) {
+        // Every runtime condition together — any one of them false
+        // makes the row ineligible and the House not ready.
+        expect(row.scopeType).toBe('SACRED_HOUSE')
+        expect(row.status).toBe('PUBLISHED')
+        expect(row.rightsStatus).toBe('CLEARED')
+        expect(row.accessPolicy).toBe('PRAYER_ROOM_PRIVATE')
+        expect(row.runtimeEnabled).toBe(true)
+        expect(row.storageOk).toBe(true)
+        expect(row.language).toBe('yo')
+        // Its code names the House it belongs to. The V3 document
+        // numbers its Houses 1-4 in an order matching NONE of the
+        // database ids, so a pack mapped by ordinal would have put
+        // every set of prayers in the wrong House.
+        expect(row.code).toContain(house.code)
+      }
+    }
+  })
+
+  it('leaves the templates and the Visual Bible unpublished', async () => {
+    const rows = await v3Rows()
+    if (rows.length === 0) return
+    // Content publication was authorised because runtime eligibility
+    // requires it. Template and Visual Bible publication was not, and
+    // content readiness must never be allowed to imply it.
+    const templates = await getDb()
+      .select({
+        id: prayerSessionTemplateVersions.id,
+        status: prayerSessionTemplateVersions.status,
+      })
+      .from(prayerSessionTemplateVersions)
+      .where(inArray(prayerSessionTemplateVersions.id, [28958, 35343]))
+    for (const template of templates) {
+      expect(template.status).toBe('APPROVED')
+    }
+    const bible = (
+      await getDb()
+        .select({
+          status: visualBibleVersions.status,
+          publishedAt: visualBibleVersions.publishedAt,
+        })
+        .from(visualBibleVersions)
+        .where(eq(visualBibleVersions.id, 886))
+        .limit(1)
+    ).at(0)
+    if (bible) {
+      expect(bible.status).toBe('APPROVED')
+      expect(bible.publishedAt).toBeNull()
     }
   })
 })
