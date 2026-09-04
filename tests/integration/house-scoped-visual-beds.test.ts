@@ -7,10 +7,15 @@ import { migrate } from 'drizzle-orm/mysql2/migrator'
 
 import { closeDb, getDb } from '@/db'
 import {
+  appointmentGuidanceAssignments,
+  appointmentGuidanceSets,
+  appointmentPaymentSettlements,
   appointments,
+  auditLogs,
   mediaAssetVersions,
   mediaAssets,
   paymentAttempts,
+  paymentWebhookEvents,
   prayerGenerationAudioTasks,
   prayerGenerationJobEvents,
   prayerGenerationJobs,
@@ -21,10 +26,21 @@ import {
   prayerGenerationStoryboardSnapshots,
   prayerGenerationUploads,
   prayerGenerationVisualTasks,
+  prayerSessionTemplateSlots,
+  prayerSessionTemplateVersions,
   prayerSessionTemplates,
+  prayerTemplateForbiddenPairs,
+  prayerTemplateSlotPins,
+  prayerTemplateSlotScopes,
+  sacredContentMediaLinks,
+  sacredContentVersionProfiles,
+  sacredHouseAvailability,
+  sacredHouseBookingSettings,
   sacredHouses,
   services,
   spiritualContentItems,
+  spiritualContentVersions,
+  users,
 } from '@/db/schema'
 import { seedRbac } from '@/db/seed'
 import { assignRoleToUser } from '@/auth/rbac'
@@ -708,18 +724,36 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const db = getDb()
+
+  /**
+   * DELETE, never deactivate.
+   *
+   * An earlier version of this teardown retired templates, content and
+   * media with active:false and left the Houses, Services, booking
+   * settings and availability windows standing. Nine runs later the
+   * development database held 27 orphan Houses and 90 orphan Services,
+   * this suite had slowed from 7s to 74s, and OTHER suites were failing
+   * on foreign keys and lock waits against the bloated shared tables.
+   *
+   * A suite that creates a Sacred House owns every row hanging off it.
+   * Order below is child-to-parent, which is the only order the foreign
+   * keys allow.
+   */
   if (createdHouseIds.length > 0) {
-    const apptRows = await db
-      .select({ id: appointments.id })
-      .from(appointments)
-      .where(inArray(appointments.sacredHouseId, createdHouseIds))
-    const apptIds = apptRows.map((row) => row.id)
+    const apptIds = (
+      await db
+        .select({ id: appointments.id })
+        .from(appointments)
+        .where(inArray(appointments.sacredHouseId, createdHouseIds))
+    ).map((row) => row.id)
+
     if (apptIds.length > 0) {
-      const jobs = await db
-        .select({ id: prayerGenerationJobs.id })
-        .from(prayerGenerationJobs)
-        .where(inArray(prayerGenerationJobs.appointmentId, apptIds))
-      const jobIds = jobs.map((row) => row.id)
+      const jobIds = (
+        await db
+          .select({ id: prayerGenerationJobs.id })
+          .from(prayerGenerationJobs)
+          .where(inArray(prayerGenerationJobs.appointmentId, apptIds))
+      ).map((row) => row.id)
       if (jobIds.length > 0) {
         for (const table of [
           prayerGenerationUploads,
@@ -732,36 +766,136 @@ afterAll(async () => {
           prayerGenerationJobEvents,
           prayerGenerationRecipeSnapshots,
         ]) {
-          await db
-            .delete(table)
-            .where(inArray(table.generationJobId, jobIds))
+          await db.delete(table).where(inArray(table.generationJobId, jobIds))
         }
         await db
           .delete(prayerGenerationJobs)
           .where(inArray(prayerGenerationJobs.id, jobIds))
       }
+
+      const attemptIds = (
+        await db
+          .select({ id: paymentAttempts.id })
+          .from(paymentAttempts)
+          .where(inArray(paymentAttempts.appointmentId, apptIds))
+      ).map((row) => row.id)
+      if (attemptIds.length > 0) {
+        await db
+          .delete(paymentWebhookEvents)
+          .where(inArray(paymentWebhookEvents.paymentAttemptId, attemptIds))
+      }
+      await db
+        .delete(appointmentPaymentSettlements)
+        .where(inArray(appointmentPaymentSettlements.appointmentId, apptIds))
+      await db
+        .delete(paymentAttempts)
+        .where(inArray(paymentAttempts.appointmentId, apptIds))
+      await db
+        .delete(appointmentGuidanceAssignments)
+        .where(inArray(appointmentGuidanceAssignments.appointmentId, apptIds))
+      await db
+        .delete(appointmentGuidanceSets)
+        .where(inArray(appointmentGuidanceSets.appointmentId, apptIds))
+      await db.delete(appointments).where(inArray(appointments.id, apptIds))
     }
   }
-  // Everything this file created is retired rather than deleted where a
-  // foreign key would otherwise fight the teardown.
+
   if (createdTemplateIds.length > 0) {
+    const versionIds = (
+      await db
+        .select({ id: prayerSessionTemplateVersions.id })
+        .from(prayerSessionTemplateVersions)
+        .where(
+          inArray(prayerSessionTemplateVersions.templateId, createdTemplateIds),
+        )
+    ).map((row) => row.id)
+    if (versionIds.length > 0) {
+      const slotIds = (
+        await db
+          .select({ id: prayerSessionTemplateSlots.id })
+          .from(prayerSessionTemplateSlots)
+          .where(
+            inArray(prayerSessionTemplateSlots.templateVersionId, versionIds),
+          )
+      ).map((row) => row.id)
+      if (slotIds.length > 0) {
+        await db
+          .delete(prayerTemplateSlotPins)
+          .where(inArray(prayerTemplateSlotPins.slotId, slotIds))
+        await db
+          .delete(prayerTemplateSlotScopes)
+          .where(inArray(prayerTemplateSlotScopes.slotId, slotIds))
+        await db
+          .delete(prayerSessionTemplateSlots)
+          .where(inArray(prayerSessionTemplateSlots.id, slotIds))
+      }
+      await db
+        .delete(prayerTemplateForbiddenPairs)
+        .where(inArray(prayerTemplateForbiddenPairs.templateVersionId, versionIds))
+      await db
+        .delete(prayerSessionTemplateVersions)
+        .where(inArray(prayerSessionTemplateVersions.id, versionIds))
+    }
     await db
-      .update(prayerSessionTemplates)
-      .set({ active: false })
+      .delete(prayerSessionTemplates)
       .where(inArray(prayerSessionTemplates.id, createdTemplateIds))
   }
+
   if (createdItemIds.length > 0) {
+    const versionIds = (
+      await db
+        .select({ id: spiritualContentVersions.id })
+        .from(spiritualContentVersions)
+        .where(inArray(spiritualContentVersions.contentItemId, createdItemIds))
+    ).map((row) => row.id)
+    if (versionIds.length > 0) {
+      await db
+        .delete(sacredContentMediaLinks)
+        .where(inArray(sacredContentMediaLinks.contentVersionId, versionIds))
+      await db
+        .delete(sacredContentVersionProfiles)
+        .where(
+          inArray(sacredContentVersionProfiles.contentVersionId, versionIds),
+        )
+      await db
+        .delete(spiritualContentVersions)
+        .where(inArray(spiritualContentVersions.id, versionIds))
+    }
     await db
-      .update(spiritualContentItems)
-      .set({ active: false })
+      .delete(spiritualContentItems)
       .where(inArray(spiritualContentItems.id, createdItemIds))
   }
+
   if (createdAssetIds.length > 0) {
     await db
-      .update(mediaAssets)
-      .set({ active: false })
-      .where(inArray(mediaAssets.id, createdAssetIds))
+      .delete(mediaAssetVersions)
+      .where(inArray(mediaAssetVersions.assetId, createdAssetIds))
+    await db.delete(mediaAssets).where(inArray(mediaAssets.id, createdAssetIds))
   }
+
+  // THE ROWS THE OLD TEARDOWN FORGOT.
+  if (createdHouseIds.length > 0) {
+    await db
+      .delete(sacredHouseAvailability)
+      .where(inArray(sacredHouseAvailability.sacredHouseId, createdHouseIds))
+    await db
+      .delete(sacredHouseBookingSettings)
+      .where(inArray(sacredHouseBookingSettings.sacredHouseId, createdHouseIds))
+    await db
+      .delete(services)
+      .where(inArray(services.sacredHouseId, createdHouseIds))
+    await db
+      .delete(sacredHouses)
+      .where(inArray(sacredHouses.id, createdHouseIds))
+  }
+
+  if (createdUserIds.length > 0) {
+    await db
+      .delete(auditLogs)
+      .where(inArray(auditLogs.actorUserId, createdUserIds))
+    await db.delete(users).where(inArray(users.id, createdUserIds))
+  }
+
   resetMediaStorageForTests()
   resetObjectStorageForTests()
   resetPaymentRegistryForTests()
