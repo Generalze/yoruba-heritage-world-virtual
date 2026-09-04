@@ -3,54 +3,60 @@
  *
  *   bun run smoke:tts
  *
- * Answers one question — "is this deployment configured to speak?" —
- * and answers it WITHOUT SYNTHESIZING ANYTHING. It never calls
- * /audio/speech, never sends approved sacred text anywhere, and never
- * spends. A configuration check that costs money is not a check, it is
- * a purchase.
+ * LOCAL ONLY. This script makes NO network call of any kind. It does
+ * not synthesize, does not spend, does not contact the provider, and
+ * never prints the API key.
  *
- * It also never prints the API key, in full or in part.
+ * WHY IT DOES NOT PROBE THE PROVIDER. An earlier version called
+ * `GET {baseUrl}/models`, reasoning that the synthesis surface is
+ * OpenAI-compatible. That was an inference, not a contract: 9jaLingo's
+ * published documentation describes `POST /v1/audio/speech` and its
+ * fields, and documents no REST endpoint for listing models or
+ * speakers. Compatibility on one endpoint is not compatibility on the
+ * whole API, and the adapter itself needs only `/audio/speech`.
  *
- * WHAT IT CANNOT PROVE, and says so rather than implying otherwise:
- * 9jaLingo's published API documentation describes the synthesis
- * endpoint and its fields, but documents NO endpoint for listing models
- * or speakers. This probe therefore tries the OpenAI-compatible
- * `GET /models` convention that the adapter's transport already relies
- * on, and treats a 404 as "this vendor does not offer discovery" rather
- * than as a failure. Where discovery is unavailable, the configured
- * model and voice cannot be machine-verified at all — they must be read
- * from the operator's dashboard and confirmed by a human. Absence of a
- * discovery endpoint is never a licence to hardcode a value found in an
- * example.
+ * The probe was also unsound as evidence. A 404 from an undocumented
+ * path shows that some host answered; it does not show that the
+ * credentials were accepted, because a server may answer 404 before it
+ * ever looks at authorization. Reporting "provider reachable" from that
+ * would have been a claim the check could not support.
+ *
+ * So this preflight proves exactly what a machine can prove locally,
+ * and states the rest as UNVERIFIED rather than implying otherwise.
+ * Remote authentication, model existence and voice existence require
+ * the operator's dashboard until 9jaLingo documents a zero-spend
+ * validation or discovery endpoint.
  */
 import { env } from '@/lib/env'
-import { NAIJALINGO_LANGUAGE } from '@/providers/tts/naijalingo'
-
-const TIMEOUT_MS = 15_000
+import {
+  NAIJALINGO_LANGUAGE,
+  createNaijalingoTtsProvider,
+} from '@/providers/tts/naijalingo'
 
 type Level = 'ok' | 'warn' | 'fail'
-const results: Array<{ level: Level; label: string; detail: string }> = []
+const results: Array<{ level: Level }> = []
 
 function record(level: Level, label: string, detail = ''): void {
-  results.push({ level, label, detail })
+  results.push({ level })
   const tag = level === 'ok' ? 'OK  ' : level === 'warn' ? 'WARN' : 'FAIL'
   console.log(`${tag}  ${label}${detail ? `  — ${detail}` : ''}`)
 }
 
-/** Never the value, never a prefix of it — only whether it is set. */
+/** Whether a value is configured. Never the value itself for secrets. */
 function present(value: string): boolean {
   return value.trim().length > 0
 }
 
-async function main(): Promise<void> {
-  console.log('Speech synthesis preflight — no synthesis is performed.\n')
+function main(): void {
+  console.log('Speech synthesis preflight — local configuration only.')
+  console.log('No network call, no synthesis, no spend.\n')
 
   record(
     env.TTS_DRIVER === '9JALINGO' ? 'ok' : 'warn',
     `TTS_DRIVER is ${env.TTS_DRIVER}`,
     env.TTS_DRIVER === '9JALINGO'
       ? ''
-      : 'the checks below describe the 9jaLingo adapter and are informational under this driver',
+      : 'checks below describe the 9jaLingo adapter and are informational under this driver',
   )
 
   const key = env.NAIJALINGO_API_KEY
@@ -58,6 +64,7 @@ async function main(): Promise<void> {
   const voice = env.NAIJALINGO_YO_VOICE_ID
   const model = env.NAIJALINGO_MODEL
 
+  // Presence only. The key is never echoed, in full or in part.
   record(present(key) ? 'ok' : 'fail', 'NAIJALINGO_API_KEY is set')
   record(
     present(baseUrl) ? 'ok' : 'fail',
@@ -65,119 +72,81 @@ async function main(): Promise<void> {
     present(baseUrl) ? baseUrl : '',
   )
   record(present(model) ? 'ok' : 'fail', 'NAIJALINGO_MODEL is set', model)
-  record(
-    present(voice) ? 'ok' : 'fail',
-    'NAIJALINGO_YO_VOICE_ID is set',
-    voice,
-  )
+  record(present(voice) ? 'ok' : 'fail', 'NAIJALINGO_YO_VOICE_ID is set', voice)
 
-  if (!present(key) || !present(baseUrl)) {
-    console.log('\nCannot probe the provider without a key and a base URL.')
-    summarize()
-    return
+  if (present(baseUrl)) {
+    let parsed: URL | null = null
+    try {
+      parsed = new URL(baseUrl)
+    } catch {
+      parsed = null
+    }
+    record(parsed !== null ? 'ok' : 'fail', 'base URL parses')
+    if (parsed) {
+      record(
+        parsed.protocol === 'https:' ? 'ok' : 'fail',
+        'base URL is https',
+        parsed.protocol,
+      )
+    }
   }
 
-  let parsed: URL
-  try {
-    parsed = new URL(baseUrl)
-  } catch {
-    record('fail', 'base URL parses', 'not a URL')
-    summarize()
-    return
-  }
-  record(
-    parsed.protocol === 'https:' ? 'ok' : 'fail',
-    'base URL is https',
-    parsed.protocol,
-  )
-
-  // The ONLY network call this script makes. Read-only, unpriced, and
-  // not the synthesis endpoint.
-  const modelsUrl = `${baseUrl.replace(/\/+$/, '')}/models`
-  let response: Response | null = null
-  try {
-    response = await fetch(modelsUrl, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    })
-  } catch (caught) {
-    record(
-      'fail',
-      'provider reachable',
-      caught instanceof Error ? caught.name : 'network error',
-    )
-    summarize()
-    return
-  }
-
-  if (response.status === 401 || response.status === 403) {
-    record('fail', 'API key accepted', `HTTP ${response.status}`)
-    summarize()
-    return
-  }
-  if (response.status === 404) {
-    record('ok', 'provider reachable', 'host answered')
+  // Constructing the adapter is a LOCAL act: it validates configuration
+  // completeness and builds a client. It opens no connection.
+  if (present(key) && present(baseUrl) && present(model) && present(voice)) {
+    try {
+      const provider = createNaijalingoTtsProvider()
+      record('ok', 'adapter constructs from configuration', provider.code)
+      const languages = provider.supportedLanguages ?? []
+      record(
+        languages.length === 1 && languages[0] === NAIJALINGO_LANGUAGE
+          ? 'ok'
+          : 'fail',
+        `language policy is ${NAIJALINGO_LANGUAGE} only`,
+        languages.join(', ') || 'none declared',
+      )
+      record(
+        provider.isEnabled() ? 'ok' : 'fail',
+        'adapter reports itself enabled',
+      )
+    } catch (caught) {
+      record(
+        'fail',
+        'adapter constructs from configuration',
+        caught instanceof Error ? caught.message : 'construction failed',
+      )
+    }
+  } else {
     record(
       'warn',
-      'model/voice discovery unavailable',
-      'no /models endpoint; confirm both from the dashboard by hand',
-    )
-    summarize()
-    return
-  }
-  if (!response.ok) {
-    record('fail', 'discovery probe', `HTTP ${response.status}`)
-    summarize()
-    return
-  }
-
-  record('ok', 'provider reachable and key accepted', `HTTP ${response.status}`)
-
-  let ids: Array<string> = []
-  try {
-    const payload = (await response.json()) as {
-      data?: Array<{ id?: unknown }>
-    }
-    ids = (payload.data ?? [])
-      .map((row) => row.id)
-      .filter((id): id is string => typeof id === 'string')
-  } catch {
-    record('warn', 'discovery response parsed', 'unrecognised shape')
-    summarize()
-    return
-  }
-
-  record('ok', 'models discovered', `${ids.length} listed`)
-  if (ids.length > 0) console.log(`      ${ids.join(', ')}`)
-  if (present(model)) {
-    record(
-      ids.includes(model) ? 'ok' : 'fail',
-      'configured NAIJALINGO_MODEL exists at the provider',
-      ids.includes(model) ? model : `${model} not among the listed models`,
+      'adapter construction skipped',
+      'configuration incomplete — nothing to construct',
     )
   }
 
-  // Voices are a different question, and this endpoint does not answer
-  // it. Saying "model verified" while the VOICE is unverified would be
-  // the more dangerous half-truth, so it is stated outright.
-  record(
-    'warn',
-    'voice NOT machine-verified',
-    `confirm ${voice || '(unset)'} is a ${NAIJALINGO_LANGUAGE} speaker in the dashboard, and have a human review it before production`,
+  console.log('\nWhat this preflight CANNOT establish:')
+  console.log('  Remote authentication ................ NOT VERIFIED')
+  console.log('  Configured model existence ........... NOT VERIFIED')
+  console.log('  Configured voice existence ........... NOT VERIFIED')
+  console.log(`  Configured voice is a ${NAIJALINGO_LANGUAGE} speaker ......... NOT VERIFIED`)
+  console.log(
+    '\n  9jaLingo documents no zero-spend validation or discovery endpoint,',
   )
+  console.log(
+    '  so these must be confirmed in the provider dashboard and the chosen',
+  )
+  console.log(
+    '  voice reviewed by a human before production use. Example ids in',
+  )
+  console.log('  vendor documentation are not authority for a deployment.')
 
-  summarize()
-}
-
-function summarize(): void {
   const fails = results.filter((r) => r.level === 'fail').length
   const warns = results.filter((r) => r.level === 'warn').length
   console.log(
-    `\n${fails} failing, ${warns} needing human confirmation, ${results.length} checks.`,
+    `\n${fails} failing, ${warns} advisory, ${results.length} local checks.`,
   )
-  console.log('No audio was synthesized and nothing was spent.')
+  console.log('No provider was contacted. Nothing was synthesized or spent.')
   if (fails > 0) process.exit(1)
 }
 
-await main()
+main()

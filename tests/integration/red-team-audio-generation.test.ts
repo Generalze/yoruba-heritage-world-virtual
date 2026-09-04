@@ -3609,13 +3609,52 @@ describe('red-team: nothing personal can become sacred speech', () => {
     expect(adapter).not.toContain('repetition_penalty')
   })
 
-  it('never lets the preflight reach the synthesis endpoint', () => {
-    // The configuration probe must remain unable to spend: no speech
-    // endpoint, no provider submit call, no approved text.
+  it('keeps the preflight local — it contacts no provider at all', () => {
+    // The configuration probe must remain unable to spend AND unable to
+    // overstate. An earlier version called GET {baseUrl}/models on the
+    // reasoning that the synthesis surface is OpenAI-compatible; that
+    // was an inference rather than a documented contract, and worse, a
+    // 404 from an undocumented path cannot show that credentials were
+    // accepted — a server may answer 404 before it looks at
+    // authorization at all. So the script makes no network call, and
+    // this asserts it structurally rather than trusting the comment.
     const preflight = sourceOf('scripts/tts-preflight.ts')
     expect(preflight).not.toContain('audio/speech')
     expect(preflight).not.toContain('submitSpeech')
     expect(preflight).not.toContain('approvedText')
-    expect(preflight).toContain('/models')
+    expect(preflight).not.toContain('/models')
+    expect(preflight).not.toContain('fetch(')
+    expect(preflight).not.toContain('XMLHttpRequest')
+    // And it must say plainly what it could not establish.
+    expect(preflight).toContain('NOT VERIFIED')
+  })
+
+  it('claims only that byte-identical re-synthesis is UNGUARANTEED', () => {
+    /**
+     * A wording correction worth pinning, because the stronger claim is
+     * both wrong and tempting.
+     *
+     * The vendor's synthesis takes sampling parameters with nonzero
+     * defaults, which this adapter deliberately does not send. It
+     * follows that repeated synthesis of the same approved text is not
+     * GUARANTEED to be byte-identical — not that it CANNOT be. Two
+     * stochastic generations may coincide, and a vendor may change its
+     * defaults.
+     *
+     * The architectural point survives either way and is the one that
+     * matters: nothing may depend on re-synthesis reproducing bytes.
+     * The stored artifact's SHA-256 is the integrity identity, and it
+     * is taken from the artifact that was actually produced.
+     */
+    for (const file of [
+      'scripts/tts-preflight.ts',
+      'src/providers/tts/naijalingo.ts',
+      'src/services/audio-generation.ts',
+    ]) {
+      const source = readFileSync(join(process.cwd(), file), 'utf8')
+      expect(source).not.toContain('will not produce byte-identical')
+      expect(source).not.toContain('cannot be byte-identical')
+      expect(source).not.toContain('never byte-identical')
+    }
   })
 })
