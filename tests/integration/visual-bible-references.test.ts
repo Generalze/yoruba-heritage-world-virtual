@@ -1489,6 +1489,110 @@ describe('the compile stage re-proves the EXACT approved binding', () => {
       expect(result.reasonCode).not.toContain('visual_reference')
     }
   }, 240_000)
+
+  /**
+   * THE SIX-ROLE AUTHORITY, proved positively.
+   *
+   * Every other test in this block tampers with one field and watches
+   * the compile stage refuse. These two prove the other half: that with
+   * a complete approved pack, a slot's shot family resolves to ITS OWN
+   * approved image and to no other — which is precisely what static
+   * library selection cannot do, because it never reads shotFamily at
+   * all and picks deterministically from whatever the House has.
+   */
+  it('each of the six roles carries its own distinct approved image', async () => {
+    const { loaded } = await publishedPack()
+    expect(loaded.references).toHaveLength(6)
+
+    const byRole = new Map(
+      loaded.references.map((reference) => [reference.role, reference]),
+    )
+    expect([...byRole.keys()].sort()).toEqual(
+      [...VISUAL_BIBLE_REFERENCE_ROLES].sort(),
+    )
+
+    // Six roles, six DIFFERENT media versions. If two roles shared one
+    // version the mapping would be satisfied by accident rather than by
+    // authority.
+    const versionIds = loaded.references.map((r) => r.mediaAssetVersionId)
+    expect(new Set(versionIds).size).toBe(6)
+
+    // Deliberately NOT asserted: that the six hashes differ. These
+    // fixtures share one byte payload, and byte-distinctness is a
+    // property of a real production pack rather than a governance rule
+    // — two roles bound to identical images would still be correctly
+    // BOUND. What governance does require is that each binding froze
+    // the hash of the version it actually names, so that is what is
+    // checked.
+    for (const reference of loaded.references) {
+      const stored = (
+        await getDb()
+          .select({ fileSha256: mediaAssetVersions.fileSha256 })
+          .from(mediaAssetVersions)
+          .where(eq(mediaAssetVersions.id, reference.mediaAssetVersionId))
+          .limit(1)
+      ).at(0)!
+      expect(reference.mediaFileSha256).toBe(stored.fileSha256)
+      expect(reference.mediaFileSha256).toMatch(/^[0-9a-f]{64}$/)
+    }
+  }, 300_000)
+
+  it('accepts every role paired with its own image, and refuses every cross pairing', async () => {
+    const { house, loaded, ruleRefs, sacred } = await publishedPack()
+    const byRole = new Map(
+      loaded.references.map((reference) => [reference.role, reference]),
+    )
+
+    const base = {
+      sacredHouseId: house,
+      visualBibleVersionId: loaded.versionId,
+      visualBibleSha256: loaded.definitionSha256,
+      ruleRefs,
+      contentVersionId: sacred.contentVersionId,
+      contentSha256: sacred.contentSha256,
+      referenceRequirement: 'REQUIRED',
+    }
+
+    // MATCHED: every role, carrying its own binding, passes the
+    // reference gate.
+    for (const role of VISUAL_BIBLE_REFERENCE_ROLES) {
+      const result = await compileVisualGenerationRequest(
+        task({ ...base, shotFamily: role, visualReference: byRole.get(role)! }) as never,
+      )
+      if (result.status === 'FAILED') {
+        expect(`${role}: ${result.reasonCode}`).not.toContain('visual_reference')
+      }
+    }
+
+    // CROSSED: the two pairings named in the gate, plus a full sweep so
+    // no pair is left untested. A slot may only ever be dressed by the
+    // reference bound to its own role.
+    const crossings: Array<[string, string]> = []
+    for (const slotRole of VISUAL_BIBLE_REFERENCE_ROLES) {
+      for (const carried of VISUAL_BIBLE_REFERENCE_ROLES) {
+        if (slotRole !== carried) crossings.push([slotRole, carried])
+      }
+    }
+    expect(crossings).toContainEqual(['WIDE_MASTER', 'SIDE_PRAYER'])
+    expect(crossings).toContainEqual(['MEDIUM_PRAYER', 'WORKING_DETAIL'])
+    expect(crossings).toHaveLength(30)
+
+    for (const [slotRole, carried] of crossings) {
+      const result = await compileVisualGenerationRequest(
+        task({
+          ...base,
+          shotFamily: slotRole,
+          visualReference: byRole.get(carried)!,
+        }) as never,
+      )
+      expect(`${slotRole}<-${carried}:${result.status}`).toBe(
+        `${slotRole}<-${carried}:FAILED`,
+      )
+      if (result.status === 'FAILED') {
+        expect(result.reasonCode).toBe('visual_reference_role_mismatch')
+      }
+    }
+  }, 900_000)
 })
 
 describe('OPTIONAL is never injected automatically', () => {
@@ -1577,7 +1681,18 @@ describe('existing versions are unchanged in meaning', () => {
     expect(published.definitionSha256).toMatch(/^[0-9a-f]{64}$/)
   }, 180_000)
 
-  it('leaves Visual Bible 235 / version 205 exactly as approved', async () => {
+  /**
+   * V205 was superseded by an explicitly authorised transition, so this
+   * no longer pins it as the working version — it pins what the
+   * transition was allowed to do TO it.
+   *
+   * The point survives the change of state: archiving retires a version,
+   * it does not retrofit one. V205 keeps its 78 rules, its TEXT_ONLY
+   * mode and its zero bindings forever, as the historical evidence of
+   * what was approved before imagery existed. References went to a NEW
+   * version, which is the only honest place for them.
+   */
+  it('leaves archived Visual Bible 235 / version 205 exactly as it was approved', async () => {
     const row = (
       await getDb()
         .select({
@@ -1590,7 +1705,8 @@ describe('existing versions are unchanged in meaning', () => {
         .limit(1)
     ).at(0)
     if (!row) return
-    expect(row.status).toBe('APPROVED')
+    expect(row.status).toBe('ARCHIVED')
+    // Never published, and never retrofitted with imagery.
     expect(row.referenceMode).toBe('TEXT_ONLY')
     expect(row.publishedAt).toBeNull()
     const bound = await getDb()
@@ -1598,5 +1714,56 @@ describe('existing versions are unchanged in meaning', () => {
       .from(visualBibleReferenceMedia)
       .where(eq(visualBibleReferenceMedia.visualBibleVersionId, 205))
     expect(bound).toHaveLength(0)
+    const rules = await getDb()
+      .select({ id: visualBibleRules.id })
+      .from(visualBibleRules)
+      .where(eq(visualBibleRules.bibleVersionId, 205))
+    expect(rules).toHaveLength(78)
+  })
+
+  it('carries the 78 rules forward to an approved, unpublished V2', async () => {
+    const versions = await getDb()
+      .select({
+        id: visualBibleVersions.id,
+        versionNumber: visualBibleVersions.versionNumber,
+        status: visualBibleVersions.status,
+        referenceMode: visualBibleVersions.referenceMode,
+        publishedAt: visualBibleVersions.publishedAt,
+      })
+      .from(visualBibleVersions)
+      .where(eq(visualBibleVersions.visualBibleId, 235))
+    if (versions.length < 2) return
+
+    const v2 = versions.find((v) => v.versionNumber === 2)
+    if (!v2) return
+    expect(v2.status).toBe('APPROVED')
+    expect(v2.referenceMode).toBe('IMAGE_REFERENCE_REQUIRED')
+    // Approved is not published: visual governance can be settled while
+    // the House is still short of the sacred content it needs.
+    expect(v2.publishedAt).toBeNull()
+
+    const rules = await getDb()
+      .select({ id: visualBibleRules.id })
+      .from(visualBibleRules)
+      .where(eq(visualBibleRules.bibleVersionId, v2.id))
+    expect(rules).toHaveLength(78)
+
+    const bound = await getDb()
+      .select({
+        role: visualBibleReferenceMedia.role,
+        mediaAssetVersionId: visualBibleReferenceMedia.mediaAssetVersionId,
+      })
+      .from(visualBibleReferenceMedia)
+      .where(eq(visualBibleReferenceMedia.visualBibleVersionId, v2.id))
+    expect(bound).toHaveLength(6)
+    expect(bound.map((b) => b.role).sort()).toEqual(
+      [...VISUAL_BIBLE_REFERENCE_ROLES].sort(),
+    )
+    // Six roles, six different approved images — the real pack, unlike
+    // the byte-identical fixtures above.
+    expect(new Set(bound.map((b) => b.mediaAssetVersionId)).size).toBe(6)
+    // The superseded 3:2 originals were not carried over.
+    expect(bound.map((b) => b.mediaAssetVersionId)).not.toContain(38060)
+    expect(bound.map((b) => b.mediaAssetVersionId)).not.toContain(38065)
   })
 })
