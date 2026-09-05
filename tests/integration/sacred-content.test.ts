@@ -7,6 +7,12 @@ import { migrate } from 'drizzle-orm/mysql2/migrator'
 
 import { closeDb, getDb } from '@/db'
 import {
+  V3_CONTENT_TYPES,
+  V3_HOUSES,
+  V3_LAUNCH_CONTENT,
+  V3_PROVENANCE_NOTE,
+} from '@/lib/launch-content-v3'
+import {
   appointmentGuidanceAssignments,
   appointmentGuidanceSets,
   appointments,
@@ -1597,40 +1603,43 @@ describe('cross-domain item authority', () => {
   })
 })
 
-describe('the V3 launch pack keeps its governed identity', () => {
+describe('the V3 launch pack is pinned by manifest, not by itself', () => {
   /**
-   * The 24-block platform-authored launch pack, registered under client
-   * authority on 2026-09-04.
+   * The manifest in src/lib/launch-content-v3.ts is the authority here,
+   * and it is deliberately NOT derived from the database.
    *
-   * These assertions run against production rows, so they return early
-   * on a database that has none — a fresh CI schema must not fail for
-   * lacking launch content. Where the rows DO exist they are asserted
-   * hard, because every property below was a deliberate governance
-   * decision rather than a default.
+   * An earlier version of this suite recomputed a hash from the stored
+   * body and compared it with the stored hash. That proves two columns
+   * agree and nothing else: edit a body and its recorded hash together
+   * and the check still passes. Every hash in the manifest was instead
+   * computed from the LOCKED V3 SOURCE DOCUMENT and proved equal to the
+   * stored body at registration, so comparing rows against it detects
+   * exactly the tampering the old check could not see.
+   *
+   * The shape assertions run everywhere, including a fresh CI schema
+   * with no launch content. The row assertions need the data and skip
+   * without it — a deployment that must HAVE the content verifies with
+   * `bun run verify:launch-content`, which fails rather than skips.
    */
-  const REQUIRED = [
-    'OPENING',
-    'INVOCATION',
-    'CHANT',
-    'PRAYER',
-    'BLESSING',
-    'CLOSING',
-  ]
-  const HOUSES = [
-    { id: 1, code: 'ABULE_OSUN' },
-    { id: 2, code: 'ABULE_AJE' },
-    { id: 3, code: 'ABULE_OSANYIN_AJA' },
-    { id: 4, code: 'ILE_AWON_BABALAWO' },
-  ]
+  const BUDGETS: Record<string, number> = {
+    OPENING: 10,
+    INVOCATION: 12,
+    CHANT: 15,
+    PRAYER: 32,
+    BLESSING: 12,
+    CLOSING: 8,
+  }
 
-  async function v3Rows() {
-    return getDb()
+  async function rowsByVersionId() {
+    const ids = V3_LAUNCH_CONTENT.map((entry) => entry.versionId)
+    const rows = await getDb()
       .select({
-        code: spiritualContentItems.code,
+        versionId: spiritualContentVersions.id,
+        itemCode: spiritualContentItems.code,
         houseId: spiritualContentItems.sacredHouseId,
         scopeType: spiritualContentItems.scopeType,
         contentType: spiritualContentItems.contentType,
-        versionId: spiritualContentVersions.id,
+        active: spiritualContentItems.active,
         language: spiritualContentVersions.language,
         status: spiritualContentVersions.status,
         body: spiritualContentVersions.body,
@@ -1644,11 +1653,12 @@ describe('the V3 launch pack keeps its governed identity', () => {
         provenanceType: sacredContentVersionProfiles.provenanceType,
         note: sacredContentVersionProfiles.internalProvenanceNote,
         contentSha256: sacredContentVersionProfiles.contentSha256,
+        durationHintSeconds: sacredContentVersionProfiles.durationHintSeconds,
       })
-      .from(spiritualContentItems)
+      .from(spiritualContentVersions)
       .innerJoin(
-        spiritualContentVersions,
-        eq(spiritualContentVersions.contentItemId, spiritualContentItems.id),
+        spiritualContentItems,
+        eq(spiritualContentItems.id, spiritualContentVersions.contentItemId),
       )
       .innerJoin(
         sacredContentVersionProfiles,
@@ -1657,55 +1667,149 @@ describe('the V3 launch pack keeps its governed identity', () => {
           spiritualContentVersions.id,
         ),
       )
-      .where(like(spiritualContentItems.code, 'V3\\_%'))
+      .where(inArray(spiritualContentVersions.id, ids))
+    return new Map(rows.map((row) => [row.versionId, row]))
   }
 
-  it('is 24 Yoruba production rows and 24 English companions', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
-    expect(rows).toHaveLength(48)
-    expect(rows.filter((r) => r.language === 'yo')).toHaveLength(24)
-    expect(rows.filter((r) => r.language === 'en')).toHaveLength(24)
-  })
+  // --- shape: runs everywhere, needs no data -------------------------
 
-  it('speaks Yoruba and never English', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
-    for (const row of rows) {
-      if (row.language === 'yo') {
-        expect(row.voicePolicy).toBe('APPROVED_TTS_ALLOWED')
-        expect(row.variantKind).toBe('ORIGINAL')
-      } else {
-        // TEXT_ONLY is what makes English structurally unspeakable. A
-        // Yoruba template would not select it anyway, but the policy is
-        // the lock rather than the language filter.
-        expect(row.voicePolicy).toBe('TEXT_ONLY')
-        expect(row.variantKind).toBe('TRANSLATION')
+  it('pins forty-eight versions, six per House in each language', () => {
+    expect(V3_LAUNCH_CONTENT).toHaveLength(48)
+    for (const house of V3_HOUSES) {
+      for (const language of ['yo', 'en'] as const) {
+        const mine = V3_LAUNCH_CONTENT.filter(
+          (e) => e.houseId === house.id && e.language === language,
+        )
+        expect(mine.map((e) => e.contentType).sort()).toEqual(
+          [...V3_CONTENT_TYPES].sort(),
+        )
+        for (const entry of mine) {
+          expect(entry.houseCode).toBe(house.code)
+          // The item code names its own House. The V3 document numbers
+          // its Houses in an order matching none of these ids, so a
+          // pack mapped by ordinal would land in the wrong House.
+          expect(entry.itemCode).toBe(`V3_${house.code}_${entry.contentType}`)
+        }
       }
     }
   })
 
-  it('claims platform authorship and never tradition', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
-    for (const row of rows) {
-      expect(row.provenanceType).toBe('ORIGINAL_AUTHORED')
-      // The value that WOULD misrepresent this material.
-      expect(row.provenanceType).not.toBe('TRADITIONAL_ORAL')
-      expect(row.note).toContain('PLATFORM_AUTHORED_LAUNCH_CONTENT')
+  it('gives every version a distinct id and a real hash', () => {
+    const ids = V3_LAUNCH_CONTENT.map((e) => e.versionId)
+    expect(new Set(ids).size).toBe(48)
+    const hashes = V3_LAUNCH_CONTENT.map((e) => e.sha256)
+    // Forty-eight distinct texts: no two blocks share bytes.
+    expect(new Set(hashes).size).toBe(48)
+    for (const entry of V3_LAUNCH_CONTENT) {
+      expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/)
     }
   })
 
-  it('carries METADATA_ONLY, which is not a speech permission', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
-    for (const row of rows) {
-      expect(row.externalAiPolicy).toBe('METADATA_ONLY')
+  it('speaks Yoruba, and English can only ever be read', () => {
+    for (const entry of V3_LAUNCH_CONTENT) {
+      if (entry.language === 'yo') {
+        expect(entry.variantKind).toBe('ORIGINAL')
+        expect(entry.voicePolicy).toBe('APPROVED_TTS_ALLOWED')
+      } else {
+        // TEXT_ONLY is the lock. A Yoruba template would not select an
+        // English row anyway, but policy is what makes it unspeakable
+        // rather than merely unselected.
+        expect(entry.variantKind).toBe('TRANSLATION')
+        expect(entry.voicePolicy).toBe('TEXT_ONLY')
+      }
     }
-    // The distinction that matters: the speech executor never consults
-    // externalAiPolicy. voicePolicy is the sole authority over whether
-    // approved text may reach a speech vendor, so METADATA_ONLY must
-    // never be read as authorising or forbidding synthesis.
+  })
+
+  it('carries budgets, not measured durations', () => {
+    for (const entry of V3_LAUNCH_CONTENT) {
+      expect(entry.durationHintSeconds).toBe(BUDGETS[entry.contentType])
+    }
+    // 89 seconds of content per House plus the template's 13 seconds of
+    // authored silence. A planned shape — the first real Yoruba
+    // synthesis is the authority for actual duration.
+    const perHouse = V3_CONTENT_TYPES.reduce((sum, t) => sum + BUDGETS[t], 0)
+    expect(perHouse).toBe(89)
+  })
+
+  it('states platform authorship exactly, with no room to soften it', () => {
+    // Exact equality, not containment: a note that merely CONTAINS the
+    // classification could also contain a claim contradicting it.
+    expect(V3_PROVENANCE_NOTE).toBe(
+      'PLATFORM_AUTHORED_LAUNCH_CONTENT — V3 locked 2026-09-04, client-authorised',
+    )
+  })
+
+  // --- rows: skip without data, but exact when present ---------------
+
+  it('matches every pinned version in the database', async () => {
+    const rows = await rowsByVersionId()
+    if (rows.size === 0) return
+    expect(rows.size).toBe(48)
+
+    for (const entry of V3_LAUNCH_CONTENT) {
+      const row = rows.get(entry.versionId)
+      expect(`${entry.itemCode}/${entry.language}`).toBe(
+        row ? `${row.itemCode}/${row.language}` : 'MISSING',
+      )
+      if (!row) continue
+
+      // THE PIN: the stored body must hash to the value the manifest
+      // took from the locked source document. This is what the old
+      // stored-vs-stored comparison could not detect.
+      const actual = createHash('sha256')
+        .update(row.body, 'utf8')
+        .digest('hex')
+      expect(actual).toBe(entry.sha256)
+      expect(row.contentSha256).toBe(entry.sha256)
+
+      expect(row.houseId).toBe(entry.houseId)
+      expect(String(row.contentType)).toBe(entry.contentType)
+      expect(String(row.variantKind)).toBe(entry.variantKind)
+      expect(String(row.voicePolicy)).toBe(entry.voicePolicy)
+      expect(row.durationHintSeconds).toBe(entry.durationHintSeconds)
+      expect(row.note).toBe(V3_PROVENANCE_NOTE)
+      expect(row.provenanceType).toBe('ORIGINAL_AUTHORED')
+      expect(row.provenanceType).not.toBe('TRADITIONAL_ORAL')
+      expect(row.externalAiPolicy).toBe('METADATA_ONLY')
+      expect(row.scopeType).toBe('SACRED_HOUSE')
+      expect(row.active).toBe(true)
+    }
+  })
+
+  it('keeps every Yoruba row runtime eligible', async () => {
+    const rows = await rowsByVersionId()
+    if (rows.size === 0) return
+    for (const entry of V3_LAUNCH_CONTENT.filter((e) => e.language === 'yo')) {
+      const row = rows.get(entry.versionId)!
+      // All of it together — any one false makes the row ineligible and
+      // its House not ready.
+      expect(row.status).toBe('PUBLISHED')
+      expect(row.rightsStatus).toBe('CLEARED')
+      expect(row.accessPolicy).toBe('PRAYER_ROOM_PRIVATE')
+      expect(row.runtimeEnabled).toBe(true)
+      expect(row.storageOk).toBe(true)
+      expect(row.language).toBe('yo')
+    }
+  })
+
+  it('preserves Yoruba orthography byte for byte', async () => {
+    const rows = await rowsByVersionId()
+    if (rows.size === 0) return
+    const yoruba = V3_LAUNCH_CONTENT.filter((e) => e.language === 'yo')
+      .map((e) => rows.get(e.versionId)!.body)
+      .join('')
+    // Dot-below letters plus COMBINING tone marks. Normalising to NFD
+    // would decompose the dots and change every hash pinned above.
+    expect(yoruba).toContain('ọ̀')
+    expect(yoruba.normalize('NFC')).toBe(yoruba)
+    expect(yoruba).not.toContain('�')
+  })
+
+  it('records METADATA_ONLY, which grants no speech permission', () => {
+    // The speech executor never reads externalAiPolicy — voicePolicy is
+    // the sole authority over whether approved text reaches a vendor —
+    // so METADATA_ONLY must never be read as authorising or forbidding
+    // synthesis.
     const audio = readFileSync(
       join(process.cwd(), 'src/services/audio-generation.ts'),
       'utf8',
@@ -1713,57 +1817,9 @@ describe('the V3 launch pack keeps its governed identity', () => {
     expect(audio).not.toContain('externalAiPolicy')
   })
 
-  it('stores the exact bytes it hashed, with no normalisation', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
-    for (const row of rows) {
-      const recomputed = createHash('sha256')
-        .update(row.body, 'utf8')
-        .digest('hex')
-      expect(row.contentSha256).toBe(recomputed)
-    }
-    // Yoruba orthography survives: dot-below letters plus COMBINING
-    // tone marks. Normalising to NFD would decompose the dots and
-    // change every hash above.
-    const yoruba = rows
-      .filter((r) => r.language === 'yo')
-      .map((r) => r.body)
-      .join('')
-    expect(yoruba).toContain('ọ̀')
-    expect(yoruba.normalize('NFC')).toBe(yoruba)
-    expect(yoruba).not.toContain('�')
-  })
-
-  it('gives every House its own six and none from a neighbour', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
-    const yoruba = rows.filter((r) => r.language === 'yo')
-
-    for (const house of HOUSES) {
-      const mine = yoruba.filter((r) => r.houseId === house.id)
-      expect(mine.map((r) => r.contentType).sort()).toEqual([...REQUIRED].sort())
-      for (const row of mine) {
-        // Every runtime condition together — any one of them false
-        // makes the row ineligible and the House not ready.
-        expect(row.scopeType).toBe('SACRED_HOUSE')
-        expect(row.status).toBe('PUBLISHED')
-        expect(row.rightsStatus).toBe('CLEARED')
-        expect(row.accessPolicy).toBe('PRAYER_ROOM_PRIVATE')
-        expect(row.runtimeEnabled).toBe(true)
-        expect(row.storageOk).toBe(true)
-        expect(row.language).toBe('yo')
-        // Its code names the House it belongs to. The V3 document
-        // numbers its Houses 1-4 in an order matching NONE of the
-        // database ids, so a pack mapped by ordinal would have put
-        // every set of prayers in the wrong House.
-        expect(row.code).toContain(house.code)
-      }
-    }
-  })
-
   it('leaves the templates and the Visual Bible unpublished', async () => {
-    const rows = await v3Rows()
-    if (rows.length === 0) return
+    const rows = await rowsByVersionId()
+    if (rows.size === 0) return
     // Content publication was authorised because runtime eligibility
     // requires it. Template and Visual Bible publication was not, and
     // content readiness must never be allowed to imply it.

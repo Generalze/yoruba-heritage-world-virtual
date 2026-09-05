@@ -21,7 +21,8 @@
     "admin:grant": "bun run src/db/grant-role.ts",
     "db:studio": "drizzle-kit studio",
     "smoke:runtime": "bun run scripts/runtime-smoke.ts",
-    "smoke:tts": "bun run scripts/tts-preflight.ts"
+    "smoke:tts": "bun run scripts/tts-preflight.ts",
+    "verify:launch-content": "bun run scripts/verify-launch-content.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",
