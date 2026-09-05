@@ -6,6 +6,7 @@ import type {
   SpeechSynthesisRequest,
   SpeechSynthesisSubmission,
   TtsProvider,
+  YorubaVoiceProfile,
 } from './types'
 
 /**
@@ -43,10 +44,13 @@ import type {
  *   never requested of the synthesis.
  * - `input` is the approved text VERBATIM, exactly once — never
  *   rewritten, translated, shortened or padded.
- * - the voice is the operator-configured, server-env-only
- *   NAIJALINGO_YO_VOICE_ID. There is no path from a request, a row or
- *   a user to the voice choice, and no reference-audio field exists
- *   anywhere in the TtsProvider contract to clone from.
+ * - the voice is the operator-configured, server-env-only id for the
+ *   request's approved PROFILE — NAIJALINGO_YO_MALE_VOICE_ID or
+ *   NAIJALINGO_YO_FEMALE_VOICE_ID. The profile itself was decided from
+ *   the approved content's own Sacred House, so there is no path from
+ *   a request, a row or a user to the voice choice, and no
+ *   reference-audio field exists anywhere in the TtsProvider contract
+ *   to clone from.
  * - Yoruba (`yo`) only: Phase One approves exactly one language for
  *   this vendor. The executor refuses other languages NOT_SENT before
  *   the body is even read; the guard here is the second lock on that
@@ -109,7 +113,10 @@ export interface NaijalingoTtsConfig {
   apiKey: string
   baseUrl: string
   model: string
-  yorubaVoiceId: string
+  /** Provider catalogue ids, one per approved production profile. This
+   * is the ONLY place in the system that knows them. */
+  maleVoiceId: string
+  femaleVoiceId: string
 }
 
 function configFromEnv(): NaijalingoTtsConfig {
@@ -117,8 +124,32 @@ function configFromEnv(): NaijalingoTtsConfig {
     apiKey: env.NAIJALINGO_API_KEY,
     baseUrl: env.NAIJALINGO_API_BASE_URL,
     model: env.NAIJALINGO_MODEL,
-    yorubaVoiceId: env.NAIJALINGO_YO_VOICE_ID,
+    maleVoiceId: env.NAIJALINGO_YO_MALE_VOICE_ID,
+    femaleVoiceId: env.NAIJALINGO_YO_FEMALE_VOICE_ID,
   }
+}
+
+/**
+ * Profile to catalogue id. Fails CLOSED and BEFORE the network: an
+ * unconfigured profile is a configuration fault, and discovering it
+ * mid-call would mean a spend whose outcome is unknown.
+ *
+ * There is no default arm. A profile with no configured voice must stop
+ * the synthesis, never borrow the other one.
+ */
+function resolveVoiceId(
+  config: NaijalingoTtsConfig,
+  profile: YorubaVoiceProfile,
+): string {
+  const id = profile === 'YO_MALE' ? config.maleVoiceId : config.femaleVoiceId
+  if (id.trim().length === 0) {
+    throw new TtsProviderError(
+      'voice_profile_unconfigured',
+      `No voice is configured for ${profile}.`,
+      false,
+    )
+  }
+  return id
 }
 
 /**
@@ -224,7 +255,15 @@ function assertCompleteConfig(config: NaijalingoTtsConfig): void {
   if (config.apiKey.trim() === '') missing.push('NAIJALINGO_API_KEY')
   if (config.baseUrl.trim() === '') missing.push('NAIJALINGO_API_BASE_URL')
   if (config.model.trim() === '') missing.push('NAIJALINGO_MODEL')
-  if (config.yorubaVoiceId.trim() === '') missing.push('NAIJALINGO_YO_VOICE_ID')
+  // BOTH profiles are required. A deployment configured with only one
+  // voice can serve only half its Houses, and would discover which half
+  // at somebody's paid render.
+  if (config.maleVoiceId.trim() === '') {
+    missing.push('NAIJALINGO_YO_MALE_VOICE_ID')
+  }
+  if (config.femaleVoiceId.trim() === '') {
+    missing.push('NAIJALINGO_YO_FEMALE_VOICE_ID')
+  }
   if (missing.length > 0) {
     throw new TtsProviderError(
       'naijalingo_config_incomplete',
@@ -278,7 +317,9 @@ export function createNaijalingoTtsProvider(
       try {
         bytes = await client.createSpeech({
           model: config.model,
-          voice: config.yorubaVoiceId,
+          // Resolved from the approved profile, not from anything the
+          // caller supplied.
+          voice: resolveVoiceId(config, request.voiceProfile),
           // The approved text VERBATIM — sent exactly once, never
           // rewritten, translated, shortened or padded.
           input: request.approvedText,

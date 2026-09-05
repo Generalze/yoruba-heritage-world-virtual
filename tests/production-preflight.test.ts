@@ -251,7 +251,8 @@ describe('9jaLingo TTS selection (Step 20)', () => {
     NOTIFICATION_EMAIL_DRIVER: 'DISABLED',
     NAIJALINGO_API_KEY: 'test-key-placeholder',
     NAIJALINGO_API_BASE_URL: 'https://api.example-9jalingo.test/v1',
-    NAIJALINGO_YO_VOICE_ID: 'adeola_yo',
+    NAIJALINGO_YO_MALE_VOICE_ID: 'adeola_yo_male',
+    NAIJALINGO_YO_FEMALE_VOICE_ID: 'adeola_yo_female',
     NAIJALINGO_MODEL: 'naijalingo-tts-1',
   }
 
@@ -274,7 +275,9 @@ describe('9jaLingo TTS selection (Step 20)', () => {
     for (const name of [
       'NAIJALINGO_API_KEY',
       'NAIJALINGO_API_BASE_URL',
-      'NAIJALINGO_YO_VOICE_ID',
+      // BOTH voices. Half a configuration serves half the Houses.
+      'NAIJALINGO_YO_MALE_VOICE_ID',
+      'NAIJALINGO_YO_FEMALE_VOICE_ID',
       'NAIJALINGO_MODEL',
     ]) {
       for (const nodeEnv of ['development', 'test', 'production']) {
@@ -318,7 +321,8 @@ describe('9jaLingo TTS selection (Step 20)', () => {
       NOTIFICATION_EMAIL_DRIVER: 'DISABLED' as const,
       NAIJALINGO_API_KEY: '',
       NAIJALINGO_API_BASE_URL: 'http://insecure.example',
-      NAIJALINGO_YO_VOICE_ID: '',
+      NAIJALINGO_YO_MALE_VOICE_ID: '',
+      NAIJALINGO_YO_FEMALE_VOICE_ID: 'adeola_yo_female',
       NAIJALINGO_MODEL: 'naijalingo-tts-1',
     }
     const result = checkProductionPreflight(
@@ -330,9 +334,9 @@ describe('9jaLingo TTS selection (Step 20)', () => {
       result.issues.map((issue) => [`${issue.code}|${issue.envName}`, issue]),
     )
     expect(byCode.has('naijalingo_config_missing|NAIJALINGO_API_KEY')).toBe(true)
-    expect(byCode.has('naijalingo_config_missing|NAIJALINGO_YO_VOICE_ID')).toBe(
-      true,
-    )
+    expect(
+      byCode.has('naijalingo_config_missing|NAIJALINGO_YO_MALE_VOICE_ID'),
+    ).toBe(true)
     expect(byCode.has('naijalingo_endpoint_not_https|NAIJALINGO_API_BASE_URL')).toBe(
       true,
     )

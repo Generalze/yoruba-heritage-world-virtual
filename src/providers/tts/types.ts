@@ -24,6 +24,24 @@
  * voice-related input is the AUTHORITATIVE policy code, and synthesis
  * is permitted only under APPROVED_TTS_ALLOWED.
  */
+import type { SacredVoiceProfile } from '@/lib/sacred-voice-routing'
+
+/**
+ * WHICH APPROVED PRODUCTION VOICE, said in the platform's own terms.
+ *
+ * Deliberately NOT a provider voice id. A vendor's catalogue UUID is
+ * infrastructure detail, and letting one travel through the application
+ * would mean every layer that touches a synthesis request also touches
+ * 9jaLingo's namespace. The adapter resolves a profile to whatever the
+ * vendor calls that voice; nothing above the adapter needs to know.
+ *
+ * It also keeps the no-cloning guarantee sharper rather than weaker: the
+ * strongest thing this contract can now say about a voice is "use the
+ * approved male or female production profile". There is no field here
+ * that could carry a speaker sample, a reference recording, or an
+ * arbitrary provider voice chosen by a caller.
+ */
+export type YorubaVoiceProfile = SacredVoiceProfile
 
 export interface SpeechSynthesisRequest {
   /** Deterministic — reused verbatim from the Step 15 task row, itself
@@ -41,6 +59,12 @@ export interface SpeechSynthesisRequest {
   approvedText: string
   /** Language of the approved body — never a translation target. */
   language: string
+  /**
+   * The approved production voice for the Sacred House this text
+   * belongs to, resolved server-side from the approved content itself.
+   * No caller, row or user input selects it.
+   */
+  voiceProfile: YorubaVoiceProfile
   /** AUTHORITATIVE voice policy at submission time. Always
    * 'APPROVED_TTS_ALLOWED' — any other value never reaches a provider. */
   voicePolicy: string

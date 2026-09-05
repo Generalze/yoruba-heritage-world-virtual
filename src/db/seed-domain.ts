@@ -11,6 +11,7 @@ import {
   services,
   spiritualInterests,
 } from '@/db/schema'
+import { SACRED_HOUSE_VOICE_PROFILE } from '@/lib/sacred-voice-routing'
 import type { MemberType } from '@/db/schema'
 
 /**
@@ -298,17 +299,27 @@ export async function seedDomain(): Promise<void> {
   }
 
   for (const [i, house] of APPROVED_SACRED_HOUSES.entries()) {
+    // The approved speaking voice is written from the pinned ruling, so
+    // the row describes itself; it is never invented here, and for
+    // these four the source map remains the authority at runtime.
+    const approvedVoiceProfile = SACRED_HOUSE_VOICE_PROFILE[house.code]
     await db
       .insert(sacredHouses)
       .values({
         code: house.code,
         name: house.name,
         slug: house.slug,
+        approvedVoiceProfile,
         status: 'PUBLISHED',
         sortOrder: (i + 1) * 10,
       })
       .onDuplicateKeyUpdate({
-        set: { name: house.name, slug: house.slug, sortOrder: (i + 1) * 10 },
+        set: {
+          name: house.name,
+          slug: house.slug,
+          approvedVoiceProfile,
+          sortOrder: (i + 1) * 10,
+        },
       })
   }
 

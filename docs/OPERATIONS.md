@@ -82,10 +82,13 @@ Production requires, at minimum:
   / `kling_artifact_…` naming the variable) — never a silent fallback
   to `MOCK` or `DISABLED`. The API key is a secret: server environment
   only, outside Git.
-- `TTS_DRIVER=9JALINGO` additionally requires **all four** of
+- `TTS_DRIVER=9JALINGO` additionally requires **all five** of
   `NAIJALINGO_API_KEY`, `NAIJALINGO_API_BASE_URL` (plain HTTPS — no
-  credentials, query or fragment), `NAIJALINGO_YO_VOICE_ID` and
-  `NAIJALINGO_MODEL`. A gap is a startup refusal
+  credentials, query or fragment), `NAIJALINGO_YO_MALE_VOICE_ID`,
+  `NAIJALINGO_YO_FEMALE_VOICE_ID` and `NAIJALINGO_MODEL`. Both voices,
+  always: a deployment holding one of them can serve only half the
+  Sacred Houses, and would discover which half at somebody's render.
+  A gap is a startup refusal
   (`naijalingo_config_missing` / `naijalingo_endpoint_…` naming the
   variable) — never a silent fallback to `MOCK` or `DISABLED`. The API
   key is a secret: server environment only, outside Git.
@@ -139,10 +142,15 @@ Governance facts an operator should know:
 - **Yoruba only.** A requirement in any other language is refused
   before the network as a recorded, retryable task failure — the prayer
   is never translated to fit a vendor.
-- The approved text is sent **verbatim, exactly once**; the voice and
-  model come only from `NAIJALINGO_YO_VOICE_ID` / `NAIJALINGO_MODEL`.
-  No reference audio or likeness input exists anywhere in the contract
-  — voice cloning is structurally impossible, not merely forbidden.
+- The approved text is sent **verbatim, exactly once**. The model
+  comes only from `NAIJALINGO_MODEL`, and the voice only from the
+  variable for the House's ruled profile —
+  `NAIJALINGO_YO_MALE_VOICE_ID` or `NAIJALINGO_YO_FEMALE_VOICE_ID`.
+  Which profile is decided server-side from the approved content's own
+  Sacred House (see `src/lib/sacred-voice-routing.ts`); a House with no
+  approved voice is refused before the network. No reference audio or
+  likeness input exists anywhere in the contract — voice cloning is
+  structurally impossible, not merely forbidden.
 - Approved **human recordings remain preferred** and are never
   synthesized; a manifest built entirely from them never touches this
   adapter.

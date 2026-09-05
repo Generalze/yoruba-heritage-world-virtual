@@ -1536,10 +1536,14 @@ body is a CLOSED five-field allowlist (`model`, `voice`, `input`,
 instruction, and no reference-audio or likeness field anywhere in the
 contract, so voice cloning remains structurally impossible; the voice
 id and model come ONLY from trusted server environment
-(`NAIJALINGO_YO_VOICE_ID`, `NAIJALINGO_MODEL`), and the API key lives
-ONLY in server env, outside Git, never in a row, an event or a log.
-Selecting `TTS_DRIVER=9JALINGO` requires the four `NAIJALINGO_*`
-variables in EVERY environment (base URL plain HTTPS: no credentials,
+(`NAIJALINGO_YO_MALE_VOICE_ID` / `NAIJALINGO_YO_FEMALE_VOICE_ID`,
+`NAIJALINGO_MODEL`), and the API key lives ONLY in server env, outside
+Git, never in a row, an event or a log. WHICH of the two voices is
+decided from the approved content's own Sacred House, server-side and
+deterministically (§50); the request carries a PROFILE, never a
+vendor voice id, and a House with no approved voice is refused
+NOT_SENT before the network. Selecting `TTS_DRIVER=9JALINGO` requires
+the five `NAIJALINGO_*` variables in EVERY environment (base URL plain HTTPS: no credentials,
 query or fragment); production preflight reports gaps as codes naming
 the variable, and there is NO fallback to MOCK or DISABLED. Approved
 human recordings remain preferred and are never synthesized.
@@ -2903,6 +2907,60 @@ Kling audio remains `off`. Prayer audio continues to come only from the
 approved human-recording/TTS pipeline. No lip-sync and no native vendor
 speech. The at-most-once paid-call reservation, the privacy rules and
 the sacred-content approval workflow are untouched.
+
+---
+
+# 50. Amendment — Which voice speaks for which Sacred House
+
+A House's approved representative has a gender, and a machine that
+speaks that House's approved words speaks in that voice. Putting a
+man's voice on Abúlé Ọ̀ṣun's prayer is not a rendering defect; it
+misrepresents the House to the person praying.
+
+## 50.1 The voice follows the words, not the booking
+
+The profile is resolved from the **content item's own Sacred House** —
+the House whose words these are — and never from the appointment, the
+job, the service, the user or anything in a request. A forged manifest
+therefore cannot borrow another House's voice, because the voice is not
+carried in the manifest at all.
+
+## 50.2 Two authorities, both failing closed
+
+The four launch Houses are **pinned in source** by CODE
+(`SACRED_HOUSE_VOICE_PROFILE`): Ilé Àwọn Babaláwo and Abúlé Ọ̀sanyìn
+àti Àjà speak `YO_MALE`; Abúlé Ọ̀ṣun and Abúlé Ajé speak `YO_FEMALE`.
+For those four the source is authority and a `sacred_houses`
+.`approved_voice_profile` row that disagrees is a REFUSAL
+(`voice_profile_conflict`), never a silent override — an UPDATE must
+not be able to re-gender a Sacred House.
+
+Every other House is governed DATA in that same column, so a fifth
+House can be given a voice without a code deploy, and a test can own a
+House with a ruled voice without borrowing a real one. A House with
+neither is refused (`voice_profile_unassigned`), and content belonging
+to no House at all is refused (`sacred_house_missing`). There is no
+default arm anywhere on this path.
+
+## 50.3 A profile crosses the boundary, never a vendor id
+
+`SpeechSynthesisRequest` carries `voiceProfile` — the platform's own
+word for a voice. The vendor's catalogue ids live ONLY in the adapter's
+configuration, one per profile, and are resolved there. Nothing above
+the adapter touches the vendor's namespace, and there remains no field
+on the contract that could carry a speaker sample, a reference
+recording or a caller-chosen voice.
+
+## 50.4 Refusal is before the body and before the network
+
+Resolution happens in `compileSpeechSynthesisRequest` BEFORE the
+approved body is retrieved and before any provider is involved, so an
+unroutable House never reads the sacred text and never spends: the
+failure is a bounded machine code and provably `NOT_SENT`. The adapter
+holds a second lock — both `NAIJALINGO_YO_MALE_VOICE_ID` and
+`NAIJALINGO_YO_FEMALE_VOICE_ID` are required at construction, so a
+half-configured deployment is refused at startup rather than at
+somebody's render.
 
 ---
 

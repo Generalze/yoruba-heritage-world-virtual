@@ -1,0 +1,1 @@
+ALTER TABLE `sacred_houses` ADD `approved_voice_profile` enum('YO_MALE','YO_FEMALE');

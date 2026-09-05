@@ -86,7 +86,8 @@ function main(): void {
 
   const key = env.NAIJALINGO_API_KEY
   const baseUrl = env.NAIJALINGO_API_BASE_URL
-  const voice = env.NAIJALINGO_YO_VOICE_ID
+  const maleVoice = env.NAIJALINGO_YO_MALE_VOICE_ID
+  const femaleVoice = env.NAIJALINGO_YO_FEMALE_VOICE_ID
   const model = env.NAIJALINGO_MODEL
 
   // Presence only. The key is never echoed, in full or in part.
@@ -97,7 +98,19 @@ function main(): void {
     present(baseUrl) ? baseUrl : '',
   )
   record(configured(model), 'NAIJALINGO_MODEL is set', model)
-  record(configured(voice), 'NAIJALINGO_YO_VOICE_ID is set', voice)
+  // Both, always. Half a configuration serves half the Houses.
+  record(configured(maleVoice), 'NAIJALINGO_YO_MALE_VOICE_ID is set', maleVoice)
+  record(
+    configured(femaleVoice),
+    'NAIJALINGO_YO_FEMALE_VOICE_ID is set',
+    femaleVoice,
+  )
+  record(
+    maleVoice.trim() !== '' && maleVoice.trim() === femaleVoice.trim()
+      ? 'fail'
+      : 'ok',
+    'the two voice profiles are different voices',
+  )
 
   if (present(baseUrl)) {
     let parsed: URL | null = null
@@ -118,7 +131,7 @@ function main(): void {
 
   // Constructing the adapter is a LOCAL act: it validates configuration
   // completeness and builds a client. It opens no connection.
-  if (![key, baseUrl, model, voice].some(looksUnset)) {
+  if (![key, baseUrl, model, maleVoice, femaleVoice].some(looksUnset)) {
     try {
       const provider = createNaijalingoTtsProvider()
       record('ok', 'adapter constructs from configuration', provider.code)
@@ -152,8 +165,8 @@ function main(): void {
   console.log('\nWhat this preflight CANNOT establish:')
   console.log('  Remote authentication ................ NOT VERIFIED')
   console.log('  Configured model existence ........... NOT VERIFIED')
-  console.log('  Configured voice existence ........... NOT VERIFIED')
-  console.log(`  Configured voice is a ${NAIJALINGO_LANGUAGE} speaker ......... NOT VERIFIED`)
+  console.log('  Both configured voices exist ......... NOT VERIFIED')
+  console.log(`  Each is a ${NAIJALINGO_LANGUAGE} speaker of the right voice  NOT VERIFIED`)
   console.log(
     '\n  9jaLingo documents no zero-spend validation or discovery endpoint,',
   )
@@ -161,7 +174,10 @@ function main(): void {
     '  so these must be confirmed in the provider dashboard and the chosen',
   )
   console.log(
-    '  voice reviewed by a human before production use. Example ids in',
+    '  voices reviewed by a human before production use — including that',
+  )
+  console.log(
+    '  the male id is a man and the female id a woman. Example ids in',
   )
   console.log('  vendor documentation are not authority for a deployment.')
 

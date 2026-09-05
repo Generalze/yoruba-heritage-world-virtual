@@ -300,8 +300,10 @@ async function makeEligibleSacred(options: {
   const item = await createSacredContentItem(cmId, ctx, {
     code: nextCode('SC'),
     contentType: options.contentType ?? 'PRAYER',
-    scopeType: 'PLATFORM',
-    sacredHouseId: null,
+    // HOUSE-SCOPED, like every real launch block — House-less sacred
+    // content has no approved voice and is never synthesized.
+    scopeType: 'SACRED_HOUSE',
+    sacredHouseId: houseId,
     serviceId: null,
     sortOrder: 0,
   })
@@ -405,7 +407,7 @@ function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
     silenceDurationSeconds: null,
     shotFamily: 'MEDIUM_PRAYER',
     referenceRequirement: 'OPTIONAL',
-    allowedScopes: ['PLATFORM'],
+    allowedScopes: ['SACRED_HOUSE', 'PLATFORM'],
     pinnedContentVersionIds: [],
     ...overrides,
   }
@@ -753,6 +755,9 @@ beforeAll(async () => {
     code: `RTRH_${key}`.toUpperCase(),
     name: `RTR House ${key}`,
     slug: `rtrh-${key}`,
+    // Sacred speech is spoken in the voice of the House whose words
+    // they are, so a House that renders prayers needs an approved one.
+    approvedVoiceProfile: 'YO_MALE',
     status: 'PUBLISHED',
   })
   houseId = houseInsert[0].insertId

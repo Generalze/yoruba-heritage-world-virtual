@@ -31,7 +31,8 @@ const CONFIG: NaijalingoTtsConfig = {
   apiKey: 'test-secret-key-XyZ',
   baseUrl: 'https://api.example-9jalingo.test/v1',
   model: 'naijalingo-tts-1',
-  yorubaVoiceId: 'adeola_yo',
+  maleVoiceId: 'adeola_yo_male',
+  femaleVoiceId: 'adeola_yo_female',
 }
 
 /** A minimal, coherent PCM WAV: 44-byte canonical header + data. */
@@ -96,6 +97,7 @@ function request(
     sceneId: 'scene-9ja-unit',
     approvedText: APPROVED_TEXT,
     language: 'yo',
+    voiceProfile: 'YO_MALE',
     voicePolicy: 'APPROVED_TTS_ALLOWED',
     targetDurationMs: 10_000,
     ...overrides,
@@ -128,7 +130,7 @@ describe('9jaLingo adapter: the request that leaves this codebase', () => {
     expect(body.response_format).toBe('wav')
     // Voice and model come from TRUSTED SERVER CONFIG, never from the
     // request, a row, or a user.
-    expect(body.voice).toBe(CONFIG.yorubaVoiceId)
+    expect(body.voice).toBe(CONFIG.maleVoiceId)
     expect(body.model).toBe(CONFIG.model)
     // THE CLOSED ALLOWLIST — the structural no-cloning / no-duration-
     // instruction guarantee. No speaker sample, no reference audio, no
@@ -238,12 +240,18 @@ describe('9jaLingo adapter: failures stay bounded and secret-free', () => {
   })
 
   it('refuses to construct at all from an incomplete configuration', () => {
-    for (const gap of [
+    // BOTH voices are required. A deployment holding only the male
+    // voice would serve two Houses and discover the other two at
+    // somebody's paid render, so a half-configuration is refused at
+    // construction rather than at the first Ọ̀ṣun prayer.
+    const gaps: Array<NaijalingoTtsConfig> = [
       { ...CONFIG, apiKey: '' },
       { ...CONFIG, baseUrl: '   ' },
       { ...CONFIG, model: '' },
-      { ...CONFIG, yorubaVoiceId: '' },
-    ]) {
+      { ...CONFIG, maleVoiceId: '' },
+      { ...CONFIG, femaleVoiceId: '' },
+    ]
+    for (const gap of gaps) {
       let thrown: unknown
       try {
         createNaijalingoTtsProvider(gap, fakeClient(new Uint8Array(1)))
@@ -411,5 +419,69 @@ describe('structurally incapable of cloning', () => {
     expect(bodySection).toContain('model: string')
     expect(bodySection).not.toContain('targetDurationMs')
     expect(bodySection).not.toContain('duration')
+  })
+})
+
+describe('9jaLingo adapter: one profile, one voice, no borrowing', () => {
+  it('sends the MALE catalogue id for the male profile and the FEMALE id for the female one', async () => {
+    const wav = buildWav({ dataBytes: 32_000 })
+    for (const [profile, expected] of [
+      ['YO_MALE', CONFIG.maleVoiceId],
+      ['YO_FEMALE', CONFIG.femaleVoiceId],
+    ] as const) {
+      const client = fakeClient(wav)
+      const provider = createNaijalingoTtsProvider(CONFIG, client)
+      await provider.submitSpeech(request({ voiceProfile: profile }))
+      expect(client.calls).toHaveLength(1)
+      expect(client.calls[0].voice).toBe(expected)
+    }
+  })
+
+  it('never resolves one profile to the other profile’s voice', async () => {
+    // The failure that would matter is not an error — it is Abúlé Ọ̀ṣun
+    // spoken by a man because the male id was the one lying around.
+    const client = fakeClient(buildWav({ dataBytes: 32_000 }))
+    const provider = createNaijalingoTtsProvider(CONFIG, client)
+    await provider.submitSpeech(request({ voiceProfile: 'YO_FEMALE' }))
+    expect(client.calls[0].voice).not.toBe(CONFIG.maleVoiceId)
+  })
+
+  it('refuses a profile this deployment has no voice for — with ZERO client calls', async () => {
+    // Reaching the vendor to be told "unknown voice" would be a paid
+    // call whose outcome is UNKNOWN. The refusal happens first.
+    const half: NaijalingoTtsConfig = { ...CONFIG, femaleVoiceId: '   ' }
+    const client = fakeClient(buildWav({ dataBytes: 32_000 }))
+    // Construction itself already refuses a half-configuration, which
+    // is the earliest possible moment; this pins that the resolver
+    // would refuse too, rather than silently substituting.
+    let thrown: unknown
+    try {
+      createNaijalingoTtsProvider(half, client)
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(TtsProviderError)
+    expect((thrown as TtsProviderError).code).toBe('naijalingo_config_incomplete')
+    expect((thrown as TtsProviderError).retryable).toBe(false)
+    expect((thrown as TtsProviderError).message).toContain(
+      'NAIJALINGO_YO_FEMALE_VOICE_ID',
+    )
+    expect(client.calls).toHaveLength(0)
+  })
+
+  it('names the missing variable and never a value', async () => {
+    let thrown: unknown
+    try {
+      createNaijalingoTtsProvider(
+        { ...CONFIG, maleVoiceId: '' },
+        fakeClient(new Uint8Array(1)),
+      )
+    } catch (error) {
+      thrown = error
+    }
+    const message = (thrown as TtsProviderError).message
+    expect(message).toContain('NAIJALINGO_YO_MALE_VOICE_ID')
+    expect(message).not.toContain(CONFIG.femaleVoiceId)
+    expect(message).not.toContain(CONFIG.apiKey)
   })
 })

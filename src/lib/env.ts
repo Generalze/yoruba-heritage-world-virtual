@@ -248,8 +248,17 @@ const envObjectSchema = z
      * serving POST /v1/audio/speech). Plain: no credentials, no query,
      * no fragment. */
     NAIJALINGO_API_BASE_URL: z.string().default(''),
-    /** The approved Yoruba voice id for this deployment. */
-    NAIJALINGO_YO_VOICE_ID: z.string().default(''),
+    /**
+     * The approved Yoruba voices, one per production profile.
+     *
+     * TWO variables rather than one map: they are simpler to validate,
+     * cannot be broken by malformed JSON, and can be audited without
+     * printing either value. There is deliberately NO single global
+     * voice variable — a fallback is exactly how a House whose approved
+     * representative is a woman would quietly be given a man's voice.
+     */
+    NAIJALINGO_YO_MALE_VOICE_ID: z.string().default(''),
+    NAIJALINGO_YO_FEMALE_VOICE_ID: z.string().default(''),
     /** The operator-selected 9jaLingo model id. */
     NAIJALINGO_MODEL: z.string().default(''),
   })
@@ -385,7 +394,8 @@ const envObjectSchema = z
       for (const key of [
         'NAIJALINGO_API_KEY',
         'NAIJALINGO_API_BASE_URL',
-        'NAIJALINGO_YO_VOICE_ID',
+        'NAIJALINGO_YO_MALE_VOICE_ID',
+        'NAIJALINGO_YO_FEMALE_VOICE_ID',
         'NAIJALINGO_MODEL',
       ] as const) {
         if (cfg[key].trim().length === 0) {

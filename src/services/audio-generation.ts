@@ -6,9 +6,11 @@ import {
   GUIDANCE_LANGUAGES,
   SACRED_RUNTIME_CONTENT_TYPES,
   sacredContentVersionProfiles,
+  sacredHouses,
   spiritualContentItems,
   spiritualContentVersions,
 } from '@/db/schema'
+import { resolveHouseVoiceProfile } from '@/lib/sacred-voice-routing'
 import {
   computeFileSha256,
   getMediaStorage,
@@ -196,6 +198,13 @@ async function loadSacredSpeechAuthority(contentVersionId: number) {
         itemContentDomain: spiritualContentItems.contentDomain,
         itemContentType: spiritualContentItems.contentType,
         itemActive: spiritualContentItems.active,
+        // WHOSE WORDS THESE ARE. The House is read from the content
+        // item's own scope, not from the appointment, the job, or
+        // anything a caller supplied — the voice follows the approved
+        // text, so it cannot be steered by the circumstances of a
+        // booking. Both columns are metadata; neither is the body.
+        houseCode: sacredHouses.code,
+        houseApprovedVoiceProfile: sacredHouses.approvedVoiceProfile,
         versionStatus: spiritualContentVersions.status,
         versionLanguage: spiritualContentVersions.language,
         profileDigitalStorageAuthorized:
@@ -210,6 +219,13 @@ async function loadSacredSpeechAuthority(contentVersionId: number) {
       .innerJoin(
         spiritualContentItems,
         eq(spiritualContentItems.id, spiritualContentVersions.contentItemId),
+      )
+      // LEFT, because content that is not House-scoped legitimately has
+      // no House row. That case is not silently tolerated later: it has
+      // no approved voice, so it is refused.
+      .leftJoin(
+        sacredHouses,
+        eq(sacredHouses.id, spiritualContentItems.sacredHouseId),
       )
       .leftJoin(
         sacredContentVersionProfiles,
@@ -404,6 +420,17 @@ export async function compileSpeechSynthesisRequest(
   }
   const authority = verified.authority
 
+  // WHICH VOICE, decided before the body is read and before any
+  // provider exists in the story. A House with no approved voice stops
+  // here: nothing is fetched, nothing is submitted, nothing is spent.
+  const voice = resolveHouseVoiceProfile({
+    code: authority.metadata.houseCode,
+    approvedVoiceProfile: authority.metadata.houseApprovedVoiceProfile,
+  })
+  if (!voice.ok) {
+    return { status: 'FAILED', reasonCode: voice.reasonCode }
+  }
+
   // AUTHORIZED — and only now — retrieve the approved body.
   const body = await loadApprovedSpeechBody(authority.contentVersionId)
   if (body == null) {
@@ -448,6 +475,9 @@ export async function compileSpeechSynthesisRequest(
       // EXACT approved text — verbatim, nothing added, nothing removed.
       approvedText: body,
       language: authority.language,
+      // The House's own approved voice. Not a provider id, not a
+      // caller's choice, and with no fallback to "the other one".
+      voiceProfile: voice.profile,
       voicePolicy: TTS_PERMITTED_VOICE_POLICY,
       targetDurationMs: authority.targetDurationMs,
     },

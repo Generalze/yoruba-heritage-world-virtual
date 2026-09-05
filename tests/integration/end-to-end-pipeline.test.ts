@@ -290,8 +290,10 @@ async function makeEligibleSacred(options: {
   const item = await createSacredContentItem(cmId, ctx, {
     code: nextCode('SC'),
     contentType: 'PRAYER',
-    scopeType: 'PLATFORM',
-    sacredHouseId: null,
+    // HOUSE-SCOPED, like every real launch block — House-less sacred
+    // content has no approved voice and is never synthesized.
+    scopeType: 'SACRED_HOUSE',
+    sacredHouseId: houseId,
     serviceId: null,
     sortOrder: 0,
   })
@@ -372,7 +374,7 @@ function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
     silenceDurationSeconds: null,
     shotFamily: 'MEDIUM_PRAYER',
     referenceRequirement: 'OPTIONAL',
-    allowedScopes: ['PLATFORM'],
+    allowedScopes: ['SACRED_HOUSE', 'PLATFORM'],
     pinnedContentVersionIds: [],
     ...overrides,
   }
@@ -711,6 +713,9 @@ beforeAll(async () => {
     code: `E2EH_${key}`.toUpperCase(),
     name: `E2E House ${key}`,
     slug: `e2eh-${key}`,
+    // Sacred speech is spoken in the voice of the House whose words
+    // they are, so a House that renders prayers needs an approved one.
+    approvedVoiceProfile: 'YO_MALE',
     status: 'PUBLISHED',
   })
   houseId = houseInsert[0].insertId
@@ -1536,7 +1541,10 @@ describe('orchestration contract', () => {
     const migrations = readdirSync(join(process.cwd(), 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort()
-    expect(migrations).toHaveLength(20)
-    expect(migrations.at(-1)).toMatch(/^0019_/)
+    // 0020 adds ONE COLUMN to sacred_houses — the House's approved
+    // speaking voice (canon §50). Still no table: the pipeline stores
+    // nothing of its own, and the voice belongs to the House.
+    expect(migrations).toHaveLength(21)
+    expect(migrations.at(-1)).toMatch(/^0020_/)
   }, 240_000)
 })

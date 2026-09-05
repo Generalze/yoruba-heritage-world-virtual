@@ -116,6 +116,7 @@ import {
   localToUtcMs,
   utcMsToSql,
 } from '@/lib/schedule-time'
+import { env } from '@/lib/env'
 import type {
   AudioGenerationDependencies,
   AudioTaskPollResult,
@@ -281,13 +282,20 @@ async function makeEligibleSacred(options: {
   voicePolicy?: 'TEXT_ONLY' | 'APPROVED_TTS_ALLOWED' | 'HUMAN_RECORDED_REQUIRED'
   durationHintSeconds?: number
   language?: 'en' | 'yo'
+  /** A DIFFERENT House than the suite's own — for proving refusals. */
+  sacredHouseId?: number
 }): Promise<{ itemId: number; versionId: number; bodyMarker: string }> {
   const bodyMarker = `${SACRED_BODY_MARKER} ${crypto.randomUUID()}`
   const item = await createSacredContentItem(cmId, ctx, {
     code: nextCode('SC'),
     contentType: options.contentType ?? 'PRAYER',
-    scopeType: 'PLATFORM',
-    sacredHouseId: null,
+    // HOUSE-SCOPED, like every real launch block. Sacred speech is
+    // spoken in the voice of the House whose words they are, so
+    // House-less sacred content has no approved voice and is refused;
+    // fixtures that pretended otherwise were testing a shape that no
+    // longer reaches synthesis.
+    scopeType: 'SACRED_HOUSE',
+    sacredHouseId: options.sacredHouseId ?? houseId,
     serviceId: null,
     sortOrder: 0,
   })
@@ -390,7 +398,9 @@ function filterSlot(overrides: Partial<SlotInput> = {}): SlotInput {
     silenceDurationSeconds: null,
     shotFamily: 'MEDIUM_PRAYER',
     referenceRequirement: 'OPTIONAL',
-    allowedScopes: ['PLATFORM'],
+    // The suite's sacred blocks belong to the suite's House, exactly as
+    // every launch block belongs to one of the four.
+    allowedScopes: ['SACRED_HOUSE'],
     pinnedContentVersionIds: [],
     ...overrides,
   }
@@ -734,6 +744,11 @@ beforeAll(async () => {
     code: `RTAH_${key}`.toUpperCase(),
     name: `RTA House ${key}`,
     slug: `rtah-${key}`,
+    // This suite owns its House, so it also owns that House's approved
+    // voice — which is why the routing rule is governed data and not a
+    // source-code literal: a fixture House can be given a ruled voice
+    // without borrowing, mutating or impersonating a real one.
+    approvedVoiceProfile: 'YO_MALE',
     status: 'PUBLISHED',
   })
   houseId = houseInsert[0].insertId
@@ -1111,6 +1126,10 @@ describe('red-team: the approved body is spoken exactly and never persisted', ()
       expect(captured[0].approvedText).toBe(bodyMarker)
       expect(captured[0].language).toBe('en')
       expect(captured[0].voicePolicy).toBe('APPROVED_TTS_ALLOWED')
+      // The House's own approved voice, as a PROFILE — the platform's
+      // word for a voice, not the vendor's. No catalogue id, no UUID,
+      // and nothing a provider could resolve to a particular person.
+      expect(captured[0].voiceProfile).toBe('YO_MALE')
       // TEETH: the contract carries NO likeness input at all — there is
       // nothing on this request a provider could clone a voice from.
       expect(Object.keys(captured[0]).sort()).toEqual([
@@ -1121,6 +1140,7 @@ describe('red-team: the approved body is spoken exactly and never persisted', ()
         'sceneId',
         'targetDurationMs',
         'voicePolicy',
+        'voiceProfile',
       ])
     } finally {
       resetTtsProviderForTests()
@@ -3162,7 +3182,8 @@ const NAIJALINGO_TEST_CONFIG: NaijalingoTtsConfig = {
   apiKey: 'rt-test-secret-key',
   baseUrl: 'https://api.example-9jalingo.test/v1',
   model: 'naijalingo-tts-1',
-  yorubaVoiceId: 'adeola_yo',
+  maleVoiceId: 'adeola_yo_male',
+  femaleVoiceId: 'adeola_yo_female',
 }
 
 /** Minimal coherent PCM WAV (16 kHz mono 16-bit ⇒ byteRate 32000). */
@@ -3263,7 +3284,9 @@ describe('red-team: 9jaLingo synchronous synthesis (fake client, ZERO network)',
       expect(calls[0].input).toBe(bodyMarker)
       expect(calls[0].lang).toBe('yo')
       expect(calls[0].response_format).toBe('wav')
-      expect(calls[0].voice).toBe(NAIJALINGO_TEST_CONFIG.yorubaVoiceId)
+      // The fixture House speaks with the approved male voice, so the
+      // MALE catalogue id is the one that left the process.
+      expect(calls[0].voice).toBe(NAIJALINGO_TEST_CONFIG.maleVoiceId)
       expect(calls[0].model).toBe(NAIJALINGO_TEST_CONFIG.model)
       expect(Object.keys(calls[0]).sort()).toEqual([
         'input',
@@ -3661,5 +3684,139 @@ describe('red-team: nothing personal can become sacred speech', () => {
       expect(source).not.toContain('cannot be byte-identical')
       expect(source).not.toContain('never byte-identical')
     }
+  })
+})
+
+// ----------------------------------------------------------------------------
+// Step 21: the House decides the voice — and an undecided House is silent
+// ----------------------------------------------------------------------------
+
+/** Sets the fixture House's approved voice for one test and puts it
+ * back afterwards. The suite owns this House, so it owns its voice. */
+async function withHouseVoice(
+  profile: 'YO_MALE' | 'YO_FEMALE' | null,
+  run: () => Promise<void>,
+): Promise<void> {
+  const db = getDb()
+  try {
+    await db
+      .update(sacredHouses)
+      .set({ approvedVoiceProfile: profile })
+      .where(eq(sacredHouses.id, houseId))
+    await run()
+  } finally {
+    await db
+      .update(sacredHouses)
+      .set({ approvedVoiceProfile: 'YO_MALE' })
+      .where(eq(sacredHouses.id, houseId))
+  }
+}
+
+describe('red-team: the voice belongs to the House, not to the caller', () => {
+  it('speaks a House-scoped prayer in that House’s approved voice', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    await withHouseVoice('YO_FEMALE', async () => {
+      const captured: Array<SpeechSynthesisRequest> = []
+      setTtsProviderForTests(capturingProvider(captured))
+      try {
+        const submitted = await submitSpeech({
+          requirement,
+          ...identity(jobId, manifest),
+        })
+        expect(submitted.status).toBe('SUBMITTED')
+        expect(captured).toHaveLength(1)
+        // TEETH: the voice followed the HOUSE. Nothing about the
+        // requirement, the job or the appointment changed between this
+        // test and the male-voiced one — only whose words they are.
+        expect(captured[0].voiceProfile).toBe('YO_FEMALE')
+      } finally {
+        resetTtsProviderForTests()
+      }
+    })
+  }, 240_000)
+
+  it('refuses a House that has no approved voice — before the body is read', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    await withHouseVoice(null, async () => {
+      const counters = { submits: 0, polls: 0 }
+      setTtsProviderForTests(countingProvider('MOCK_TTS', counters))
+      try {
+        const compiled = await compileSpeechSynthesisRequest(
+          requirement,
+          identity(jobId, manifest),
+        )
+        expect(compiled.status).toBe('FAILED')
+        if (compiled.status !== 'FAILED') return
+        // A bounded machine code — never a provider string, never a
+        // House name, and never the words themselves.
+        expect(compiled.reasonCode).toBe('voice_profile_unassigned')
+
+        const submitted = await submitSpeech({
+          requirement,
+          ...identity(jobId, manifest),
+        })
+        expect(submitted.status).toBe('FAILED')
+        if (submitted.status !== 'FAILED') return
+        expect(submitted.errorCode).toBe('voice_profile_unassigned')
+        // TEETH: no provider was reached, so nothing was spent and the
+        // spend state is provable rather than assumed.
+        expect(submitted.spendState).toBe('NOT_SENT')
+        expect(counters.submits).toBe(0)
+      } finally {
+        resetTtsProviderForTests()
+      }
+    })
+  }, 240_000)
+
+  it('carries a PROFILE across the boundary, never a vendor catalogue id', async () => {
+    const { jobId, manifest, requirement } = await makeTtsJob()
+    const captured: Array<SpeechSynthesisRequest> = []
+    setTtsProviderForTests(capturingProvider(captured))
+    try {
+      await submitSpeech({ requirement, ...identity(jobId, manifest) })
+      expect(captured).toHaveLength(1)
+      // Everything EXCEPT the approved body, whose text is the House's
+      // own and is checked verbatim elsewhere. (This suite's fixture
+      // body carries a UUID marker, so including it here would prove
+      // nothing about the vendor's namespace.)
+      const { approvedText, ...rest } = captured[0]
+      expect(approvedText.length).toBeGreaterThan(0)
+      const serialized = JSON.stringify(rest)
+      // The vendor's namespace stops at the adapter. Whatever this
+      // deployment has configured, it is not in the compiled request —
+      // and neither is anything else UUID-shaped.
+      for (const configured of [
+        env.NAIJALINGO_YO_MALE_VOICE_ID,
+        env.NAIJALINGO_YO_FEMALE_VOICE_ID,
+      ]) {
+        if (configured.trim().length > 0) {
+          expect(serialized).not.toContain(configured)
+        }
+      }
+      expect(serialized).not.toMatch(
+        /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/,
+      )
+      // Nor the API key, in whole or in part.
+      if (env.NAIJALINGO_API_KEY.trim().length > 0) {
+        expect(serialized).not.toContain(env.NAIJALINGO_API_KEY)
+      }
+    } finally {
+      resetTtsProviderForTests()
+    }
+  }, 240_000)
+
+  it('has no path by which a request could choose its own voice', () => {
+    const service = readFileSync(
+      join(process.cwd(), 'src/services/audio-generation.ts'),
+      'utf8',
+    )
+    // The profile is resolved from the loaded House row and from
+    // nothing else. If the compiled request ever read a voice out of
+    // the requirement, the manifest or the task identity, a forged
+    // manifest could pick the voice of a House it does not belong to.
+    expect(service).toContain('voiceProfile: voice.profile')
+    expect(service).not.toContain('requirement.voiceProfile')
+    expect(service).not.toContain('input.voiceProfile')
+    expect(service).not.toContain('request.voiceProfile')
   })
 })

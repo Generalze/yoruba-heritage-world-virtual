@@ -207,7 +207,8 @@ export function checkProductionPreflight(
     for (const name of [
       'NAIJALINGO_API_KEY',
       'NAIJALINGO_API_BASE_URL',
-      'NAIJALINGO_YO_VOICE_ID',
+      'NAIJALINGO_YO_MALE_VOICE_ID',
+      'NAIJALINGO_YO_FEMALE_VOICE_ID',
       'NAIJALINGO_MODEL',
     ] as const) {
       if (cfg[name].trim().length === 0) {

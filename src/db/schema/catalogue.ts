@@ -11,6 +11,7 @@ import {
   varchar,
 } from 'drizzle-orm/mysql-core'
 
+import { SACRED_VOICE_PROFILES } from '@/lib/sacred-voice-routing'
 import { users } from './users'
 
 /**
@@ -91,6 +92,21 @@ export const sacredHouses = mysqlTable(
     name: varchar('name', { length: 150 }).notNull(),
     slug: varchar('slug', { length: 100 }).notNull(),
     shortDescription: varchar('short_description', { length: 1000 }),
+    /**
+     * The approved production voice for machine-spoken sacred text
+     * belonging to this House. NULL means no voice has been approved,
+     * and NULL fails closed — a House without a ruled voice is never
+     * spoken by a machine, it is not given a default one.
+     *
+     * The four launch Houses are additionally pinned in source
+     * (`SACRED_HOUSE_VOICE_PROFILE`); for those, a value here that
+     * disagrees with the ruling stops synthesis rather than overriding
+     * it. See src/lib/sacred-voice-routing.ts.
+     */
+    approvedVoiceProfile: mysqlEnum(
+      'approved_voice_profile',
+      SACRED_VOICE_PROFILES,
+    ),
     status: mysqlEnum('status', CATALOGUE_STATUSES).notNull().default('DRAFT'),
     approvedBy: bigint('approved_by', {
       mode: 'number',

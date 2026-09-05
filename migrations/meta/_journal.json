@@ -141,6 +141,13 @@
       "when": 1788209989962,
       "tag": "0019_black_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "5",
+      "when": 1788615389632,
+      "tag": "0020_chief_charles_xavier",
+      "breakpoints": true
     }
   ]
 }

@@ -378,6 +378,9 @@ async function makeHouse(options: {
     code: `${PREFIX}H_${key}`.toUpperCase(),
     name: `HSVB House ${key}`,
     slug: `hsvb-${key}`,
+    // Sacred speech is spoken in the voice of the House whose words
+    // they are, so a House that renders prayers needs an approved one.
+    approvedVoiceProfile: 'YO_MALE',
     status: 'PUBLISHED',
   })
   const houseId = inserted[0].insertId
