@@ -13,19 +13,24 @@ import type {
  * 9jaLingo speech synthesis adapter (Phase One, Step 20) — the FIRST
  * approved real TTS vendor, and Yoruba-only by deliberate policy.
  *
- * THE API, from 9jaLingo's official documentation: an OpenAI-compatible
- * `POST /v1/audio/speech` that synthesizes in the request itself and
- * answers with RAW AUDIO BYTES (WAV by default). Parameters are the
- * OpenAI TTS set (`model`, `voice`, `input`, `response_format`) plus
- * 9jaLingo's `lang` extension (`yo` for Yoruba). 9jaLingo also ships
- * its own SDKs (Python and Node, `npm install naijalingo`); this
- * adapter DELIBERATELY uses the equally documented OpenAI-compatible
- * surface instead, through the official `openai` client — pinned
- * EXACTLY (see package.json), since a paid transport must not shift
- * under a range — with `baseURL` + `apiKey` → `Authorization: Bearer`.
- * Auth and transport are the client's documented job, never a
- * hand-rolled HTTP layer: guessing at headers is how bugs become
- * silent 401 retries against a paid endpoint.
+ * THE API: an OpenAI-compatible `POST /v1/audio/speech` that
+ * synthesizes in the request itself and answers with RAW AUDIO BYTES
+ * (WAV by default). Parameters are the OpenAI TTS set (`model`,
+ * `voice`, `input`, `response_format`) plus 9jaLingo's `lang`
+ * extension (`yo` for Yoruba). 9jaLingo also ships its own SDKs
+ * (Python and Node, `npm install naijalingo`); this adapter
+ * DELIBERATELY uses the OpenAI-compatible surface instead, through the
+ * official `openai` client — pinned EXACTLY (see package.json), since
+ * a paid transport must not shift under a range.
+ *
+ * COMPATIBLE IN ROUTE AND SHAPE, NOT IN AUTH. That distinction was
+ * verified against the live endpoint rather than assumed, after the
+ * first real synthesis attempt was refused 401: the vendor
+ * authenticates synthesis on `x-api-key`, and ignores the
+ * `Authorization: Bearer` header the client sends of its own accord.
+ * Transport, TLS and timeouts remain entirely the client's documented
+ * job; the one header is supplied through its documented
+ * `defaultHeaders`, never through an HTTP layer of ours.
  *
  * SYNCHRONOUS, HONESTLY. One call, one spend, bytes or an error —
  * there is no provider-side job, so `submitSpeech` answers
@@ -66,6 +71,10 @@ export const NAIJALINGO_TTS_CODE = '9JALINGO'
 
 /** The ONE language this adapter is approved to speak in Phase One. */
 export const NAIJALINGO_LANGUAGE = 'yo'
+
+/** The header 9jaLingo authenticates synthesis on. Not Bearer — see
+ * createOpenAiCompatibleSpeechClient. */
+export const NAIJALINGO_AUTH_HEADER = 'x-api-key'
 
 const NAIJALINGO_RESPONSE_FORMAT = 'wav'
 const NAIJALINGO_MIME_TYPE = 'audio/wav'
@@ -154,10 +163,31 @@ function resolveVoiceId(
 
 /**
  * Production transport: the official `openai` client pointed at the
- * operator-configured 9jaLingo base URL. The client owns auth
- * (Authorization: Bearer <NAIJALINGO_API_KEY>), TLS, and timeout;
- * `.asResponse()` hands back the raw HTTP response so the WAV bytes
- * are read directly, never JSON-parsed.
+ * operator-configured 9jaLingo base URL. The client owns TLS, timeout
+ * and request plumbing; `.asResponse()` hands back the raw HTTP
+ * response so the WAV bytes are read directly, never JSON-parsed.
+ *
+ * AUTH IS `x-api-key`, NOT BEARER — established against the live
+ * endpoint, not assumed. `POST /v1/audio/speech` answers 401 with
+ * `{"detail":"Missing API Key"}` to an Authorization: Bearer header
+ * carrying a key the same deployment uses successfully elsewhere, and
+ * answers a normal validation 422 to the identical request bearing
+ * `x-api-key`. So the vendor's synthesis surface is OpenAI-compatible
+ * in ROUTE and in REQUEST SHAPE, but not in authentication.
+ *
+ * This is still the client's documented public surface —
+ * `defaultHeaders` — rather than hand-rolled auth: no signing, no
+ * header assembly, no TLS handling of our own. The client's own
+ * Authorization header rides along and the vendor ignores it.
+ *
+ * The request SHAPE needed no change, which is worth recording because
+ * it was checked rather than hoped: the endpoint's required field is
+ * `text`, and it accepts `input` as an alias for it (a request sending
+ * only `input` draws a type error on both, never "text is missing").
+ * `voice` is a real schema field, mirrored server-side into `voice_id`
+ * and `speaker` — so a per-House voice is genuinely honoured and not
+ * silently dropped. `lang` mirrors into `language`/`language_code`.
+ * `response_format` is an enum of wav, mp3, pcm, flac, opus, aac.
  */
 function createOpenAiCompatibleSpeechClient(
   config: NaijalingoTtsConfig,
@@ -167,6 +197,10 @@ function createOpenAiCompatibleSpeechClient(
     baseURL: config.baseUrl,
     maxRetries: NAIJALINGO_CLIENT_LIMITS.maxRetries,
     timeout: NAIJALINGO_CLIENT_LIMITS.timeoutMs,
+    // The header the vendor actually authenticates on. Without it the
+    // synthesis is refused 401 before any work — which is how this was
+    // found, and is at least a safe way to fail.
+    defaultHeaders: { [NAIJALINGO_AUTH_HEADER]: config.apiKey },
   })
   return {
     async createSpeech(body: NaijalingoSpeechRequestBody): Promise<Uint8Array> {
@@ -180,6 +214,70 @@ function createOpenAiCompatibleSpeechClient(
       return new Uint8Array(await response.arrayBuffer())
     },
   }
+}
+
+/**
+ * WHAT WENT WRONG, said in the only vocabulary that is safe to say.
+ *
+ * The raw transport error must never leave this file: it can echo the
+ * request body — and the request body is the approved sacred text —
+ * along with headers and credentials-adjacent detail. But "the call
+ * failed" alone is not operable either. An operator staring at a
+ * rejected synthesis cannot tell a wrong API key from a wrong voice id
+ * from an unreachable host, and neither could this checkpoint.
+ *
+ * So exactly one machine-safe fact is carried out: the HTTP status the
+ * vendor answered with, or the fact that no status was ever reached.
+ * A status is a number. It cannot contain a prayer.
+ *
+ * TWO CLASSES, BECAUSE THEY NEED DIFFERENT HUMAN ANSWERS.
+ *
+ * - 5xx is PROVIDER UNAVAILABLE: the vendor accepted the request and
+ *   then failed to serve it. Nothing about this deployment is wrong,
+ *   and it may well succeed later — but "later" is an operator's
+ *   decision, taken with the billing question settled, never an
+ *   automatic one.
+ * - 4xx is REJECTED: the vendor understood the request and declined
+ *   it. That is a configuration or credential fault, and it will keep
+ *   failing identically until a person changes something.
+ *
+ * BOTH STAY `retryable: false`. That flag is machine-readable, and
+ * "an operator may decide to retry" is not a thing a machine may act
+ * on: a retried synthesis is a second paid spend. Nothing in the audio
+ * path reads this flag today, but a future caller that did must not be
+ * able to find permission here for an automatic second charge. The
+ * distinction lives in the CODE, which humans read, not in the flag,
+ * which programs obey.
+ *
+ * None of this changes the SPEND verdict either. A 4xx looks like a
+ * request refused before any work was done, but "looks like" is not
+ * evidence, and inferring NOT_SENT from a status code is precisely the
+ * kind of guess that turns into a double charge. Every failure here
+ * remains an UNKNOWN outcome for the executor to quarantine.
+ */
+
+/** 5xx: accepted, then not served. An operator may retry; no machine
+ * may. */
+export const PROVIDER_UNAVAILABLE_PREFIX = 'provider_unavailable_http_'
+
+/** 4xx: understood and declined. Will fail identically until a person
+ * changes the configuration or the credential. */
+export const PROVIDER_REJECTED_PREFIX = 'provider_rejected_http_'
+
+function transportFailureCode(error: unknown): string {
+  if (error instanceof OpenAI.APIError && typeof error.status === 'number') {
+    const status = error.status
+    if (status >= 500) return `${PROVIDER_UNAVAILABLE_PREFIX}${status}`
+    if (status >= 400) return `${PROVIDER_REJECTED_PREFIX}${status}`
+    return `provider_call_failed_http_${status}`
+  }
+  if (error instanceof OpenAI.APIConnectionTimeoutError) {
+    return 'provider_call_timeout'
+  }
+  if (error instanceof OpenAI.APIConnectionError) {
+    return 'provider_unreachable'
+  }
+  return 'provider_call_failed'
 }
 
 /**
@@ -326,13 +424,13 @@ export function createNaijalingoTtsProvider(
           lang: NAIJALINGO_LANGUAGE,
           response_format: NAIJALINGO_RESPONSE_FORMAT,
         })
-      } catch {
-        // The raw error is deliberately dropped: it can echo the
-        // request body (the approved sacred text) or credentials-
-        // adjacent transport detail. The call was in flight, so the
-        // spend outcome is unknown — the executor quarantines.
+      } catch (caught) {
+        // The raw error is deliberately dropped; only a bounded status
+        // classification survives (see transportFailureCode). The call
+        // was in flight, so the spend outcome is unknown — the
+        // executor quarantines.
         throw new TtsProviderError(
-          'provider_call_failed',
+          transportFailureCode(caught),
           'The 9jaLingo synthesis call failed.',
           false,
         )

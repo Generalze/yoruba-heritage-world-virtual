@@ -167,19 +167,26 @@ function main(): void {
   console.log('  Configured model existence ........... NOT VERIFIED')
   console.log('  Both configured voices exist ......... NOT VERIFIED')
   console.log(`  Each is a ${NAIJALINGO_LANGUAGE} speaker of the right voice  NOT VERIFIED`)
+  console.log('')
   console.log(
-    '\n  9jaLingo documents no zero-spend validation or discovery endpoint,',
+    '  Not because they are unknowable — the provider publishes a model',
   )
   console.log(
-    '  so these must be confirmed in the provider dashboard and the chosen',
+    '  and voice catalogue, and `bun run smoke:tts:provider` checks all four',
   )
   console.log(
-    '  voices reviewed by a human before production use — including that',
+    '  of them against it: read-only, no synthesis, no characters billed.',
   )
   console.log(
-    '  the male id is a man and the female id a woman. Example ids in',
+    '  They are unknowable HERE, deliberately: this command makes no network',
   )
-  console.log('  vendor documentation are not authority for a deployment.')
+  console.log(
+    '  call at all, so it can still answer for a configuration when the',
+  )
+  console.log(
+    '  vendor is down. Example ids in vendor documentation are never',
+  )
+  console.log('  authority for a deployment either way.')
 
   const fails = results.filter((r) => r.level === 'fail').length
   const warns = results.filter((r) => r.level === 'warn').length

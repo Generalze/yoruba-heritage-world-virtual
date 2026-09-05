@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import OpenAI from 'openai'
 
 import { RESERVATION_STALE_AFTER_MS } from '@/services/generation-jobs'
 import {
+  NAIJALINGO_AUTH_HEADER,
   NAIJALINGO_CLIENT_LIMITS,
+  PROVIDER_REJECTED_PREFIX,
+  PROVIDER_UNAVAILABLE_PREFIX,
   NAIJALINGO_LANGUAGE,
   NAIJALINGO_TTS_CODE,
   createNaijalingoTtsProvider,
@@ -483,5 +489,98 @@ describe('9jaLingo adapter: one profile, one voice, no borrowing', () => {
     expect(message).toContain('NAIJALINGO_YO_MALE_VOICE_ID')
     expect(message).not.toContain(CONFIG.femaleVoiceId)
     expect(message).not.toContain(CONFIG.apiKey)
+  })
+})
+
+describe('9jaLingo adapter: the transport contract, as the vendor actually implements it', () => {
+  const NEWLINE = String.fromCharCode(10)
+  const adapterSource = readFileSync(
+    join(process.cwd(), 'src/providers/tts/naijalingo.ts'),
+    'utf8',
+  )
+
+  it('authenticates with x-api-key, because Bearer is refused 401', () => {
+    // Established against the live endpoint, not assumed: the same key
+    // that answers 200 on GET /models draws 401 "Missing API Key" on
+    // POST /audio/speech under Authorization: Bearer, and a normal
+    // validation 422 under x-api-key. The vendor is OpenAI-compatible
+    // in route and request shape, but not in authentication.
+    expect(NAIJALINGO_AUTH_HEADER).toBe('x-api-key')
+    expect(adapterSource).toContain('defaultHeaders')
+    expect(adapterSource).toContain('[NAIJALINGO_AUTH_HEADER]: config.apiKey')
+  })
+
+  async function failWith(status: number, detail: string): Promise<TtsProviderError> {
+    const provider = createNaijalingoTtsProvider(CONFIG, {
+      async createSpeech() {
+        throw new OpenAI.APIError(status, undefined, detail, undefined)
+      },
+    })
+    return (await thrownBy(() =>
+      provider.submitSpeech(request()),
+    )) as TtsProviderError
+  }
+
+  it('carries the HTTP status out of a failure, and nothing else', async () => {
+    // "The call failed" is unoperable: it cannot distinguish a wrong
+    // key from a wrong voice from an unreachable host. A status is a
+    // number, and a number cannot contain a prayer.
+    const marker = 'transport-detail-that-must-not-escape'
+    const error = await failWith(
+      502,
+      `${marker} input=${APPROVED_TEXT} key=${CONFIG.apiKey}`,
+    )
+    expect(error).toBeInstanceOf(TtsProviderError)
+    expect(error.code).toBe(`${PROVIDER_UNAVAILABLE_PREFIX}502`)
+    const surface = `${error.message} ${error.code} ${error.name}`
+    expect(surface).not.toContain(marker)
+    expect(surface).not.toContain(APPROVED_TEXT)
+    expect(surface).not.toContain(CONFIG.apiKey)
+  })
+
+  it('separates "accepted then failed" from "understood and declined"', async () => {
+    // The two need different human answers. A 502 says the vendor's
+    // worker broke after taking the request — nothing here is
+    // misconfigured. A 401 says the vendor read the request and
+    // refused it, and it will refuse the next one identically until a
+    // person changes something.
+    for (const status of [500, 502, 503, 504]) {
+      expect((await failWith(status, 'upstream')).code).toBe(
+        `${PROVIDER_UNAVAILABLE_PREFIX}${status}`,
+      )
+    }
+    for (const status of [400, 401, 403, 404, 422, 429]) {
+      expect((await failWith(status, 'declined')).code).toBe(
+        `${PROVIDER_REJECTED_PREFIX}${status}`,
+      )
+    }
+  })
+
+  it('never marks a paid failure retryable, in EITHER class', async () => {
+    // "An operator may decide to retry" is not something a machine may
+    // act on: a retried synthesis is a second charge. The distinction
+    // lives in the code, which people read — never in this flag, which
+    // programs obey.
+    for (const status of [500, 502, 401, 422]) {
+      expect((await failWith(status, 'x')).retryable).toBe(false)
+    }
+  })
+
+  it('never converts a status into a spend verdict', () => {
+    // A 4xx LOOKS like a request refused before any work was done, and
+    // inferring NOT_SENT from that is exactly how a double charge
+    // starts. Every transport failure stays retryable:false and leaves
+    // the spend outcome unknown for the executor to quarantine — so
+    // the adapter's CODE never names a spend state, whatever its
+    // prose explains about one.
+    const code = adapterSource
+      .split(NEWLINE)
+      .filter((line) => {
+        const trimmed = line.trimStart()
+        return !trimmed.startsWith('//') && !trimmed.startsWith('*') && !trimmed.startsWith('/*')
+      })
+      .join(NEWLINE)
+    expect(code).not.toContain('spendState')
+    expect(code).not.toContain('NOT_SENT')
   })
 })

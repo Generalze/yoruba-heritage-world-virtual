@@ -1502,12 +1502,48 @@ neither generation nor synthesis runs normally.
 
 **SPEECH HAS ONE APPROVED ADAPTER: 9JALINGO (Step 20).** 9jaLingo's
 officially documented OpenAI-compatible `POST /v1/audio/speech`, spoken
-to through the official `openai` client (`baseURL` + `apiKey` — auth is
-the client's documented job, never hand-rolled; only its DOCUMENTED
-public surface is used, and the dependency is pinned to an EXACT
-version because a paid transport must not shift under a semver range),
-with transport retries at ZERO (a retried synthesis is a second spend)
-and a timeout bounded below the reservation staleness threshold.
+to through the official `openai` client (only its DOCUMENTED public
+surface is used, and the dependency is pinned to an EXACT version
+because a paid transport must not shift under a semver range), with
+transport retries at ZERO (a retried synthesis is a second spend) and a
+timeout bounded below the reservation staleness threshold.
+
+**AUTHENTICATION IS `x-api-key`, AS A PROVIDER-SPECIFIC TRANSPORT FACT
+— NOT AN OPENAI-COMPATIBILITY ASSUMPTION.** Established against the
+live service during the first real synthesis checkpoint, after it was
+refused: an `Authorization: Bearer` header carrying a key that answers
+200 on `GET /v1/models` draws `401 {"detail":"Missing API Key"}` on
+`POST /v1/audio/speech`, while the identical request bearing
+`x-api-key` reaches normal validation. 9jaLingo's published reference
+presents the service as OpenAI-compatible and documents the
+`/v1/audio/speech` contract, but does not currently expose an
+`Authorization` requirement, so TESTED LIVE BEHAVIOUR is the source of
+truth for this adapter. The vendor is compatible in ROUTE and in
+REQUEST SHAPE — the required field is `text`, with `input` accepted as
+an alias for it; `voice` is a real schema field mirrored server-side
+into `voice_id`/`speaker`; `lang` mirrors into
+`language`/`language_code`; `response_format` is an enum of wav, mp3,
+pcm, flac, opus, aac — and NOT compatible in authentication. The header
+is supplied through the client's documented `defaultHeaders`; TLS,
+timeouts and request plumbing remain entirely the client's job, and no
+HTTP layer of ours exists.
+
+**TRANSPORT FAILURES ARE CLASSIFIED, NEVER AUTO-RETRIED.** A bounded
+status classification leaves the adapter —
+`provider_unavailable_http_<status>` for 5xx (the vendor accepted the request and then failed to
+serve it: nothing here is misconfigured, and a retry is an OPERATOR's
+decision taken with the billing question settled),
+`provider_rejected_http_<status>` for 4xx (understood and declined:
+it will fail identically until a person changes a credential or a
+configuration value), plus `provider_call_timeout` and
+`provider_unreachable`. Only the HTTP status crosses that boundary: a
+raw provider error can echo the request body, and the request body is
+the approved sacred text. BOTH classes stay `retryable: false` — "an
+operator may decide to retry" is not something a machine may act on —
+and neither converts a status into a SPEND verdict: inferring NOT_SENT
+from a 4xx is precisely the guess that becomes a double charge, so
+every in-flight failure stays an UNKNOWN outcome to be quarantined.
+
 9jaLingo also publishes its own Python and Node SDKs; the
 OpenAI-compatible surface is the deliberate choice here, not a
 workaround for an SDK that does not exist. The vendor synthesizes

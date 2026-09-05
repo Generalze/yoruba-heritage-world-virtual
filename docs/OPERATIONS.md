@@ -154,6 +154,32 @@ Governance facts an operator should know:
 - Approved **human recordings remain preferred** and are never
   synthesized; a manifest built entirely from them never touches this
   adapter.
+- **Authentication is `x-api-key`**, verified against the live service,
+  not assumed from OpenAI compatibility. A key that answers 200 on
+  `GET /v1/models` is still refused `401 Missing API Key` on
+  `POST /v1/audio/speech` under `Authorization: Bearer`.
+- **Transport failures are classified but never auto-retried.**
+  `provider_unavailable_http_<status>` (5xx) means the vendor accepted
+  the request and then failed to serve it — nothing local is wrong, and
+  a retry is an operator's call once the billing question is settled.
+  `provider_rejected_http_<status>` (4xx) means it was understood and
+  declined, and will fail identically until a person changes something.
+  Neither is a spend verdict: an in-flight failure leaves the outcome
+  UNKNOWN and is quarantined.
+
+### Two speech checks, deliberately separate
+
+- `bun run smoke:tts` — **strictly local**. No network, no spend, and
+  it cannot fail because 9jaLingo is down. Use it to answer "is my
+  configuration well-formed?" anywhere, any time.
+- `bun run smoke:tts:provider` — **read-only against the provider**.
+  Calls `GET /models` and `GET /speakers` only: no synthesis endpoint,
+  no audio, no characters billed. It proves the credential
+  authenticates, the pinned model exists, and that each configured
+  voice is real, Yorùbá, and published as the sex its profile claims.
+  Discovery VALIDATES the pins and never selects them — the catalogue
+  cannot re-point production at a voice of its own choosing, because
+  that would let it change whose voice speaks for a Sacred House.
 
 ### Deliberately reduced capability
 

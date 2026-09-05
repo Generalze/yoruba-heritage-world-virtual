@@ -3633,14 +3633,12 @@ describe('red-team: nothing personal can become sacred speech', () => {
   })
 
   it('keeps the preflight local — it contacts no provider at all', () => {
-    // The configuration probe must remain unable to spend AND unable to
-    // overstate. An earlier version called GET {baseUrl}/models on the
-    // reasoning that the synthesis surface is OpenAI-compatible; that
-    // was an inference rather than a documented contract, and worse, a
-    // 404 from an undocumented path cannot show that credentials were
-    // accepted — a server may answer 404 before it looks at
-    // authorization at all. So the script makes no network call, and
-    // this asserts it structurally rather than trusting the comment.
+    // `smoke:tts` must remain unable to spend, unable to overstate,
+    // and unable to fail merely because the vendor is down. Provider
+    // metadata checks now exist and are genuinely useful, but they
+    // live in a SEPARATE command (smoke:tts:provider) precisely so
+    // this one keeps that third property: a deployment can always ask
+    // "is my configuration well-formed?" without asking the internet.
     const preflight = sourceOf('scripts/tts-preflight.ts')
     expect(preflight).not.toContain('audio/speech')
     expect(preflight).not.toContain('submitSpeech')
@@ -3655,6 +3653,52 @@ describe('red-team: nothing personal can become sacred speech', () => {
     // "0 failing" for a model configured as YOUR_VERIFIED_MODEL_ID.
     expect(preflight).toContain('PLACEHOLDER_PREFIXES')
     expect(preflight).toContain('looksUnset')
+  })
+
+  it('lets the provider diagnostic read, and only read', () => {
+    // Discovery VALIDATES the pinned configuration; it never selects
+    // it. A diagnostic that could re-point production at a voice of
+    // its own choosing is a diagnostic that could change whose voice
+    // speaks for a Sacred House — so it may not write configuration,
+    // may not synthesize, and may not touch the speech endpoint.
+    const diagnostic = sourceOf('scripts/tts-provider-diagnostic.ts')
+    expect(diagnostic).toContain('/models')
+    expect(diagnostic).toContain('/speakers')
+    // No synthesis, by construction: no endpoint, no provider factory,
+    // no request, no approved text.
+    expect(diagnostic).not.toContain('audio/speech')
+    expect(diagnostic).not.toContain('submitSpeech')
+    expect(diagnostic).not.toContain('createNaijalingoTtsProvider')
+    expect(diagnostic).not.toContain('approvedText')
+    // Reads only, structurally: the script never sets an HTTP method
+    // at all, and a fetch without one is a GET. There is nowhere for a
+    // request body to be attached.
+    expect(diagnostic).not.toContain('method:')
+    // And it cannot rewrite what it validates.
+    expect(diagnostic).not.toContain('writeFileSync')
+    expect(diagnostic).not.toContain('process.env.NAIJALINGO')
+
+    // The two commands are distinct, and the local one stayed local.
+    const manifest = JSON.parse(sourceOf('package.json')) as {
+      scripts: Record<string, string>
+    }
+    expect(manifest.scripts['smoke:tts']).toContain('tts-preflight')
+    expect(manifest.scripts['smoke:tts:provider']).toContain(
+      'tts-provider-diagnostic',
+    )
+  })
+
+  it('proves the configured voices are the right LANGUAGE and the right SEX', () => {
+    // The whole House routing rule reduces to this being true, and a
+    // technical pass that never compared them would let a man's voice
+    // speak for Abúlé Ọ̀ṣun while every hash still matched.
+    const diagnostic = sourceOf('scripts/tts-provider-diagnostic.ts')
+    expect(diagnostic).toContain('speaker.gender === expectedGender')
+    expect(diagnostic).toContain('speaker.language === NAIJALINGO_LANGUAGE')
+    expect(diagnostic).toContain("['YO_MALE', env.NAIJALINGO_YO_MALE_VOICE_ID, 'male']")
+    expect(diagnostic).toContain(
+      "['YO_FEMALE', env.NAIJALINGO_YO_FEMALE_VOICE_ID, 'female']",
+    )
   })
 
   it('claims only that byte-identical re-synthesis is UNGUARANTEED', () => {
