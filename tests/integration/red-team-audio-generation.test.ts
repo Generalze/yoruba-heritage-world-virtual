@@ -3627,6 +3627,11 @@ describe('red-team: nothing personal can become sacred speech', () => {
     expect(preflight).not.toContain('XMLHttpRequest')
     // And it must say plainly what it could not establish.
     expect(preflight).toContain('NOT VERIFIED')
+    // And presence is not plausibility: an unreplaced template
+    // string must fail rather than pass. This script once answered
+    // "0 failing" for a model configured as YOUR_VERIFIED_MODEL_ID.
+    expect(preflight).toContain('PLACEHOLDER_PREFIXES')
+    expect(preflight).toContain('looksUnset')
   })
 
   it('claims only that byte-identical re-synthesis is UNGUARANTEED', () => {

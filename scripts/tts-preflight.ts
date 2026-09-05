@@ -47,6 +47,31 @@ function present(value: string): boolean {
   return value.trim().length > 0
 }
 
+/**
+ * An unreplaced template string is not a configuration.
+ *
+ * Presence alone is a weak test, and this script learned that the hard
+ * way: it once answered "0 failing" for a deployment whose model was
+ * literally YOUR_VERIFIED_MODEL_ID. A preflight that passes a
+ * placeholder is worse than no preflight, because it converts an
+ * obvious gap into a green tick.
+ */
+const PLACEHOLDER_PREFIXES = ['YOUR_', 'YOUR-', '<', 'CHANGE', 'REPLACE', 'TODO', 'XXX']
+
+function looksUnset(value: string): boolean {
+  const v = value.trim()
+  if (v.length === 0) return true
+  const upper = v.toUpperCase()
+  if (PLACEHOLDER_PREFIXES.some((p) => upper.startsWith(p))) return true
+  // Nothing legitimate here contains whitespace or angle brackets.
+  return /\s/.test(v) || v.includes('<') || v.includes('>')
+}
+
+/** ok / fail for a configured value, rejecting obvious templates. */
+function configured(value: string): Level {
+  return looksUnset(value) ? 'fail' : 'ok'
+}
+
 function main(): void {
   console.log('Speech synthesis preflight — local configuration only.')
   console.log('No network call, no synthesis, no spend.\n')
@@ -65,14 +90,14 @@ function main(): void {
   const model = env.NAIJALINGO_MODEL
 
   // Presence only. The key is never echoed, in full or in part.
-  record(present(key) ? 'ok' : 'fail', 'NAIJALINGO_API_KEY is set')
+  record(configured(key), 'NAIJALINGO_API_KEY is set')
   record(
-    present(baseUrl) ? 'ok' : 'fail',
+    configured(baseUrl),
     'NAIJALINGO_API_BASE_URL is set',
     present(baseUrl) ? baseUrl : '',
   )
-  record(present(model) ? 'ok' : 'fail', 'NAIJALINGO_MODEL is set', model)
-  record(present(voice) ? 'ok' : 'fail', 'NAIJALINGO_YO_VOICE_ID is set', voice)
+  record(configured(model), 'NAIJALINGO_MODEL is set', model)
+  record(configured(voice), 'NAIJALINGO_YO_VOICE_ID is set', voice)
 
   if (present(baseUrl)) {
     let parsed: URL | null = null
@@ -93,7 +118,7 @@ function main(): void {
 
   // Constructing the adapter is a LOCAL act: it validates configuration
   // completeness and builds a client. It opens no connection.
-  if (present(key) && present(baseUrl) && present(model) && present(voice)) {
+  if (![key, baseUrl, model, voice].some(looksUnset)) {
     try {
       const provider = createNaijalingoTtsProvider()
       record('ok', 'adapter constructs from configuration', provider.code)
