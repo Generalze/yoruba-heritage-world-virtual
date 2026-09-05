@@ -1849,24 +1849,85 @@ describe('the three new House Visual Bibles are scoped to their own Houses', () 
     if (babalawo) expect(babalawo.code).toBe('ILE_AWON_BABALAWO')
   })
 
-  it('is a TEXT_ONLY draft with no imagery and no publication', async () => {
+  it('is an APPROVED reference-required version, still unpublished', async () => {
+    // These began TEXT_ONLY and empty, deliberately: declaring
+    // IMAGE_REFERENCE_REQUIRED before six approved House images existed
+    // would have made each House unpublishable for want of pictures
+    // nobody had produced. The mode moved only once its own pack was
+    // registered and bound.
     for (const bible of NEW_BIBLES) {
       const row = await versionRow(bible.versionId)
       if (!row) return
       expect(row.bibleId).toBe(bible.bibleId)
       expect(row.versionNumber).toBe(1)
-      expect(row.status).toBe('DRAFT')
-      expect(row.referenceMode).toBe('TEXT_ONLY')
+      expect(row.status).toBe('APPROVED')
+      expect(row.referenceMode).toBe('IMAGE_REFERENCE_REQUIRED')
+      // Approved is not published. The definition hash is computed at
+      // publication, so a value here would mean one had been published.
       expect(row.publishedAt).toBeNull()
-      // The definition hash is computed at publication; a value here
-      // would mean one of these drafts had been published.
       expect(row.definitionSha256).toBeNull()
 
       const bound = await getDb()
-        .select()
+        .select({
+          role: visualBibleReferenceMedia.role,
+          mediaAssetVersionId: visualBibleReferenceMedia.mediaAssetVersionId,
+          mediaFileSha256: visualBibleReferenceMedia.mediaFileSha256,
+        })
         .from(visualBibleReferenceMedia)
         .where(eq(visualBibleReferenceMedia.visualBibleVersionId, bible.versionId))
-      expect(bound).toHaveLength(0)
+      expect(bound).toHaveLength(6)
+      expect(bound.map((b) => b.role).sort()).toEqual(
+        [...VISUAL_BIBLE_REFERENCE_ROLES].sort(),
+      )
+      // Six roles, six DIFFERENT images. One picture answering two
+      // roles would satisfy the count without satisfying the pack.
+      expect(new Set(bound.map((b) => b.mediaAssetVersionId)).size).toBe(6)
+      expect(new Set(bound.map((b) => b.mediaFileSha256)).size).toBe(6)
+      for (const binding of bound) {
+        expect(binding.mediaFileSha256).toMatch(/^[0-9a-f]{64}$/)
+      }
+    }
+  })
+
+  it('binds only images that belong to its own House', async () => {
+    for (const bible of NEW_BIBLES) {
+      const rows = await getDb()
+        .select({
+          role: visualBibleReferenceMedia.role,
+          houseId: mediaAssets.sacredHouseId,
+          scopeType: mediaAssets.scopeType,
+          assetKind: mediaAssets.assetKind,
+          status: mediaAssetVersions.status,
+          rightsStatus: mediaAssetVersions.rightsStatus,
+          runtimeEnabled: mediaAssetVersions.runtimeEnabled,
+          sourceType: mediaAssetVersions.sourceType,
+          externalAiPolicy: mediaAssetVersions.externalAiPolicy,
+          containsIdentifiablePerson:
+            mediaAssetVersions.containsIdentifiablePerson,
+        })
+        .from(visualBibleReferenceMedia)
+        .innerJoin(
+          mediaAssetVersions,
+          eq(mediaAssetVersions.id, visualBibleReferenceMedia.mediaAssetVersionId),
+        )
+        .innerJoin(mediaAssets, eq(mediaAssets.id, mediaAssetVersions.assetId))
+        .where(eq(visualBibleReferenceMedia.visualBibleVersionId, bible.versionId))
+      if (rows.length === 0) return
+      for (const row of rows) {
+        // The rule the whole scope system exists for: a House is
+        // dressed in its own imagery and nobody else's.
+        expect(row.houseId).toBe(bible.houseId)
+        expect(row.scopeType).toBe('SACRED_HOUSE')
+        expect(row.assetKind).toBe('IMAGE')
+        expect(row.status).toBe('PUBLISHED')
+        expect(row.rightsStatus).toBe('CLEARED')
+        expect(row.runtimeEnabled).toBe(true)
+        // Synthetic imagery: no real person is depicted, so there is no
+        // likeness to have consented.
+        expect(row.sourceType).toBe('AI_GENERATED')
+        expect(row.containsIdentifiablePerson).toBe(false)
+        expect(row.externalAiPolicy).toBe('DERIVATIVE_GENERATION_ALLOWED')
+      }
     }
   })
 
@@ -1926,12 +1987,6 @@ describe('the three new House Visual Bibles are scoped to their own Houses', () 
       })
       .from(visualBibleReferenceMedia)
     if (rows.length === 0) return
-    // Every binding in the system belongs to exactly one Visual Bible
-    // version, and none of them to the three new drafts.
-    const newVersionIds = new Set(NEW_BIBLES.map((b) => b.versionId))
-    for (const row of rows) {
-      expect(newVersionIds.has(row.versionId)).toBe(false)
-    }
     // No media version satisfies two Bibles at once. A reference asset
     // is House property, not a shared library item.
     const byAsset = new Map<number, Set<number>>()
