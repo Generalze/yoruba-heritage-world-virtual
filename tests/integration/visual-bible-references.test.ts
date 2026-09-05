@@ -11,10 +11,12 @@ import {
   SLOT_SHOT_FAMILIES,
   prayerSessionTemplateSlots,
   VISUAL_BIBLE_REFERENCE_ROLES,
+  VISUAL_BIBLE_RULE_CATEGORIES,
   auditLogs,
   mediaAssetVersions,
   mediaAssets,
   sacredContentVersionProfiles,
+  prayerSessionTemplateVersions,
   sacredHouses,
   spiritualContentItems,
   spiritualContentVersions,
@@ -1765,5 +1767,211 @@ describe('existing versions are unchanged in meaning', () => {
     // The superseded 3:2 originals were not carried over.
     expect(bound.map((b) => b.mediaAssetVersionId)).not.toContain(38060)
     expect(bound.map((b) => b.mediaAssetVersionId)).not.toContain(38065)
+  })
+})
+
+describe('the three new House Visual Bibles are scoped to their own Houses', () => {
+  /**
+   * Registered from SACRED_HOUSES_MASTER_VISUAL_BIBLE_PACK_V1 as
+   * TEXT_ONLY drafts. They stay TEXT_ONLY until six House-specific
+   * approved references exist: declaring IMAGE_REFERENCE_REQUIRED
+   * first would make every House unpublishable for want of images that
+   * were never produced, which is a self-inflicted readiness failure
+   * rather than a governance guarantee.
+   *
+   * Production rows, so these skip on a database without them and
+   * assert hard where they exist.
+   */
+  const NEW_BIBLES = [
+    { houseId: 1, houseCode: 'ABULE_OSUN', bibleId: 1193, versionId: 1142, rules: 106 },
+    { houseId: 2, houseCode: 'ABULE_AJE', bibleId: 1194, versionId: 1143, rules: 106 },
+    {
+      houseId: 3,
+      houseCode: 'ABULE_OSANYIN_AJA',
+      bibleId: 1195,
+      versionId: 1144,
+      rules: 113,
+    },
+  ]
+
+  async function versionRow(versionId: number) {
+    return (
+      await getDb()
+        .select({
+          id: visualBibleVersions.id,
+          bibleId: visualBibleVersions.visualBibleId,
+          versionNumber: visualBibleVersions.versionNumber,
+          status: visualBibleVersions.status,
+          referenceMode: visualBibleVersions.referenceMode,
+          publishedAt: visualBibleVersions.publishedAt,
+          definitionSha256: visualBibleVersions.definitionSha256,
+        })
+        .from(visualBibleVersions)
+        .where(eq(visualBibleVersions.id, versionId))
+        .limit(1)
+    ).at(0)
+  }
+
+  it('belongs to the House its code names, never a document ordinal', async () => {
+    for (const bible of NEW_BIBLES) {
+      const row = (
+        await getDb()
+          .select({
+            id: visualBibles.id,
+            sacredHouseId: visualBibles.sacredHouseId,
+          })
+          .from(visualBibles)
+          .where(eq(visualBibles.id, bible.bibleId))
+          .limit(1)
+      ).at(0)
+      if (!row) return
+      expect(row.sacredHouseId).toBe(bible.houseId)
+      const house = (
+        await getDb()
+          .select({ code: sacredHouses.code })
+          .from(sacredHouses)
+          .where(eq(sacredHouses.id, bible.houseId))
+          .limit(1)
+      ).at(0)!
+      expect(house.code).toBe(bible.houseCode)
+    }
+    // The source pack letters its Houses A-D with Babaláwo first. In the
+    // database Babaláwo is 4, so lettering and id disagree for every
+    // House — mapping by position would have given each House another
+    // House's visual law.
+    const babalawo = (
+      await getDb()
+        .select({ code: sacredHouses.code })
+        .from(sacredHouses)
+        .where(eq(sacredHouses.id, 4))
+        .limit(1)
+    ).at(0)
+    if (babalawo) expect(babalawo.code).toBe('ILE_AWON_BABALAWO')
+  })
+
+  it('is a TEXT_ONLY draft with no imagery and no publication', async () => {
+    for (const bible of NEW_BIBLES) {
+      const row = await versionRow(bible.versionId)
+      if (!row) return
+      expect(row.bibleId).toBe(bible.bibleId)
+      expect(row.versionNumber).toBe(1)
+      expect(row.status).toBe('DRAFT')
+      expect(row.referenceMode).toBe('TEXT_ONLY')
+      expect(row.publishedAt).toBeNull()
+      // The definition hash is computed at publication; a value here
+      // would mean one of these drafts had been published.
+      expect(row.definitionSha256).toBeNull()
+
+      const bound = await getDb()
+        .select()
+        .from(visualBibleReferenceMedia)
+        .where(eq(visualBibleReferenceMedia.visualBibleVersionId, bible.versionId))
+      expect(bound).toHaveLength(0)
+    }
+  })
+
+  it('carries all sixteen categories with contiguous positions', async () => {
+    for (const bible of NEW_BIBLES) {
+      const rules = await getDb()
+        .select({
+          category: visualBibleRules.category,
+          position: visualBibleRules.position,
+          ruleText: visualBibleRules.ruleText,
+        })
+        .from(visualBibleRules)
+        .where(eq(visualBibleRules.bibleVersionId, bible.versionId))
+        .orderBy(visualBibleRules.position)
+      if (rules.length === 0) return
+      expect(rules).toHaveLength(bible.rules)
+      expect(new Set(rules.map((r) => r.category)).size).toBe(16)
+      // Publication requires contiguous positions from 1; proving it now
+      // means the later reference-required version cannot fail on it.
+      expect(rules.map((r) => r.position)).toEqual(
+        rules.map((_, index) => index + 1),
+      )
+      // Categories appear in one deterministic run each, in the schema's
+      // own order — never interleaved.
+      const order = [...new Set(rules.map((r) => r.category))]
+      expect(order).toEqual(
+        VISUAL_BIBLE_RULE_CATEGORIES.filter((c) => order.includes(c)),
+      )
+    }
+  })
+
+  it('states the remote-recipient rule in its own words', async () => {
+    for (const bible of NEW_BIBLES) {
+      const rules = await getDb()
+        .select({ ruleText: visualBibleRules.ruleText })
+        .from(visualBibleRules)
+        .where(eq(visualBibleRules.bibleVersionId, bible.versionId))
+      if (rules.length === 0) return
+      const joined = rules.map((r) => r.ruleText).join(' ').toLowerCase()
+      // Every House must forbid a visible second person and place the
+      // lens at the recipient. A House that omitted it could be rendered
+      // with a client in the room.
+      expect(joined).toContain('client')
+      expect(
+        joined.includes('recipient') ||
+          joined.includes('lens') ||
+          joined.includes('camera'),
+      ).toBe(true)
+    }
+  })
+
+  it('shares no imagery with Babaláwo or with each other', async () => {
+    const rows = await getDb()
+      .select({
+        versionId: visualBibleReferenceMedia.visualBibleVersionId,
+        mediaAssetVersionId: visualBibleReferenceMedia.mediaAssetVersionId,
+      })
+      .from(visualBibleReferenceMedia)
+    if (rows.length === 0) return
+    // Every binding in the system belongs to exactly one Visual Bible
+    // version, and none of them to the three new drafts.
+    const newVersionIds = new Set(NEW_BIBLES.map((b) => b.versionId))
+    for (const row of rows) {
+      expect(newVersionIds.has(row.versionId)).toBe(false)
+    }
+    // No media version satisfies two Bibles at once. A reference asset
+    // is House property, not a shared library item.
+    const byAsset = new Map<number, Set<number>>()
+    for (const row of rows) {
+      const set = byAsset.get(row.mediaAssetVersionId) ?? new Set<number>()
+      set.add(row.versionId)
+      byAsset.set(row.mediaAssetVersionId, set)
+    }
+    for (const [, versions] of byAsset) {
+      expect(versions.size).toBe(1)
+    }
+  })
+
+  it('left Babaláwo, the templates and the prayer pack untouched', async () => {
+    const v886 = await versionRow(886)
+    if (!v886) return
+    expect(v886.status).toBe('APPROVED')
+    expect(v886.referenceMode).toBe('IMAGE_REFERENCE_REQUIRED')
+    expect(v886.publishedAt).toBeNull()
+    const bound886 = await getDb()
+      .select()
+      .from(visualBibleReferenceMedia)
+      .where(eq(visualBibleReferenceMedia.visualBibleVersionId, 886))
+    expect(bound886).toHaveLength(6)
+
+    const v205 = await versionRow(205)
+    if (v205) {
+      expect(v205.status).toBe('ARCHIVED')
+      expect(v205.referenceMode).toBe('TEXT_ONLY')
+    }
+
+    const templates = await getDb()
+      .select({
+        id: prayerSessionTemplateVersions.id,
+        status: prayerSessionTemplateVersions.status,
+      })
+      .from(prayerSessionTemplateVersions)
+      .where(inArray(prayerSessionTemplateVersions.id, [28958, 35343]))
+    for (const template of templates) {
+      expect(template.status).toBe('APPROVED')
+    }
   })
 })
