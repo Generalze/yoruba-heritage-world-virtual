@@ -26,6 +26,19 @@
 	# redeploy does not re-issue and burn rate limits.
 }
 
+# ONE CANONICAL HOME. The www name exists because people type it, and
+# it redirects permanently to the apex rather than serving a second
+# copy of the site. Two live origins would mean two sets of session
+# cookies, two CSP origins, and payment return URLs that can land on
+# the origin the user did not start from — APP_BASE_URL names exactly
+# one host, and this makes the deployment agree with it.
+#
+# Caddy obtains a certificate for this name too, so its DNS record must
+# resolve here before first start, exactly like the apex.
+www.{$APP_DOMAIN} {
+	redir https://{$APP_DOMAIN}{uri} permanent
+}
+
 {$APP_DOMAIN} {
 	encode zstd gzip
 
