@@ -800,3 +800,134 @@ describe('the staging qualification harness', () => {
     expect(driver).toContain("problems.push('a MOCK renderer produced this')")
   })
 })
+
+describe('the Yorùbá measurement harness', () => {
+  const NL2 = String.fromCharCode(10)
+  const raw = read('scripts/measure-yoruba-block.ts')
+  const measure = raw
+    .split(NL2)
+    .filter((line) => {
+      const t = line.trimStart()
+      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
+    })
+    .join(NL2)
+
+  it('refuses everything that is not approved Yorùbá sacred speech', () => {
+    // Each refusal has its OWN name, so a report says which rule
+    // stopped it rather than "not allowed".
+    for (const guard of [
+      "row.contentDomain !== 'SACRED_RUNTIME'",
+      "row.versionStatus !== 'PUBLISHED'",
+      'row.language !== NAIJALINGO_LANGUAGE',
+      "row.voicePolicy !== 'APPROVED_TTS_ALLOWED'",
+      "row.rightsStatus !== 'CLEARED'",
+      '!row.runtimeEnabled',
+      '!row.storageAuthorized',
+      'row.contentSha256 !== bodySha',
+    ]) {
+      expect(measure).toContain(guard)
+    }
+    // TEXT_ONLY and HUMAN_RECORDED_REQUIRED are refusals, not
+    // inconveniences — the only accepted policy is named positively.
+    expect(measure).toContain('voice_policy_forbids_tts')
+    expect(measure).toContain('language_not_yoruba')
+  })
+
+  it('spends nothing unless a person says so', () => {
+    // The vendor charges by character. A measurement tool that spends
+    // on being run by accident is one nobody should trust with a key.
+    expect(measure).toContain("process.argv.includes('--confirm-spend')")
+    expect(measure).toContain('if (!confirmSpend)')
+    expect(measure).toContain('No provider contacted, nothing spent')
+    // And it will not run against a deployment that has not selected
+    // the real driver.
+    expect(measure).toContain("env.TTS_DRIVER !== '9JALINGO'")
+  })
+
+  it('makes at most ONE call and never retries', () => {
+    // A retry here is a second charge for the same answer.
+    expect(measure.split('submitSpeech(').length - 1).toBe(1)
+    expect(measure).not.toContain('for (let attempt')
+    expect(measure).not.toContain('while (')
+    expect(measure).toContain('NOT retried')
+    // maxRetries is zero at the client, and pinned by its own test.
+    expect(read('src/providers/tts/naijalingo.ts')).toContain('maxRetries: 0')
+  })
+
+  it('resolves the voice from the House, never by choosing one', () => {
+    expect(measure).toContain('resolveHouseVoiceProfile({')
+    expect(measure).toContain('code: row.houseCode')
+    // No literal voice id, and no way for an argument to supply one.
+    expect(measure).not.toContain('adetokunbo')
+    expect(measure).not.toContain('olufunke')
+    expect(measure).not.toContain('process.argv[3]')
+  })
+
+  it('sends the approved bytes and nothing else', () => {
+    expect(measure).toContain('approvedText: row.body')
+    for (const forbidden of [
+      'recipientName',
+      'preferredName',
+      'privateRequestNote',
+      'appointment',
+      'prompt',
+    ]) {
+      expect(measure).not.toContain(forbidden)
+    }
+  })
+
+  it('writes evidence even when the call fails', () => {
+    // A failure nobody can read is a charge nobody can account for.
+    const failFn = measure.slice(measure.indexOf('function fail('))
+    expect(failFn.indexOf('writeReport()')).toBeLessThan(
+      failFn.indexOf('process.exit(1)'),
+    )
+    expect(measure).toContain('report.providerErrorCode')
+    expect(measure).toContain('report.measurementFailure')
+  })
+
+  it('never lets a credential reach a report or a log', () => {
+    // A voice id is not a secret, but a report is a thing people paste.
+    expect(measure).toContain('configuredVoiceFingerprint: fingerprint(')
+    expect(measure).not.toContain('NAIJALINGO_API_KEY')
+    expect(measure).not.toContain('configuredVoiceId}')
+    expect(measure).not.toContain('console.log(configuredVoiceId')
+  })
+
+  it('measures the BYTES, not the provider’s claim about them', () => {
+    expect(measure).toContain('measureAudioDurationFromBytes({')
+    expect(measure).toContain('providerReportedDurationMs')
+    expect(measure).toContain('measuredDurationMs: measuredMs')
+  })
+
+  it('cannot publish, price, book or confirm anything', () => {
+    // It is a measurement tool. Everything governance-bearing is
+    // absent by construction, not by discipline.
+    for (const forbidden of [
+      'publishVisualBibleVersion',
+      'publishTemplateVersion',
+      'createReservation',
+      'initiatePayment',
+      'processProviderWebhook',
+      'updateService',
+      'updateBookingSettings',
+      'runGenerationPipelinePass',
+    ]) {
+      expect(measure).not.toContain(forbidden)
+    }
+    // No DATABASE writes at all. (Narrow on purpose: `.update(` alone
+    // also matches createHash().update(), which is not a write.)
+    expect(measure).not.toContain('db.update(')
+    expect(measure).not.toContain('db.insert(')
+    expect(measure).not.toContain('db.delete(')
+    expect(measure).not.toContain('tx.update(')
+    expect(measure).not.toContain('transaction(')
+  })
+
+  it('leaves production TTS disabled', () => {
+    // The harness does not change what production does; it only refuses
+    // to run when the driver is not selected in ITS OWN environment.
+    const activeCompose = withoutComments(read('docker-compose.yml'))
+    expect(activeCompose).toContain('TTS_DRIVER: ${TTS_DRIVER:-DISABLED}')
+  })
+})
