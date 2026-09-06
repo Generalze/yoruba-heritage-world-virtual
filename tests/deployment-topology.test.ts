@@ -615,3 +615,180 @@ describe('the real compositor never provisions its own browser', () => {
     expect(select).toContain('REMOTION_BROWSER_EXECUTABLE')
   })
 })
+
+describe('the staging qualification harness', () => {
+  const staging = read('deploy/docker-compose.staging.yml')
+  const activeStaging = withoutComments(staging)
+  const driverRaw = read('scripts/qualify-governed-pipeline.ts')
+  const NL = String.fromCharCode(10)
+  const driver = driverRaw
+    .split(NL)
+    .filter((line) => {
+      const t = line.trimStart()
+      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
+    })
+    .join(NL)
+
+  it('fixes report-volume ownership in Compose, not in a human’s memory', () => {
+    // A fresh named volume is root-owned; the image runs as bun (uid
+    // 1000). The first qualification died writing its own report and
+    // could not say why. An init container fixes it where the volume is
+    // created, and the application is NOT given root to work around it.
+    expect(activeStaging).toContain('init:')
+    expect(activeStaging).toContain('chown -R 1000:1000 /out')
+    // Both services that write the report wait for it to finish.
+    const completions = activeStaging.split('service_completed_successfully')
+    expect(completions.length - 1).toBe(2)
+    // The app image never runs as root.
+    expect(activeStaging).not.toContain('user: bun-root')
+    const appBlock = activeStaging.slice(
+      activeStaging.indexOf(`${NL}  app:`),
+      activeStaging.indexOf(`${NL}  worker:`),
+    )
+    expect(appBlock).not.toContain('user: root')
+  })
+
+  it('publishes no host port from any staging service', () => {
+    // Staging is reached only through `docker compose exec`. A published
+    // port here would be a second, unprotected surface on the same box
+    // as production.
+    expect(activeStaging).not.toMatch(/^\s+ports:/m)
+    for (const port of ['3000:3000', '3306:3306', '9000:9000', '9001:9001']) {
+      expect(activeStaging).not.toContain(port)
+    }
+  })
+
+  it('is a SEPARATE Compose project, so production volumes cannot be touched', () => {
+    expect(activeStaging).toContain('name: yhw-staging')
+    for (const volume of ['staging_db', 'staging_minio', 'staging_media', 'staging_out']) {
+      expect(activeStaging).toContain(volume)
+    }
+    // None of production's volume names appear at all.
+    for (const production of ['db_data', 'media_data', 'minio_data', 'caddy_data']) {
+      expect(activeStaging).not.toContain(production)
+    }
+  })
+
+  it('refuses to run against a production configuration', () => {
+    // It publishes governed versions, prices a service and settles a
+    // payment. Every one of those is a real act.
+    expect(driver).toContain("env.NODE_ENV === 'production'")
+    expect(driver).toContain('process.exit(1)')
+  })
+
+  it('cannot reach a paid provider', () => {
+    expect(activeStaging).toContain('TTS_DRIVER: DISABLED')
+    expect(activeStaging).toContain('VISUAL_GENERATION_DRIVER: DISABLED')
+    expect(activeStaging).toContain('NOTIFICATION_EMAIL_DRIVER: DISABLED')
+    // Every vendor credential is explicitly blank, so no adapter can be
+    // configured into existence by an inherited environment.
+    for (const blank of [
+      "NAIJALINGO_API_KEY: ''",
+      "NAIJALINGO_API_BASE_URL: ''",
+      "KLING_API_KEY: ''",
+      "KLING_API_BASE_URL: ''",
+    ]) {
+      expect(activeStaging).toContain(blank)
+    }
+    // And the driver itself names no vendor.
+    for (const vendor of ['naijalingo', 'NAIJALINGO', 'kling', 'KLING']) {
+      expect(driver).not.toContain(vendor)
+    }
+  })
+
+  it('converges availability instead of creating it blindly', () => {
+    // The defect: windows were created unconditionally, so a rerun after
+    // an interrupted run died on "overlaps an existing active window".
+    // Each required window is now looked for first.
+    expect(driver).toContain('sacredHouseAvailability')
+    expect(driver).toContain('already.length === 1')
+    expect(driver).toContain('already.length > 1')
+    // A duplicate that should not exist is a FAILURE, not something to
+    // paper over.
+    expect(driver).toContain('identical active windows')
+  })
+
+  it('treats already-correct state as satisfied only when it is EXACTLY correct', () => {
+    // Service, booking settings and both publications each compare the
+    // real current state before deciding to skip.
+    expect(driver).toContain('already-correct')
+    expect(driver).toContain('already-published')
+    expect(driver).toContain('serviceBefore.durationMinutes === DURATION_MINUTES')
+    expect(driver).toContain('settingsBefore.bookingEnabled === BOOKING_SETTINGS.bookingEnabled')
+    expect(driver).toContain("bibleVersion.status === 'PUBLISHED'")
+    expect(driver).toContain("templateVersion.status === 'PUBLISHED'")
+    // An unexpected status is refused rather than published over.
+    expect(driver).toContain('expected APPROVED or PUBLISHED')
+  })
+
+  it('never silences an error to become re-runnable', () => {
+    // "Already fine" and "broken in a way I did not look at" must never
+    // be the same branch.
+    expect(driver).not.toContain('catch {')
+    expect(driver).not.toContain('catch (_')
+    expect(driver).not.toContain('.catch(() =>')
+  })
+
+  it('keeps the appointment, payment and recording FRESH every run', () => {
+    // Reusing a previous run's recording would prove nothing about this
+    // one, so only SETUP converges.
+    expect(driver).toContain('createReservation(')
+    expect(driver).toContain('initiatePayment(')
+    expect(driver).toContain('processProviderWebhook(')
+    expect(driver).toContain('runGenerationPipelinePass(')
+    // Identities carry the run id, so two runs can never collide.
+    expect(driver).toContain('qual-operator+${runId}')
+    expect(driver).toContain('qual-seeker+${runId}')
+  })
+
+  it('confirms only by settlement, never by hand', () => {
+    // A test that set CONFIRMED directly would prove the database
+    // accepts writes, which nobody doubts.
+    expect(driver).not.toContain("status: 'CONFIRMED'")
+    expect(driver).not.toContain('update(appointments)')
+    expect(driver).not.toContain('update(prayerGenerationJobs)')
+  })
+
+  it('records everything a reader needs, in the JSON report', () => {
+    for (const field of [
+      'runId',
+      'gitSha',
+      'startedAt',
+      'finishedAt',
+      'passed',
+      'publicId',
+      'generationJob',
+      'contentVersionIds',
+      'governedMedia',
+      'templateVersionId',
+      'visualBibleVersionId',
+      'renderer',
+      'measuredDurationMs',
+      'objectStorage',
+      'signedRetrieval',
+      'refetchedSha256',
+    ]) {
+      expect(driver).toContain(field)
+    }
+  })
+
+  it('derives its verdict from the report and an exit code, not from prose', () => {
+    // A stale background shell must never be the source of truth.
+    expect(driver).toContain('report.passed = problems.length === 0')
+    expect(driver).toContain('writeReport()')
+    expect(driver).toContain('process.exit(0)')
+    // The report is written BEFORE the process ends on failure, so a
+    // failure never destroys its own explanation.
+    const failFn = driver.slice(driver.indexOf('function fail('))
+    expect(failFn.indexOf('writeReport()')).toBeLessThan(
+      failFn.indexOf('process.exit(1)'),
+    )
+  })
+
+  it('proves the artifact rather than trusting the row that claims it', () => {
+    expect(driver).toContain('getPrivateObject(upload.objectKey)')
+    expect(driver).toContain('createSignedReadUrl')
+    expect(driver).toContain("problems.push('signed retrieval returned different bytes')")
+    expect(driver).toContain("problems.push('a MOCK renderer produced this')")
+  })
+})

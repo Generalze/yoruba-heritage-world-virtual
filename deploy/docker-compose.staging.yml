@@ -92,6 +92,24 @@ x-staging-environment: &staging-environment
   STRIPE_CURRENCIES: ''
 
 services:
+  # OWNERSHIP, FIXED WHERE THE VOLUME IS CREATED.
+  #
+  # A fresh named volume is created root-owned, and the application
+  # image runs as `bun` (uid 1000) — so the qualification could not
+  # write its own report, and the first run died without saying why.
+  # The fix belongs here rather than in a human's memory: this runs
+  # once, as root, before anything that needs the directory, and the
+  # application is NOT given root to work around it.
+  #
+  # Idempotent by nature: chown of an already-correct directory is a
+  # no-op, so a rerun costs nothing.
+  init:
+    image: alpine:3
+    user: root
+    command: ['sh', '-c', 'chown -R 1000:1000 /out && chmod 750 /out']
+    volumes:
+      - staging_out:/out
+
   app:
     image: ${STAGING_IMAGE:?set in staging env}
     restart: 'no'
@@ -105,6 +123,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      init:
+        condition: service_completed_successfully
 
   worker:
     image: ${STAGING_IMAGE:?set in staging env}
@@ -117,6 +137,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      init:
+        condition: service_completed_successfully
     # THE PRODUCTION LIMITS, so the render is measured under the same
     # ceiling the real worker has.
     deploy:
