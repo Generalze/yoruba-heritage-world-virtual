@@ -52,6 +52,12 @@ x-app-environment: &app-environment
   OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-}
   OBJECT_STORAGE_FORCE_PATH_STYLE: ${OBJECT_STORAGE_FORCE_PATH_STYLE:-true}
   RENDER_DRIVER: ${RENDER_DRIVER:-REMOTION}
+  # Rendering has NO "off" switch: the driver is MOCK or REMOTION, and
+  # production refuses MOCK. REMOTION is therefore the only valid
+  # production value — which costs nothing until a job actually reaches
+  # the render stage.
+  REMOTION_CONCURRENCY: ${REMOTION_CONCURRENCY:-1}
+  REMOTION_TIMEOUT_MS: ${REMOTION_TIMEOUT_MS:-600000}
   # Both default to the tooling BAKED INTO THE IMAGE. Overriding them is
   # for an operator who has deliberately provisioned something else;
   # leaving them empty makes readiness report the capability missing
@@ -65,6 +71,10 @@ x-app-environment: &app-environment
   # text-to-video, and TTS_DRIVER=9JALINGO with the NAIJALINGO_*
   # variables for Yoruba synthesis.
   VISUAL_GENERATION_DRIVER: ${VISUAL_GENERATION_DRIVER:-DISABLED}
+  # DISABLED, never MOCK: production refuses MOCK precisely because
+  # handing somebody synthetic audio as their prayer is not an option.
+  # DISABLED means work that needs synthesis fails closed and is
+  # recorded, which is the honest state until 9jaLingo is authorised.
   TTS_DRIVER: ${TTS_DRIVER:-DISABLED}
   NOTIFICATION_EMAIL_DRIVER: ${NOTIFICATION_EMAIL_DRIVER:-DISABLED}
   KLING_API_KEY: ${KLING_API_KEY:-}
@@ -91,6 +101,7 @@ x-app-environment: &app-environment
   STRIPE_CURRENCIES: ${STRIPE_CURRENCIES:-}
   CRYPTO_ENABLED: ${CRYPTO_ENABLED:-false}
   CRYPTO_PROVIDER: ${CRYPTO_PROVIDER:-mock}
+  CRYPTO_API_KEY: ${CRYPTO_API_KEY:-}
   CRYPTO_WEBHOOK_SECRET: ${CRYPTO_WEBHOOK_SECRET:-}
   CRYPTO_FIAT_CURRENCIES: ${CRYPTO_FIAT_CURRENCIES:-}
 
@@ -99,8 +110,15 @@ services:
     build: .
     image: yhwv-app:${APP_REVISION:-local}
     restart: unless-stopped
-    ports:
-      - '${APP_PORT:-3000}:3000'
+    # NO `ports:` HERE, DELIBERATELY — the same rule the database has
+    # always had, now applied to the application. Caddy is the only
+    # container that publishes anything, and it reaches this one over
+    # the private network. A published 3000 on a VPS is an open 3000,
+    # bypassing TLS, the proxy's headers and the rate limiting that
+    # depends on them. Local development gets the port back through
+    # docker-compose.dev.yml.
+    expose:
+      - '3000'
     environment:
       <<: *app-environment
       APP_PORT: 3000
@@ -144,6 +162,19 @@ services:
     # A render can be long-running; give the current pass room to finish
     # rather than tearing it out mid-encode.
     stop_grace_period: 120s
+    # REMOTION IS THE SPIKY ONE. A headless browser compositing frames
+    # is the only part of this system that can take a whole machine
+    # with it, and if it does, it takes the web server and the database
+    # with it too. The cap is what keeps a bad render a bad render
+    # instead of an outage. REMOTION_CONCURRENCY stays at 1 for the
+    # same reason.
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 6G
+        reservations:
+          memory: 1G
 
   db:
     image: mariadb:11
@@ -170,9 +201,66 @@ services:
       retries: 5
       start_period: 30s
 
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    # THE ONLY SERVICE THAT PUBLISHES ANYTHING. 80 is required for the
+    # ACME HTTP challenge and for the redirect to HTTPS; 443 serves.
+    # Nothing else on this host should be reachable from the internet,
+    # and UFW is set to agree.
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set in .env}
+      STORAGE_DOMAIN: ${STORAGE_DOMAIN:?set in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account keys survive a redeploy here. Lose
+      # them and re-issuing burns Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    depends_on:
+      - app
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY_ID:?set in .env}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:?set in .env}
+    # NO `ports:`. The S3 API reaches the internet only through Caddy at
+    # STORAGE_DOMAIN, because a browser must be able to fetch a signed
+    # URL to play a finished recording. The CONSOLE on 9001 is not
+    # proxied at all: it is an administrative surface and belongs behind
+    # an SSH tunnel —
+    #   ssh -L 9001:localhost:9001 yhwadmin@<host>
+    expose:
+      - '9000'
+      - '9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
 volumes:
   db_data:
   # Approved media and intermediate render artifacts. NOT the final
   # recording: that lives in private object storage, and LOCAL final
   # storage is refused in production.
   media_data:
+  # The finished recordings themselves. This volume IS the private
+  # object store's disk — losing it loses every prayer that was ever
+  # rendered, and the pipeline cannot regenerate one from approved
+  # inputs alone.
+  minio_data:
+  caddy_data:
+  caddy_config:
+  caddy_logs:

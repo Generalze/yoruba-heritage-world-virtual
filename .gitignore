@@ -6,7 +6,11 @@ node_modules/
 # Only .env.example (placeholders) belongs in Git.
 .env
 .env.*
+# The two TEMPLATES are the exception: they carry placeholders only,
+# and a deployment template nobody can read is a deployment nobody can
+# reproduce.
 !.env.example
+!.env.production.example
 *.pem
 *.key
 

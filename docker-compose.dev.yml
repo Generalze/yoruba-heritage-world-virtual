@@ -17,3 +17,12 @@ services:
   db:
     ports:
       - '127.0.0.1:${DATABASE_PORT:-3306}:3306'
+
+  # The application port, for the same reason and with the same
+  # restriction. Production serves it through Caddy over TLS and
+  # publishes nothing; locally there is no proxy, so the port comes
+  # back HERE — bound to the loopback interface, never to the network
+  # the machine happens to be on.
+  app:
+    ports:
+      - '127.0.0.1:${APP_PORT:-3000}:3000'

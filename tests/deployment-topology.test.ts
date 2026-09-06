@@ -28,6 +28,8 @@ const packageJson = JSON.parse(read('package.json')) as {
   dependencies: Record<string, string>
 }
 
+const NEWLINE = String.fromCharCode(10)
+
 /** Strips `#` comments so prose about a rule cannot satisfy the rule. */
 function withoutComments(source: string): string {
   return source
@@ -51,8 +53,8 @@ describe('production compose', () => {
     )
   })
 
-  it('has exactly the three production services', () => {
-    for (const service of ['app:', 'worker:', 'db:']) {
+  it('has exactly the five production services', () => {
+    for (const service of ['app:', 'worker:', 'db:', 'caddy:', 'minio:']) {
       expect(active).toContain(service)
     }
   })
@@ -70,15 +72,50 @@ describe('production compose', () => {
     expect(imageLines[0]).toContain('${APP_REVISION')
   })
 
-  it('does NOT publish the database port', () => {
-    // On a VPS a published 3306 is found by scanners within minutes.
-    const dbSection = active.slice(active.indexOf('\n  db:'))
-    expect(dbSection).not.toContain('3306:3306')
-    expect(dbSection).not.toMatch(/^\s+ports:/m)
+  /** One service's block, ending where the next service begins. */
+  function serviceBlock(name: string): string {
+    const start = active.indexOf(`${NEWLINE}  ${name}:`)
+    expect(start).toBeGreaterThan(-1)
+    const rest = active.slice(start + 1)
+    const next = rest.search(/\n {2}[a-z][a-z0-9_-]*:\n/)
+    return next === -1 ? rest : rest.slice(0, next)
+  }
+
+  it('publishes host ports from CADDY AND NOTHING ELSE', () => {
+    // The rule the whole topology rests on. A published port on a VPS
+    // is an open port: 3306 and 9000 are found by scanners within
+    // minutes, and a published 3000 bypasses TLS, the proxy's
+    // overwritten X-Forwarded-For, and the rate limiting that depends
+    // on it. Caddy terminates HTTPS and is the only way in.
+    for (const service of ['app', 'worker', 'db', 'minio']) {
+      expect(serviceBlock(service)).not.toMatch(/^\s+ports:/m)
+    }
+    const caddy = serviceBlock('caddy')
+    expect(caddy).toMatch(/^\s+ports:/m)
+    expect(caddy).toContain("'80:80'")
+    expect(caddy).toContain("'443:443'")
+    // 3306, 3000, 9000 and 9001 are never published, by any service.
+    for (const port of ['3306:3306', '3000:3000', '9000:9000', '9001:9001']) {
+      expect(active).not.toContain(port)
+    }
   })
 
-  it('keeps the convenient local port in a development-only override', () => {
+  it('caps the render worker so a bad render is not an outage', () => {
+    // Remotion is the only part of this system that can take a whole
+    // machine with it — and if it does, it takes the web server and
+    // the database with it.
+    const worker = serviceBlock('worker')
+    expect(worker).toContain('limits:')
+    expect(worker).toMatch(/cpus:/)
+    expect(worker).toMatch(/memory:/)
+    expect(active).toContain('REMOTION_CONCURRENCY: ${REMOTION_CONCURRENCY:-1}')
+  })
+
+  it('keeps the convenient local ports in a development-only override', () => {
     expect(devCompose).toContain('127.0.0.1:${DATABASE_PORT:-3306}:3306')
+    // The app port too, since production now serves it through Caddy
+    // and publishes nothing of its own.
+    expect(devCompose).toContain('127.0.0.1:${APP_PORT:-3000}:3000')
     // Bound to loopback, so even locally the database is not offered to
     // the network the machine is on.
     expect(devCompose).not.toContain("'0.0.0.0:")

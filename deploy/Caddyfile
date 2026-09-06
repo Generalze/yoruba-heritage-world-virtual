@@ -1,0 +1,94 @@
+# Yorùbá Heritage World Virtual — edge proxy.
+#
+# THE ONLY CONTAINER THAT PUBLISHES A HOST PORT. Everything else —
+# app, worker, MariaDB, object storage — is reachable only on the
+# private Compose network. On a VPS a published port is an open port,
+# and scanners find 3306 and 9000 within minutes of them appearing.
+#
+# Caddy obtains and renews TLS certificates itself. That needs 80 and
+# 443 reachable from the internet and the DNS A/AAAA records already
+# pointing here; the ACME challenge fails otherwise, and it fails
+# loudly rather than serving plaintext.
+#
+# Two names, one certificate flow:
+#   APP_DOMAIN      the site people visit
+#   STORAGE_DOMAIN  the private object store, published ONLY because a
+#                   browser is redirected to it to play a finished
+#                   recording. It serves signed URLs and nothing else.
+#
+# Both are supplied through the environment (see .env.production.example)
+# so this file carries no deployment's identity.
+
+{
+	# An operator's address, used by Let's Encrypt for expiry warnings.
+	email {$ACME_EMAIL}
+	# Certificates and account keys live on the caddy_data volume, so a
+	# redeploy does not re-issue and burn rate limits.
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	# TRUSTED PROXY HEADERS. The application sets TRUST_PROXY=true and
+	# therefore believes X-Forwarded-For — which is only safe because
+	# this proxy OVERWRITES it rather than appending to whatever the
+	# client sent. A forged header would otherwise defeat rate limiting
+	# and pollute the audit log.
+	reverse_proxy app:3000 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up Host {host}
+
+		# The app's own readiness endpoint decides whether it is fit to
+		# serve — the same preflight the worker runs. A misconfigured
+		# deployment stops receiving traffic instead of half-serving it.
+		health_uri /api/ready
+		health_interval 30s
+		health_timeout 10s
+	}
+
+	# Uploads are approved media, not user content, and they arrive
+	# through the admin surface. A ceiling here means a hostile body
+	# never reaches the application at all.
+	request_body {
+		max_size 200MB
+	}
+
+	log {
+		output file /var/log/caddy/app.log {
+			roll_size 20MB
+			roll_keep 10
+		}
+	}
+}
+
+# PRIVATE OBJECT STORAGE, PUBLISHED NARROWLY.
+#
+# The Prayer Room hands a browser a time-limited signed URL pinned to
+# this exact origin, and the application's CSP names this origin as the
+# only external source a recording may be played from. Both break if
+# the address changes, so this hostname is part of the deployment's
+# contract, not a convenience.
+#
+# The console (port 9001) is deliberately NOT proxied. It is an
+# administrative surface and belongs behind the SSH tunnel, not on the
+# public internet.
+{$STORAGE_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy minio:9000 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	request_body {
+		max_size 2GB
+	}
+
+	log {
+		output file /var/log/caddy/storage.log {
+			roll_size 20MB
+			roll_keep 10
+		}
+	}
+}
