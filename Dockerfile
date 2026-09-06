@@ -89,6 +89,19 @@ COPY --from=build /app/scripts ./scripts
 RUN mkdir -p /app/var/media \
  && chown -R bun:bun /app/var
 
+# THE BUNDLER'S CACHE, MADE WRITABLE.
+#
+# Remotion bundles the composition with webpack on every render and
+# caches that work under node_modules/.cache. The image runs as `bun`,
+# which cannot write into a root-owned node_modules — so the cache
+# failed EACCES and every render re-bundled from cold. It was only a
+# warning, which is exactly why it would have gone unnoticed: nothing
+# breaks, renders are just slower than they need to be, for the life of
+# the deployment. .remotion is created for the same reason, so a
+# browser download would fail loudly rather than half-succeed.
+RUN mkdir -p /app/node_modules/.cache /app/node_modules/.remotion \
+ && chown -R bun:bun /app/node_modules/.cache /app/node_modules/.remotion
+
 EXPOSE 3000
 USER bun
 # Bun forwards SIGTERM to the process, and both entry points drain on

@@ -433,7 +433,15 @@ describe('remotion adapter', () => {
     expect(composition.durationInFrames).toBe(60) // 2 000 ms at 30 fps
     expect(composition.scenes).toHaveLength(1)
     expect(composition.scenes[0].mode).toBe('STILL')
-    expect(composition.scenes[0].src.startsWith('file://')).toBe(true)
+    // A BARE NAME, not a file:// URL. The compositor's page is served
+    // over http by Remotion, and Chromium refuses to load a local file
+    // into an http origin — so the materialised sources are bundled as
+    // the public directory and resolved with staticFile(), which is the
+    // only thing that knows the hashed base they are served under.
+    const src = composition.scenes[0].src
+    expect(src).not.toContain('://')
+    expect(src).not.toContain('/')
+    expect(src.length).toBeGreaterThan(0)
     // The audio slot follows the MEASURED recording, so nothing is cut
     // off at the end.
     expect(composition.audio[0].durationInFrames).toBe(45) // 1 500 ms
