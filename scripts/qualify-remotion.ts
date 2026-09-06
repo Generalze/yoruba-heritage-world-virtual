@@ -26,7 +26,7 @@
  * this path at all.
  */
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { deflateSync } from 'node:zlib'
@@ -135,15 +135,16 @@ async function main(): Promise<void> {
   console.log('Fixture inputs only. No governed content, no vendor, no database.\n')
 
   const root = mkdtempSync(join(tmpdir(), 'yhw-remotion-qual-'))
-  mkdirSync(join(root, 'fixtures'), { recursive: true })
-  setMediaStorageForTests(new LocalMediaStorageProvider(root))
+  const storage = new LocalMediaStorageProvider(root)
+  setMediaStorageForTests(storage)
 
   const png = buildPng(1280, 720)
   const wav = buildSilentWav(3000)
-  const imageKey = 'fixtures/qualification-card.png'
-  const audioKey = 'fixtures/qualification-silence.wav'
-  writeFileSync(join(root, imageKey), png)
-  writeFileSync(join(root, audioKey), wav)
+  // Keys are MINTED BY THE STORAGE PROVIDER, never invented here: the
+  // engine validates a key's shape before reading it, so a hand-written
+  // path is refused — correctly — as unreadable.
+  const { storageKey: imageKey } = await storage.put(png, 'png')
+  const { storageKey: audioKey } = await storage.put(wav, 'wav')
   const imageSha = createHash('sha256').update(png).digest('hex')
   const audioSha = createHash('sha256').update(wav).digest('hex')
   console.log(`  fixture image  ${png.length} bytes`)
