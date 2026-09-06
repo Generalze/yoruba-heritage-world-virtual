@@ -406,7 +406,11 @@ async function renderInWorkDir(input: {
       // allowed to load local resource". Remotion serves this
       // directory as its public directory, so the browser fetches the
       // asset from the same origin it is already trusting.
-      url: `/${basename(path)}`,
+      // A BARE NAME. The composition resolves it with staticFile(),
+      // which is the only thing that knows the hashed base Remotion
+      // serves the public directory under; a guessed path 404s after
+      // the browser has already started.
+      url: basename(path),
       mimeType: ref.mimeType,
       probedDurationMs,
       hasVideo,

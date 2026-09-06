@@ -5,8 +5,30 @@ import {
   Img,
   OffthreadVideo,
   Sequence,
+  staticFile,
   useVideoConfig,
 } from 'remotion'
+
+/**
+ * A materialised source name resolved to the URL the BROWSER can fetch.
+ *
+ * The renderer writes each verified source into a directory bundled as
+ * Remotion's public folder, and that folder is served under a hashed
+ * base the bundle decides at build time — not at `/name`. staticFile()
+ * is the only thing that knows the base, so guessing the path produces
+ * a 404, and a 404 here is a render that fails after the browser has
+ * already started.
+ *
+ * Absolute URLs pass through untouched: staticFile() rejects them by
+ * design, and nothing in this pipeline should be fetching one anyway.
+ */
+function resolveSourceUrl(src: string): string {
+  return src.startsWith('http://') ||
+    src.startsWith('https://') ||
+    src.startsWith('data:')
+    ? src
+    : staticFile(src)
+}
 
 /**
  * THE composition, and the whole of what a real render may contain
@@ -68,7 +90,7 @@ function SceneVisual({
   const fill = { width, height, objectFit: 'contain' } as const
 
   if (scene.mode === 'STILL') {
-    return <Img src={scene.src} style={fill} />
+    return <Img src={resolveSourceUrl(scene.src)} style={fill} />
   }
 
   if (scene.mode === 'FREEZE') {
@@ -78,7 +100,7 @@ function SceneVisual({
     // the plan said to hold still.
     return (
       <Freeze frame={scene.freezeFrame}>
-        <OffthreadVideo src={scene.src} muted style={fill} />
+        <OffthreadVideo src={resolveSourceUrl(scene.src)} muted style={fill} />
       </Freeze>
     )
   }
@@ -90,7 +112,7 @@ function SceneVisual({
       <>
         <Sequence durationInFrames={scene.playFrames}>
           <OffthreadVideo
-            src={scene.src}
+            src={resolveSourceUrl(scene.src)}
             muted
             trimBefore={scene.sourceStartFrame}
             style={fill}
@@ -101,7 +123,7 @@ function SceneVisual({
           durationInFrames={scene.durationInFrames - scene.playFrames}
         >
           <Freeze frame={scene.freezeFrame}>
-            <OffthreadVideo src={scene.src} muted style={fill} />
+            <OffthreadVideo src={resolveSourceUrl(scene.src)} muted style={fill} />
           </Freeze>
         </Sequence>
       </>
@@ -113,7 +135,7 @@ function SceneVisual({
   // NOT part of the approved audio timeline and must never be heard.
   return (
     <OffthreadVideo
-      src={scene.src}
+      src={resolveSourceUrl(scene.src)}
       muted
       trimBefore={scene.sourceStartFrame}
       style={fill}
@@ -142,7 +164,7 @@ export function PrayerComposition({ scenes, audio }: PrayerCompositionProps) {
         >
           {/* Played once, at natural rate, unaltered. An approved
               recording is heard exactly as it was approved. */}
-          <Audio src={track.src} />
+          <Audio src={resolveSourceUrl(track.src)} />
         </Sequence>
       ))}
     </AbsoluteFill>
