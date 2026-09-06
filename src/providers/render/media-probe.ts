@@ -62,7 +62,15 @@ function ffprobeBinary(): string {
 
 interface FfprobeJson {
   format?: { duration?: string; format_name?: string }
-  streams?: Array<{ codec_type?: string; duration?: string }>
+  streams?: Array<{
+    codec_type?: string
+    duration?: string
+    // Read ONLY by probeAudioTechnicalMetadataFromBytes below. Optional,
+    // so their presence changes nothing on the renderer path.
+    codec_name?: string
+    sample_rate?: string
+    channels?: number
+  }>
 }
 
 /**
@@ -258,6 +266,98 @@ const AUDIO_EXTENSIONS: Record<string, string> = {
 
 function audioExtensionFor(mimeType: string): string {
   return AUDIO_EXTENSIONS[mimeType] ?? 'bin'
+}
+
+// --- Audio technical metadata ------------------------------------------------
+
+/**
+ * Codec, sample rate and channel count, exactly as ffprobe reports them.
+ *
+ * DELIBERATELY NOT PART OF ProbedMedia. The renderer measures durations
+ * because a timeline needs them; it has never needed a codec name, and
+ * `ProbedMedia` feeds a structure whose hash decides whether a finished
+ * recording stays playable. Widening it to serve a report would put a
+ * field nothing renders inside something everything verifies. This is a
+ * separate, additive read, used by the measurement harness only.
+ */
+export interface AudioTechnicalMetadata {
+  /** Codec name as the prober reports it (`pcm_s16le`, `mp3`, ...). */
+  codec: string
+  /** Hertz, or null when the prober did not report a usable value. */
+  sampleRate: number | null
+  channels: number | null
+}
+
+export type AudioTechnicalProbeResult =
+  | { ok: true; metadata: AudioTechnicalMetadata }
+  | { ok: false; reasonCode: string }
+
+/**
+ * The parse half, split out so it is provable without a binary present.
+ *
+ * Reports absence as absence: a stream that carries no sample rate
+ * yields null rather than a plausible-looking default, because a report
+ * that invents 44100 Hz is worse than one that admits it does not know.
+ */
+export function parseAudioTechnicalMetadata(
+  stdout: string,
+): AudioTechnicalProbeResult {
+  let parsed: FfprobeJson
+  try {
+    parsed = JSON.parse(stdout) as FfprobeJson
+  } catch {
+    return { ok: false, reasonCode: 'probe_unparseable' }
+  }
+  const audio = (parsed.streams ?? []).find(
+    (stream) => stream.codec_type === 'audio',
+  )
+  if (!audio) return { ok: false, reasonCode: 'audio_stream_missing' }
+  const sampleRate = Number(audio.sample_rate)
+  const channels = Number(audio.channels)
+  return {
+    ok: true,
+    metadata: {
+      codec: audio.codec_name ?? '',
+      sampleRate:
+        Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : null,
+      channels: Number.isFinite(channels) && channels > 0 ? channels : null,
+    },
+  }
+}
+
+/**
+ * Reads the technical shape of ONE audio artifact from its exact bytes.
+ *
+ * Same discipline as the duration measurement above: the bytes are
+ * materialised into a per-call temporary directory that is removed on
+ * every path, so private audio never outlives the read. Not memoized —
+ * it runs twice in the life of a measurement, and a cache would only be
+ * a way for one artifact's answer to be reported about another's.
+ */
+export async function probeAudioTechnicalMetadataFromBytes(input: {
+  bytes: Uint8Array
+  mimeType: string
+}): Promise<AudioTechnicalProbeResult> {
+  if (input.bytes.length === 0) {
+    return { ok: false, reasonCode: 'audio_bytes_empty' }
+  }
+  const workDir = await mkdtemp(join(tmpdir(), 'yhw-audio-tech-'))
+  try {
+    const path = join(workDir, `source.${audioExtensionFor(input.mimeType)}`)
+    await writeFile(path, input.bytes)
+    let stdout: string
+    try {
+      stdout = await runFfprobe(path)
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (code === 'ENOENT') return { ok: false, reasonCode: 'probe_unavailable' }
+      if (code === 'ETIMEDOUT') return { ok: false, reasonCode: 'probe_timeout' }
+      return { ok: false, reasonCode: 'probe_failed' }
+    }
+    return parseAudioTechnicalMetadata(stdout)
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined)
+  }
 }
 
 // --- Timing tolerance --------------------------------------------------------

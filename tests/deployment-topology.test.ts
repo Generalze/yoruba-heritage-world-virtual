@@ -924,6 +924,61 @@ describe('the Yorùbá measurement harness', () => {
     expect(measure).not.toContain('transaction(')
   })
 
+  it('always records a provider request id, even when there is none', () => {
+    // The synchronous endpoint issues no operation id at all. That
+    // absence is itself a finding, so it is recorded explicitly — a
+    // key that is simply missing reads like an oversight instead.
+    expect(measure).toContain("providerRequestId: 'not_provided'")
+    // The ONLY other thing this field may ever hold is an id the
+    // provider really issued. A local identifier dressed up as a
+    // provider's would be a fabricated audit trail.
+    expect(measure).toContain(
+      'report.providerRequestId = submission.providerJobId',
+    )
+    expect(measure).not.toContain('providerRequestId: runId')
+    expect(measure).not.toContain('providerRequestId = runId')
+  })
+
+  it('bands the result against thresholds locked before it was measured', () => {
+    expect(measure).toContain('classifyDurationVariance(deltaPercent)')
+    expect(measure).toContain(
+      'greenMaxAbsolutePercent: VARIANCE_BAND_GREEN_MAX_PERCENT',
+    )
+    expect(measure).toContain(
+      'amberMaxAbsolutePercent: VARIANCE_BAND_AMBER_MAX_PERCENT',
+    )
+    // The bands are IMPORTED, never restated here, so the harness
+    // cannot quietly grade itself against a softer number than the one
+    // agreed before any audio existed to judge.
+    expect(measure).toContain("from '@/lib/speech-measurement'")
+    expect(measure).not.toContain('deltaPercent > 15')
+    expect(measure).not.toContain('deltaPercent > 40')
+    // And an unmeasured block starts unclassified rather than GREEN.
+    expect(measure).toContain('classification: null')
+  })
+
+  it('records the technical shape without risking the finding', () => {
+    expect(measure).toContain('probeAudioTechnicalMetadataFromBytes({')
+    for (const field of ['codec:', 'sampleRate:', 'channels:']) {
+      expect(measure).toContain(field)
+    }
+    // A codec name that would not parse must NOT destroy a paid
+    // measurement. The duration is the finding; a failed second read is
+    // named and the run continues.
+    expect(measure).toContain('technicalProbeFailure')
+  })
+
+  it('names the audio after what it is, never after what we expected', () => {
+    expect(measure).toContain(
+      'audioFileExtensionFor(submission.artifact.mimeType)',
+    )
+    expect(measure).toContain('NEUTRAL_AUDIO_EXTENSION')
+    // TEETH: the hard-coded `.wav` is gone and must not come back. It
+    // was true of this provider today and would have gone on claiming
+    // to be true on the day it stopped.
+    expect(measure).not.toContain('${runId}.wav')
+  })
+
   it('leaves production TTS disabled', () => {
     // The harness does not change what production does; it only refuses
     // to run when the driver is not selected in ITS OWN environment.

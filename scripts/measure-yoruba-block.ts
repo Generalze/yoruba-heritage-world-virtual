@@ -61,7 +61,17 @@ import {
   createNaijalingoTtsProvider,
 } from '@/providers/tts/naijalingo'
 import { TtsProviderError } from '@/providers/tts/types'
-import { measureAudioDurationFromBytes } from '@/providers/render/media-probe'
+import {
+  measureAudioDurationFromBytes,
+  probeAudioTechnicalMetadataFromBytes,
+} from '@/providers/render/media-probe'
+import {
+  NEUTRAL_AUDIO_EXTENSION,
+  VARIANCE_BAND_AMBER_MAX_PERCENT,
+  VARIANCE_BAND_GREEN_MAX_PERCENT,
+  audioFileExtensionFor,
+  classifyDurationVariance,
+} from '@/lib/speech-measurement'
 
 const versionId = Number(process.argv[2])
 const confirmSpend = process.argv.includes('--confirm-spend')
@@ -91,6 +101,17 @@ const report: Record<string, unknown> = {
   startedAt: new Date().toISOString(),
   mode: confirmSpend ? 'PAID' : 'DRY_RUN',
   contentVersionId: versionId,
+  // ALWAYS PRESENT, on every path, including a refusal that never
+  // reached the network. 9jaLingo's synthesis endpoint answers
+  // synchronously with audio bytes and issues no operation id, so this
+  // normally stays 'not_provided' — recorded as an explicit absence,
+  // because a missing key reads like an oversight and this one is a
+  // finding. It is NEVER filled in from our own runId: a local
+  // identifier dressed as a provider's is a fabricated audit trail.
+  providerRequestId: 'not_provided',
+  // Null until there is both a measured duration and an authored budget
+  // to band it against. An unmeasured block is not GREEN.
+  classification: null,
 }
 
 function writeReport(): void {
@@ -277,6 +298,13 @@ if (submission.status !== 'COMPLETED' || !submission.artifact) {
   report.passed = false
   report.audioProduced = false
   report.submissionStatus = submission.status
+  // If this provider ever DOES answer asynchronously, the operation id
+  // it issued is real, and a real one is preserved. This is the only
+  // place the field is ever written to something other than the honest
+  // 'not_provided' it starts as.
+  if (submission.status === 'PENDING') {
+    report.providerRequestId = submission.providerJobId
+  }
   report.latencyMs = latencyMs
   writeReport()
   console.error('\nno artifact returned')
@@ -314,19 +342,58 @@ audio could not be measured: ${measured.reasonCode}`)
 const measuredMs = measured.durationMs
 const budgetMs = (row.durationHintSeconds ?? 0) * 1000
 const deltaMs = measuredMs - budgetMs
-const deltaPercent = budgetMs > 0 ? (deltaMs / budgetMs) * 100 : null
+// Rounded ONCE, here, and the band below is derived from this exact
+// value. If the classifier judged a raw number while the report printed
+// a rounded one, a report could read "15.0% — AMBER" and look like a
+// defect to the person holding it.
+const deltaPercent =
+  budgetMs > 0 ? Number(((deltaMs / budgetMs) * 100).toFixed(1)) : null
+const classification = classifyDurationVariance(deltaPercent)
 
+// --- The technical shape of what actually came back --------------------
+// A second read of the same bytes, for codec, sample rate and channel
+// count. It is NOT permitted to fail the measurement: the duration is
+// the finding, and discarding a paid answer because a codec name would
+// not parse is a poor trade. A failure is recorded by name instead.
+const technical = await probeAudioTechnicalMetadataFromBytes({
+  bytes,
+  mimeType: submission.artifact.mimeType,
+})
+
+// --- Name the evidence after what it IS, not what we expected ----------
+// The provider returns WAV today. Hard-coding `.wav` would make that
+// expectation permanent and, on the day it stopped being true, would
+// write a false claim about the bytes into the filename.
+const extension = audioFileExtensionFor(submission.artifact.mimeType)
+const audioExtension = extension.ok ? extension.extension : NEUTRAL_AUDIO_EXTENSION
 mkdirSync(OUT_DIR, { recursive: true })
-const audioPath = join(OUT_DIR, `block-${row.versionId}-${runId}.wav`)
+const audioPath = join(
+  OUT_DIR,
+  `block-${row.versionId}-${runId}.${audioExtension}`,
+)
 writeFileSync(audioPath, bytes)
 
 report.passed = true
 report.audioProduced = true
 report.latencyMs = latencyMs
+report.classification = classification
+// The report carries the thresholds it was judged by, so it can be
+// re-checked by hand without anyone having to find the document that
+// locked them.
+report.classificationThresholds = {
+  greenMaxAbsolutePercent: VARIANCE_BAND_GREEN_MAX_PERCENT,
+  amberMaxAbsolutePercent: VARIANCE_BAND_AMBER_MAX_PERCENT,
+}
 report.audio = {
   sha256: audioSha,
   byteSize: bytes.length,
   mimeType: submission.artifact.mimeType,
+  fileExtension: audioExtension,
+  fileExtensionReasonCode: extension.ok ? null : extension.reasonCode,
+  codec: technical.ok ? technical.metadata.codec : null,
+  sampleRate: technical.ok ? technical.metadata.sampleRate : null,
+  channels: technical.ok ? technical.metadata.channels : null,
+  technicalProbeFailure: technical.ok ? null : technical.reasonCode,
   providerReportedDurationMs: submission.artifact.durationMs,
   measuredDurationMs: measuredMs,
   path: audioPath,
@@ -335,7 +402,7 @@ report.timing = {
   authoredBudgetMs: budgetMs,
   measuredMs,
   deltaMs,
-  deltaPercent: deltaPercent === null ? null : Number(deltaPercent.toFixed(1)),
+  deltaPercent,
   charactersPerSecond:
     measuredMs > 0 ? Number((row.body.length / (measuredMs / 1000)).toFixed(2)) : null,
 }
@@ -344,10 +411,15 @@ writeReport()
 console.log(`\n  measured duration  ${measuredMs} ms`)
 console.log(`  authored budget    ${budgetMs} ms`)
 console.log(
-  `  delta              ${deltaMs >= 0 ? '+' : ''}${deltaMs} ms (${deltaPercent === null ? 'n/a' : `${deltaPercent.toFixed(1)}%`})`,
+  `  delta              ${deltaMs >= 0 ? '+' : ''}${deltaMs} ms (${deltaPercent === null ? 'n/a' : `${deltaPercent}%`})`,
 )
+console.log(`  classification     ${classification ?? 'UNCLASSIFIED (no authored budget)'}`)
 console.log(`  audio sha256       ${audioSha}`)
 console.log(`  bytes              ${bytes.length}`)
+console.log(
+  `  codec / rate / ch  ${technical.ok ? `${technical.metadata.codec} / ${technical.metadata.sampleRate ?? 'unknown'} Hz / ${technical.metadata.channels ?? 'unknown'}` : `unavailable (${technical.reasonCode})`}`,
+)
+console.log(`  provider requestId ${String(report.providerRequestId)}`)
 console.log(`  latency            ${latencyMs} ms`)
 console.log(`  audio written      ${audioPath}`)
 console.log('\nONE call was made. Nothing was retried.')
