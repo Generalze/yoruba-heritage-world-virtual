@@ -461,3 +461,88 @@ describe('the production migration and backup path', () => {
     expect(restore).toContain('gzip -t "$BACKUP_FILE"')
   })
 })
+
+describe('the curated launch dataset', () => {
+  /** Code only — a doc comment naming `mysqldump` as the thing this
+   * replaced must not read as the script doing it. */
+  function code(text: string): string {
+    return text
+      .split(NEWLINE)
+      .filter((line) => {
+        const t = line.trimStart()
+        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
+      })
+      .join(NEWLINE)
+  }
+  const exporter = code(read('scripts/export-launch-data.ts'))
+  const importer = code(read('scripts/import-launch-data.ts'))
+
+  it('is enumerated, never a blind dump of a development database', () => {
+    // The development database carries fixture users, draft templates,
+    // test appointments and years of suite residue beside the governed
+    // content. A mysqldump would carry all of it into production as
+    // though a person had approved it.
+    for (const script of [exporter, importer]) {
+      expect(script).not.toContain('mysqldump')
+      expect(script).not.toContain('mariadb-dump')
+    }
+    // The set is named, not discovered: content by its V3 manifest,
+    // Houses by the ruled code map.
+    expect(exporter).toContain('V3_LAUNCH_CONTENT')
+    expect(exporter).toContain('SACRED_HOUSE_VOICE_PROFILE')
+  })
+
+  it('excludes every category that is not governed launch data', () => {
+    // Named here so the omission is deliberate and reviewable rather
+    // than an accident of which query somebody wrote.
+    for (const table of [
+      'users',
+      'appointments',
+      'subscriptions',
+      'payment_attempts',
+      'appointment_guidance_sets',
+      'prayer_generation_jobs',
+    ]) {
+      expect(exporter).not.toContain(`FROM ${table}`)
+    }
+  })
+
+  it('takes only APPROVED Visual Bibles, so the archived V205 cannot travel', () => {
+    expect(exporter).toContain("vv.status = 'APPROVED'")
+    expect(exporter).toContain("status = 'APPROVED'")
+  })
+
+  it('resolves Houses by CODE and refuses a database whose ids disagree', () => {
+    // The id travels because the V3 manifest pins it; the CODE decides
+    // which House a row belongs to. Silently re-pointing 24 prayers at
+    // the wrong House is the one mistake here that would be invisible
+    // afterwards.
+    expect(importer).toContain('is id ${existing.id} here and ${match.id} in the export')
+    expect(exporter).toContain('WHERE code IN')
+  })
+
+  it('hashes every binary before AND after it lands', () => {
+    expect(importer).toContain('corrupt in the export')
+    expect(importer).toContain('corrupt AFTER writing')
+    // The export refuses a file that already disagrees with its
+    // recorded hash, so a corrupt source never becomes a corrupt
+    // export.
+    expect(exporter).toContain('does not match its recorded hash')
+  })
+
+  it('carries no fixture user into a production approval trail', () => {
+    // Discovered from the target's own foreign keys rather than a
+    // hand-kept list that would rot.
+    expect(importer).toContain("referenced_table_name = 'users'")
+    expect(importer).toContain('NULL')
+  })
+
+  it('publishes nothing by importing, and refuses to run twice', () => {
+    expect(importer).toContain('Nothing was published')
+    expect(importer).toContain('already holds')
+    expect(importer).toContain('This import is not a merge')
+    // No status is rewritten on the way in.
+    expect(importer).not.toContain("status = 'PUBLISHED'")
+    expect(importer).not.toContain('published_at = ')
+  })
+})
