@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { basename, join } from 'node:path'
 
 import { env } from '@/lib/env'
 import { getMediaStorage } from '@/providers/media/storage'
@@ -145,6 +144,10 @@ export interface CompositionScene {
 }
 
 export interface CompositionInput {
+  /** The directory the materialised sources were written to. It is
+   * served to the browser as Remotion's public directory — see
+   * remotionCompositor for why a file:// path cannot be used. */
+  publicDir: string
   fps: number
   width: number
   height: number
@@ -214,8 +217,13 @@ const remotionCompositor: Compositor = async (input) => {
   const { PRAYER_COMPOSITION_ID } = await import(
     '@/remotion/PrayerComposition'
   )
+  // The materialised sources are bundled as the PUBLIC DIRECTORY, so
+  // the browser fetches them over http from the same origin serving the
+  // composition. selectComposition and renderMedia need no equivalent
+  // option: they are handed this serveUrl, which already carries them.
   const serveUrl = await bundler.bundle({
     entryPoint: join(process.cwd(), 'src', 'remotion', 'index.ts'),
+    publicDir: input.publicDir,
   })
   const inputProps = { scenes: input.scenes, audio: input.audio }
   // THE SAME BROWSER, NAMED IN BOTH PLACES. selectComposition drives a
@@ -392,7 +400,13 @@ async function renderInWorkDir(input: {
       refId: ref.refId,
       role: ref.role,
       path,
-      url: pathToFileURL(path).href,
+      // A PATH SERVED OVER HTTP, NOT A file:// URL. The compositor's
+      // page is served from http://localhost by Remotion, and Chromium
+      // refuses to load a local file into an http origin — "Not
+      // allowed to load local resource". Remotion serves this
+      // directory as its public directory, so the browser fetches the
+      // asset from the same origin it is already trusting.
+      url: `/${basename(path)}`,
       mimeType: ref.mimeType,
       probedDurationMs,
       hasVideo,
@@ -548,6 +562,7 @@ async function renderInWorkDir(input: {
   // --- 4. Compose -------------------------------------------------------
   const outputPath = join(workDir, 'render.mp4')
   await compose({
+    publicDir: workDir,
     fps,
     width: input.width,
     height: input.height,
