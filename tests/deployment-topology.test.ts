@@ -262,7 +262,7 @@ describe('operations documentation', () => {
 
   it('states that migrations are never automatic', () => {
     expect(runbook).toContain('never applied automatically')
-    expect(packageJson.scripts['db:migrate']).toBe('drizzle-kit migrate')
+    expect(packageJson.scripts['db:migrate']).toBe('bun run scripts/migrate.ts')
     // Nothing in the request path migrates.
     const server = read('server.ts')
     expect(server).not.toContain('migrate')
@@ -321,5 +321,143 @@ describe('no forbidden production dependencies', () => {
     expect(names).toContain('@aws-sdk/client-s3')
     expect(names).toContain('@aws-sdk/s3-request-presigner')
     expect(names).toContain('@remotion/renderer')
+  })
+})
+
+describe('the production migration and backup path', () => {
+  const pkg = JSON.parse(read('package.json')) as {
+    scripts: Record<string, string>
+    dependencies: Record<string, string>
+    devDependencies: Record<string, string>
+  }
+  /** TypeScript prose, stripped, so a doc comment explaining a rule
+   * can neither trip a guard nor satisfy one. */
+  function tsCode(text: string): string {
+    return text
+      .split(NEWLINE)
+      .filter((line) => {
+        const t = line.trimStart()
+        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
+      })
+      .join(NEWLINE)
+  }
+  const migrateScript = tsCode(read('scripts/migrate.ts'))
+  // withoutComments already strips `#` lines, which is what a shell
+  // script's prose is.
+  const backup = withoutComments(read('scripts/backup-db.sh'))
+  const restore = withoutComments(read('scripts/restore-db.sh'))
+
+  it('migrates with a RUNTIME dependency, never a development one', () => {
+    // The trap this replaced: `db:migrate` called drizzle-kit, which is
+    // a devDependency, while the runtime image installs with
+    // `--production`. The command the runbook gave an operator was one
+    // the production image could not run — discovered at the moment a
+    // schema change is due, on a server, with the site down.
+    expect(pkg.scripts['db:migrate']).toBe('bun run scripts/migrate.ts')
+    expect(pkg.scripts['db:migrate']).not.toContain('drizzle-kit')
+    expect(migrateScript).toContain("from 'drizzle-orm/mysql2/migrator'")
+    expect(migrateScript).not.toContain('drizzle-kit')
+    // drizzle-orm ships to production; drizzle-kit deliberately does not.
+    expect(pkg.dependencies['drizzle-orm']).toBeDefined()
+    expect(pkg.devDependencies['drizzle-kit']).toBeDefined()
+    expect(pkg.dependencies['drizzle-kit']).toBeUndefined()
+    // Generating a migration is still development work, and remains the
+    // only thing the kit is needed for.
+    expect(pkg.scripts['db:generate']).toContain('drizzle-kit')
+  })
+
+  it('ships everything that migration needs into the runtime image', () => {
+    // A runner present without its migrations is the same failure in a
+    // different place.
+    expect(dockerfile).toContain('COPY --from=build /app/migrations ./migrations')
+    expect(dockerfile).toContain('COPY --from=build /app/scripts ./scripts')
+    expect(dockerfile).toContain('COPY --from=build /app/src ./src')
+  })
+
+  it('never applies migrations automatically', () => {
+    // A schema change lands when a person decides it lands, having
+    // taken a backup first. Nothing may migrate at boot or on request.
+    expect(read('server.ts')).not.toContain('migrate')
+    expect(read('src/workers/prayer-generation-worker.ts')).not.toContain(
+      'migrationsFolder',
+    )
+    const active = withoutComments(compose)
+    expect(active).not.toContain('db:migrate')
+  })
+
+  it('backs up THROUGH THE CONTAINER, not through a published port', () => {
+    // Production publishes no database port and the host has no MariaDB
+    // client — the client exists only inside the database image.
+    for (const script of [backup, restore]) {
+      expect(script).toContain('compose -f "$COMPOSE_FILE" exec -T')
+      expect(script).not.toContain('--host=')
+      expect(script).not.toContain('--port=')
+      expect(script).not.toContain('127.0.0.1')
+      expect(script).not.toContain('DATABASE_HOST')
+      expect(script).not.toContain('DATABASE_PORT')
+    }
+  })
+
+  it('never puts a credential on a host command line', () => {
+    // Arguments and host-side environment are readable by every other
+    // user on the machine through the process list. The password is
+    // resolved INSIDE the container, from the environment it already
+    // has, which is why these strings are single-quoted in the source.
+    for (const script of [backup, restore]) {
+      expect(script).toContain('MYSQL_PWD="$MARIADB_ROOT_PASSWORD"')
+      // The host-expanded forms, all absent.
+      expect(script).not.toContain('MYSQL_PWD="$DATABASE_PASSWORD"')
+      expect(script).not.toContain('--password')
+      expect(script).not.toContain('-p$')
+      expect(script).not.toContain('echo "$DATABASE_PASSWORD"')
+      // And the whole point: the expansion sits inside SINGLE quotes,
+      // so the host shell never performs it.
+      expect(script).toContain("sh -c '")
+    }
+  })
+
+  it('assumes sudo docker rather than a docker-group deploy user', () => {
+    // The docker group is root-equivalent: any member can bind-mount /
+    // into a container and write anywhere. `sudo docker` keeps the
+    // privilege visible and audited.
+    for (const script of [backup, restore]) {
+      expect(script).toContain('DOCKER=${DOCKER:-docker}')
+    }
+    // The instruction to use sudo lives in the refusal message an
+    // operator actually sees when Compose is unreachable.
+    expect(read('scripts/backup-db.sh')).toContain('sudo docker')
+    expect(read('scripts/restore-db.sh')).toContain('sudo docker')
+    expect(read('deploy/bootstrap-vps.sh')).not.toContain('usermod -aG docker')
+  })
+
+  it('refuses a backup that is empty, corrupt, or inside the repository', () => {
+    // A file that exists is not a backup. Each of these produced a
+    // plausible-looking archive that could not be restored.
+    expect(backup).toContain('gzip -t "$TARGET"')
+    expect(backup).toContain('if [ ! -s "$TARGET" ]')
+    expect(backup).toContain('refusing: BACKUP_DIR is inside the repository')
+    expect(backup).toContain('.sha256')
+  })
+
+  it('READS the env file, and never SOURCES it', () => {
+    // `set -a; . .env` executes the file as shell. A value containing
+    // spaces or parentheses breaks the script — a Windows browser path
+    // did exactly that — and a value containing $(...) would RUN it.
+    // Compose parses this file by different rules anyway, so agreeing
+    // with the shell is not even correct.
+    for (const script of [backup, restore]) {
+      expect(script).not.toContain('. "$REPO_ROOT/.env"')
+      expect(script).not.toContain('set -a')
+      expect(script).toContain('read_env')
+    }
+  })
+
+  it('keeps the restore deliberately awkward', () => {
+    expect(restore).toContain('CONFIRM_RESTORE')
+    expect(restore).toContain('RESTORE_INTO')
+    // Refuses while the application could be writing into a schema
+    // being rebuilt underneath it.
+    expect(restore).toContain("for service in app worker")
+    expect(restore).toContain('gzip -t "$BACKUP_FILE"')
   })
 })

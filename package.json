@@ -15,7 +15,7 @@
     "check": "prettier --check .",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "bun run scripts/migrate.ts",
     "db:seed": "bun run src/db/seed.ts",
     "db:seed:domain": "bun run src/db/seed-domain.ts",
     "admin:grant": "bun run src/db/grant-role.ts",

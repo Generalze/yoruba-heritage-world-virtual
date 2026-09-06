@@ -12,13 +12,30 @@ and use the `.env` file instead.
 
 ## 1. Topology
 
-Three containers, from `docker-compose.yml`:
+Five containers, from `docker-compose.yml`:
 
 | service  | what it is                          | command                       |
 | -------- | ----------------------------------- | ----------------------------- |
+| `caddy`  | TLS edge — **the only published ports** | —                         |
 | `app`    | web server (SSR pages + `/api`)     | `bun server.ts`               |
 | `worker` | autonomous generation pipeline      | `bun run worker:generation`   |
 | `db`     | MariaDB 11                          | —                             |
+| `minio`  | private object storage              | —                             |
+
+**Only `caddy` publishes host ports**, and only 80 and 443. `app`,
+`worker`, `db` and `minio` are reachable on the Compose network alone: a
+published port on a VPS is an open port, and 3306 or 9000 in the open is
+found by scanners within minutes. The MinIO S3 API reaches the world
+only through Caddy at `STORAGE_DOMAIN`, because a browser must fetch a
+signed URL to play a finished recording; the MinIO console on 9001 is
+not proxied at all and belongs behind an SSH tunnel:
+
+```sh
+ssh -L 9001:localhost:9001 yhwadmin@<host>
+```
+
+The deploy user is deliberately **not** in the `docker` group — that
+group is root-equivalent — so every Docker command below uses `sudo`.
 
 `app` and `worker` run **the same image at the same revision**. They are
 built once and tagged `yhwv-app:${APP_REVISION}`; set `APP_REVISION` to
@@ -257,19 +274,40 @@ always present.
 
 ```sh
 # 1. BACK UP FIRST (§5). Not optional.
-./scripts/backup-db.sh
+DOCKER="sudo docker" ./scripts/backup-db.sh
 
-# 2. Inspect what is pending
-docker compose run --rm --no-deps app bun run db:migrate --help
-
-# 3. Apply, from the same image as the revision being deployed
+# 2. Apply, from the SAME image as the revision being deployed
 APP_REVISION=$(git rev-parse --short HEAD) \
-  docker compose run --rm app bun run db:migrate
+  sudo docker compose run --rm app bun run db:migrate
 
-# 4. Verify
-docker compose exec db mariadb -u"$DATABASE_USER" -p"$DATABASE_PASSWORD" \
-  "$DATABASE_NAME" -e "SELECT COUNT(*) AS applied FROM __drizzle_migrations;"
+# 3. Verify — a COUNT, never a dump, and no credential on a host
+#    command line. The single quotes matter: $MARIADB_ROOT_PASSWORD is
+#    expanded inside the container, where it already lives, so it never
+#    appears in this machine's process list.
+sudo docker compose exec -T db sh -c 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" \
+  mariadb -u root "$MARIADB_DATABASE" \
+  -e "SELECT COUNT(*) AS applied FROM __drizzle_migrations;"'
 ```
+
+**Why `db:migrate` is not `drizzle-kit migrate`.** drizzle-kit is a
+devDependency, and the runtime image installs with
+`bun install --frozen-lockfile --production`. The old command was one
+the production image could not run, and it would have failed at the
+worst possible moment — a schema change due, the site down for
+maintenance, and the tool missing. `scripts/migrate.ts` uses
+drizzle-orm's own migrator instead: a runtime dependency already
+present for every query the application makes, reading the same
+`migrations/` folder the image carries and the same
+`__drizzle_migrations` journal the kit writes. `drizzle-kit generate`
+stays development-only, which is the only thing it is needed for.
+
+**Why the database commands go through the container.** Production
+publishes no database port and the server has no MariaDB client — the
+client exists only inside the database image. Both backup and restore
+therefore run `docker compose exec` and let the credential resolve
+inside the container from the environment it already has. `sudo` is
+required because the deploy user is deliberately not in the `docker`
+group, which is root-equivalent.
 
 Order for a schema-changing deploy: **back up → migrate → deploy**. Stop
 the worker first if a migration touches generation tables, so no pass is
@@ -291,7 +329,7 @@ and **print none of them**; both refuse to write inside the repository.
 ### Back up
 
 ```sh
-BACKUP_DIR=/var/backups/yhwv ./scripts/backup-db.sh
+BACKUP_DIR=/var/backups/yhwv DOCKER="sudo docker" ./scripts/backup-db.sh
 ```
 
 Writes `yhwv-<database>-<UTC timestamp>.sql.gz` to `BACKUP_DIR`
@@ -314,7 +352,7 @@ The database is not the whole system. Also back up:
 ### Restore
 
 ```sh
-BACKUP_FILE=/var/backups/yhwv/yhwv-....sql.gz ./scripts/restore-db.sh
+CONFIRM_RESTORE=yes BACKUP_FILE=/var/backups/yhwv/yhwv-....sql.gz \n  DOCKER="sudo docker" ./scripts/restore-db.sh
 ```
 
 The script is deliberately awkward: it requires `CONFIRM_RESTORE=yes`,
@@ -326,7 +364,7 @@ a hypothesis:**
 
 ```sh
 # 1. Restore into a THROWAWAY database, never production
-DATABASE_NAME=yhwv_restore_check ./scripts/restore-db.sh
+CONFIRM_RESTORE=yes RESTORE_INTO=yhwv_restore_check \n  BACKUP_FILE=/var/backups/yhwv/yhwv-....sql.gz \n  DOCKER="sudo docker" ./scripts/restore-db.sh
 
 # 2. Prove it is the schema you expect
 docker compose exec db mariadb ... -e "
