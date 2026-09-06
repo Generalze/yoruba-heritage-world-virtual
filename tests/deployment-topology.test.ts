@@ -593,3 +593,25 @@ describe('the Remotion technical qualification', () => {
     expect(qualify).toContain('implausibly small')
   })
 })
+
+describe('the real compositor never provisions its own browser', () => {
+  const remotion = read('src/providers/render/remotion.ts')
+
+  it('names the baked-in executable in BOTH browser-driving calls', () => {
+    // selectComposition drives a browser just as renderMedia does.
+    // Naming it in only one left the other to download Chrome into
+    // node_modules/.remotion — a directory the unprivileged container
+    // user cannot write — so the render failed EACCES before a single
+    // frame. A download at the moment of somebody's paid render is the
+    // failure the baked-in browser exists to prevent; it has to be
+    // prevented in both places.
+    const occurrences = remotion.split('browserExecutable:').length - 1
+    expect(occurrences).toBe(2)
+    const select = remotion.slice(
+      remotion.indexOf('renderer.selectComposition({'),
+      remotion.indexOf('renderer.renderMedia({'),
+    )
+    expect(select).toContain('browserExecutable:')
+    expect(select).toContain('REMOTION_BROWSER_EXECUTABLE')
+  })
+})

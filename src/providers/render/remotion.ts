@@ -218,10 +218,22 @@ const remotionCompositor: Compositor = async (input) => {
     entryPoint: join(process.cwd(), 'src', 'remotion', 'index.ts'),
   })
   const inputProps = { scenes: input.scenes, audio: input.audio }
+  // THE SAME BROWSER, NAMED IN BOTH PLACES. selectComposition drives a
+  // browser too, and passing the executable only to renderMedia left
+  // this call to provision its own — which it does by DOWNLOADING one
+  // into node_modules/.remotion, a directory the unprivileged
+  // container user cannot write. The render then failed EACCES before
+  // a single frame, which is exactly the failure the baked-in browser
+  // exists to prevent; it was simply prevented in one of the two
+  // places that needed it.
   const composition = await renderer.selectComposition({
     serveUrl,
     id: PRAYER_COMPOSITION_ID,
     inputProps,
+    browserExecutable:
+      env.REMOTION_BROWSER_EXECUTABLE.trim() === ''
+        ? null
+        : env.REMOTION_BROWSER_EXECUTABLE,
   })
   await renderer.renderMedia({
     serveUrl,
