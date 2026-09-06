@@ -546,3 +546,50 @@ describe('the curated launch dataset', () => {
     expect(importer).not.toContain('published_at = ')
   })
 })
+
+describe('the Remotion technical qualification', () => {
+  const qualify = read('scripts/qualify-remotion.ts')
+
+  it('renders from FIXTURES, never from governed content', () => {
+    // Publishing a governed template to make a technical render
+    // possible would be publishing for the convenience of a test —
+    // exactly backwards, since publication is a human decision about
+    // sacred content.
+    expect(qualify).toContain('buildPng')
+    expect(qualify).toContain('buildSilentWav')
+    expect(qualify).not.toContain('V3_LAUNCH_CONTENT')
+    expect(qualify).not.toContain('spiritualContentVersions')
+    expect(qualify).not.toContain('visualBible')
+    expect(qualify).not.toContain('approvedText')
+    // No database at all.
+    expect(qualify).not.toContain("from '@/db'")
+    expect(qualify).not.toContain('getDb')
+  })
+
+  it('contacts no paid provider', () => {
+    for (const vendor of ['naijalingo', 'NAIJALINGO', 'kling', 'KLING', 'openai']) {
+      expect(qualify).not.toContain(vendor)
+    }
+  })
+
+  it('refuses to pass with the mock engine', () => {
+    // A green run against the mock would prove nothing about Chromium,
+    // ffprobe or Remotion, which is the entire point.
+    expect(qualify).toContain('engine.isMock')
+    expect(qualify).toContain('nothing would be proved')
+  })
+
+  it('states plainly what it does NOT qualify', () => {
+    // The dangerous conclusion is "the render works, so the pipeline
+    // works". It exercises no recipe, no storyboard, no reservation and
+    // no upload.
+    expect(qualify).toContain('WHAT IT DOES NOT PROVE')
+    expect(qualify).toContain('NOT qualified by it')
+  })
+
+  it('proves a real file, not merely a promise that resolved', () => {
+    expect(qualify).toContain("output.mimeType !== 'video/mp4'")
+    expect(qualify).toContain('output.durationMs <= 0')
+    expect(qualify).toContain('implausibly small')
+  })
+})
