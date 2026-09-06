@@ -749,6 +749,14 @@ describe('the staging qualification harness', () => {
     expect(driver).not.toContain('update(prayerGenerationJobs)')
   })
 
+  it('passes the revision under test into the run', () => {
+    // Without it the report's gitSha is null, and two runs become
+    // indistinguishable by provenance — exactly what a regression
+    // qualification exists to establish.
+    expect(activeStaging).toContain('APP_REVISION: ${STAGING_REVISION:-unknown}')
+    expect(driver).toContain("process.env.APP_REVISION")
+  })
+
   it('records everything a reader needs, in the JSON report', () => {
     for (const field of [
       'runId',

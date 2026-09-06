@@ -28,6 +28,11 @@ name: yhw-staging
 x-staging-environment: &staging-environment
   # Not production, and the reason is above.
   NODE_ENV: development
+  # THE REVISION UNDER TEST, so a report can be traced back to the code
+  # that produced it. Without this the report's gitSha was null, which
+  # made two runs indistinguishable by provenance — exactly the thing a
+  # regression qualification exists to establish.
+  APP_REVISION: ${STAGING_REVISION:-unknown}
   DATABASE_HOST: db
   DATABASE_PORT: 3306
   DATABASE_USER: ${STAGING_DB_USER:?set in staging env}
