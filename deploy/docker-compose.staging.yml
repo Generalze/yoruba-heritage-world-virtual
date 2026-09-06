@@ -1,0 +1,172 @@
+# ISOLATED STAGING — governed pipeline qualification only.
+#
+#   sudo docker compose -p yhw-staging -f deploy/docker-compose.staging.yml up -d
+#
+# A SEPARATE COMPOSE PROJECT, not an override of production. Its own
+# project name means its own network and its own volumes, so nothing
+# here can reach or be reached by the production stack sharing the
+# machine. Production's database, object store and media volume are
+# untouched by construction, not by care.
+#
+# WHY NODE_ENV IS NOT production. The mock payment provider refuses to
+# run in production — deliberately, since a mock that could settle a
+# real appointment is a way to give somebody a recording they never
+# paid for. Confirming an appointment is the ONLY path that enqueues a
+# generation job, so a governed end-to-end run needs a non-production
+# environment. The trade is explicit: this qualifies the GOVERNED
+# PIPELINE, not the production preflight, which is permissive here.
+#
+# WHAT IS DELIBERATELY ABSENT: no Caddy, no published host ports, no
+# TLS, no public surface of any kind. Everything is reached through
+# `docker compose exec` on the private network.
+#
+# EPHEMERAL. Every volume here is destroyed with `down -v` when the
+# qualification ends; the report is copied off first.
+
+name: yhw-staging
+
+x-staging-environment: &staging-environment
+  # Not production, and the reason is above.
+  NODE_ENV: development
+  DATABASE_HOST: db
+  DATABASE_PORT: 3306
+  DATABASE_USER: ${STAGING_DB_USER:?set in staging env}
+  DATABASE_PASSWORD: ${STAGING_DB_PASSWORD:?set in staging env}
+  DATABASE_NAME: ${STAGING_DB_NAME:?set in staging env}
+  APP_BASE_URL: http://app:3000
+  TRUST_PROXY: 'false'
+  MEDIA_STORAGE_DIR: /app/var/media
+
+  # Private object storage, its own MinIO and its own bucket.
+  OBJECT_STORAGE_DRIVER: S3
+  OBJECT_STORAGE_ENDPOINT: http://minio:9000
+  OBJECT_STORAGE_REGION: us-east-1
+  OBJECT_STORAGE_BUCKET: ${STAGING_BUCKET:?set in staging env}
+  OBJECT_STORAGE_ACCESS_KEY_ID: ${STAGING_MINIO_USER:?set in staging env}
+  OBJECT_STORAGE_SECRET_ACCESS_KEY: ${STAGING_MINIO_PASSWORD:?set in staging env}
+  OBJECT_STORAGE_FORCE_PATH_STYLE: 'true'
+
+  # THE REAL COMPOSITOR. The point of this exercise is a real MP4.
+  RENDER_DRIVER: REMOTION
+  FFPROBE_PATH: /usr/bin/ffprobe
+  REMOTION_BROWSER_EXECUTABLE: /usr/bin/chromium
+  REMOTION_CONCURRENCY: 1
+  REMOTION_TIMEOUT_MS: 600000
+
+  # Every paid or outbound capability off. The English launch content is
+  # TEXT_ONLY, so a governed recording needs no synthesis at all and
+  # 9jaLingo is never reachable from this stack.
+  TTS_DRIVER: DISABLED
+  VISUAL_GENERATION_DRIVER: DISABLED
+  NOTIFICATION_EMAIL_DRIVER: DISABLED
+  NAIJALINGO_API_KEY: ''
+  NAIJALINGO_API_BASE_URL: ''
+  NAIJALINGO_YO_MALE_VOICE_ID: ''
+  NAIJALINGO_YO_FEMALE_VOICE_ID: ''
+  NAIJALINGO_MODEL: ''
+  KLING_API_KEY: ''
+  KLING_API_BASE_URL: ''
+  KLING_ARTIFACT_ORIGINS: ''
+
+  # The ONLY payment provider here is the mock, and it exists solely
+  # because confirmation is the only path that enqueues generation.
+  # No real provider is configured, so none can be selected.
+  PAYMENTS_ENABLED: 'true'
+  CRYPTO_ENABLED: 'true'
+  CRYPTO_PROVIDER: mock
+  CRYPTO_API_KEY: ''
+  CRYPTO_WEBHOOK_SECRET: ${STAGING_WEBHOOK_SECRET:?set in staging env}
+  CRYPTO_FIAT_CURRENCIES: NGN
+  PAYSTACK_ENABLED: 'false'
+  PAYSTACK_SECRET_KEY: ''
+  PAYSTACK_CURRENCIES: ''
+  PAYPAL_ENABLED: 'false'
+  PAYPAL_ENV: sandbox
+  PAYPAL_CLIENT_ID: ''
+  PAYPAL_CLIENT_SECRET: ''
+  PAYPAL_WEBHOOK_ID: ''
+  PAYPAL_CURRENCIES: ''
+  STRIPE_ENABLED: 'false'
+  STRIPE_SECRET_KEY: ''
+  STRIPE_WEBHOOK_SECRET: ''
+  STRIPE_CURRENCIES: ''
+
+services:
+  app:
+    image: ${STAGING_IMAGE:?set in staging env}
+    restart: 'no'
+    # NO ports. Reached only through `docker compose exec`.
+    expose:
+      - '3000'
+    environment: *staging-environment
+    volumes:
+      - staging_media:/app/var/media
+      - staging_out:/out
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    image: ${STAGING_IMAGE:?set in staging env}
+    restart: 'no'
+    command: ['bun', 'run', 'worker:generation']
+    environment: *staging-environment
+    volumes:
+      - staging_media:/app/var/media
+      - staging_out:/out
+    depends_on:
+      db:
+        condition: service_healthy
+    # THE PRODUCTION LIMITS, so the render is measured under the same
+    # ceiling the real worker has.
+    deploy:
+      resources:
+        limits:
+          cpus: '3.0'
+          memory: 6G
+
+  db:
+    image: mariadb:11
+    restart: 'no'
+    command:
+      - '--character-set-server=utf8mb4'
+      - '--collation-server=utf8mb4_unicode_ci'
+    environment:
+      MARIADB_ROOT_PASSWORD: ${STAGING_DB_ROOT_PASSWORD:?set in staging env}
+      MARIADB_DATABASE: ${STAGING_DB_NAME:?set in staging env}
+      MARIADB_USER: ${STAGING_DB_USER:?set in staging env}
+      MARIADB_PASSWORD: ${STAGING_DB_PASSWORD:?set in staging env}
+    volumes:
+      - staging_db:/var/lib/mysql
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  minio:
+    image: minio/minio:latest
+    restart: 'no'
+    command: ['server', '/data']
+    environment:
+      MINIO_ROOT_USER: ${STAGING_MINIO_USER:?set in staging env}
+      MINIO_ROOT_PASSWORD: ${STAGING_MINIO_PASSWORD:?set in staging env}
+    expose:
+      - '9000'
+    volumes:
+      - staging_minio:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  staging_db:
+  staging_minio:
+  staging_media:
+  # The qualification report is written here and copied OFF before the
+  # volumes are destroyed.
+  staging_out:
