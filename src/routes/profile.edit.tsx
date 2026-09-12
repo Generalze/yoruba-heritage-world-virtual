@@ -71,15 +71,14 @@ function EditProfilePage() {
           countryCode: String(form.get('countryCode') ?? ''),
           timezone: String(form.get('timezone') ?? ''),
           preferredLanguage: String(form.get('preferredLanguage') ?? '') as
-            | 'en'
-            | 'yo',
+            'en' | 'yo',
           dateOfBirth: String(form.get('dateOfBirth') ?? ''),
         },
       })
       await router.invalidate()
       await navigate({ to: '/profile' })
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to save profile.')
+      setError(formatProfileSaveError(err))
     } finally {
       setBusy(false)
     }
@@ -210,4 +209,21 @@ function EditProfilePage() {
       </div>
     </AppShell>
   )
+}
+
+function formatProfileSaveError(error: unknown): string {
+  const message = error instanceof Error ? error.message : ''
+  if (/phone|international format|e\.?164|invalid input/i.test(message)) {
+    return 'Enter your phone number with the country calling code, for example +2348012345678. If your local number starts with 0, remove that 0 after the country code.'
+  }
+  if (/country/i.test(message)) {
+    return 'Select your country from the list.'
+  }
+  if (/timezone/i.test(message)) {
+    return 'Select a valid timezone from the list.'
+  }
+  if (/date|birth/i.test(message)) {
+    return 'Enter a valid date of birth.'
+  }
+  return 'Unable to save profile. Check your details and try again.'
 }

@@ -115,7 +115,7 @@ function ServicePage() {
                 </p>
               ) : (
                 <p className="mt-3 text-sm text-ink-soft">
-                  A fuller description will be published with this service.
+                  This service is offered through {service.sacredHouse.name}.
                 </p>
               )}
               <p className="mt-6 text-sm leading-relaxed text-ink-soft">
@@ -148,8 +148,7 @@ function ServicePage() {
                 </dl>
               ) : (
                 <p className="mt-3 text-sm leading-relaxed text-ink-soft">
-                  Details will be provided when this service is opened for
-                  booking.
+                  Booking details are not open yet for this service.
                 </p>
               )}
 
@@ -165,8 +164,8 @@ function ServicePage() {
                   </Link>
                 ) : (
                   <Notice>
-                    Online booking is not available for this service at the
-                    moment.
+                    This service is not taking online bookings right now. Please
+                    choose another available service from this House.
                   </Notice>
                 )}
               </div>
