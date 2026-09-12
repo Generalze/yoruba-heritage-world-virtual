@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 import { getDb, getPool } from '@/db'
 import {
@@ -171,6 +171,45 @@ const APPROVED_SERVICE_FAMILIES: Record<
     },
   ],
 }
+
+const INITIAL_HOUSE_SERVICE_SETUP: Record<
+  string,
+  {
+    priceMinor: number
+    currency: 'USD'
+    shortDescription: string
+  }
+> = {
+  ABULE_OSUN: {
+    priceMinor: 3000,
+    currency: 'USD',
+    shortDescription:
+      'A private appointment with Abúlé Ọ̀ṣun for reflection, harmony, compassion, relationships, inner balance and the nurturing dimensions of Yorùbá spiritual heritage. Your appointment is prepared by the Sacred House, and your Prayer Room opens at the scheduled appointment time.',
+  },
+  ABULE_AJE: {
+    priceMinor: 3500,
+    currency: 'USD',
+    shortDescription:
+      'A private appointment with Abúlé Ajé for spiritual reflection around prosperity, enterprise, livelihood, opportunity, responsibility and wise stewardship. The service does not promise wealth or financial success; it provides a respectful spiritual setting prepared by the Sacred House.',
+  },
+  ABULE_OSANYIN_AJA: {
+    priceMinor: 3500,
+    currency: 'USD',
+    shortDescription:
+      'A private appointment with Abúlé Ọ̀sanyìn àti Àjà for culturally grounded prayer, reflection and spiritual support concerning wellbeing, restoration and balance. This service is spiritual and cultural in nature and is not a substitute for medical or mental-health care.',
+  },
+  ILE_AWON_BABALAWO: {
+    priceMinor: 4500,
+    currency: 'USD',
+    shortDescription:
+      'A private appointment with Ilé Àwọn Babaláwo for wisdom, reflection, spiritual guidance and the pursuit of clarity within Yorùbá spiritual tradition. The House prepares the appointment respectfully and your Prayer Room opens at the scheduled appointment time.',
+  },
+}
+
+// Internal slot allocation only. This is not shown as the length of the
+// spiritual experience; the Prayer Room follows the approved video prepared
+// for the appointment.
+const INTERNAL_SCHEDULING_SLOT_MINUTES = 60
 
 /**
  * The specification lists these people under "Prayer Warriors", so all
@@ -363,6 +402,7 @@ export async function seedDomain(): Promise<void> {
     APPROVED_SERVICE_FAMILIES,
   )) {
     const sacredHouseId = houseIdByCode.get(houseCode)!
+    const setup = INITIAL_HOUSE_SERVICE_SETUP[houseCode]
     for (const [i, family] of families.entries()) {
       await db
         .insert(services)
@@ -373,13 +413,20 @@ export async function seedDomain(): Promise<void> {
           slug: family.slug,
           serviceStatus: 'PUBLISHED',
           sortOrder: (i + 1) * 10,
-          // No price, duration or currency: not yet approved.
+          shortDescription: setup.shortDescription,
+          durationMinutes: INTERNAL_SCHEDULING_SLOT_MINUTES,
+          priceMinor: setup.priceMinor,
+          currency: setup.currency,
         })
         .onDuplicateKeyUpdate({
           set: {
             name: family.name,
             slug: family.slug,
             sortOrder: (i + 1) * 10,
+            shortDescription: sql`coalesce(${services.shortDescription}, ${setup.shortDescription})`,
+            durationMinutes: sql`coalesce(${services.durationMinutes}, ${INTERNAL_SCHEDULING_SLOT_MINUTES})`,
+            priceMinor: sql`coalesce(${services.priceMinor}, ${setup.priceMinor})`,
+            currency: sql`coalesce(${services.currency}, ${setup.currency})`,
           },
         })
     }

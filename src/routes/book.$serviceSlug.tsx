@@ -65,12 +65,7 @@ interface Slot {
 type BookingContext = Awaited<ReturnType<typeof getBookingContextFn>>
 type BookableContext = Extract<BookingContext, { bookable: true }>
 
-const BOOKING_STEPS = [
-  'Service',
-  'Date and time',
-  'Review',
-  'Payment',
-] as const
+const BOOKING_STEPS = ['Service', 'Date and time', 'Review', 'Payment'] as const
 
 function BookingPage() {
   const { user, booking } = Route.useLoaderData()
@@ -216,10 +211,7 @@ function BookingForm({
         aria-label="Booking progress"
         className="texture-night mt-6 rounded-lg border border-night-line bg-night px-5 py-4"
       >
-        <StepIndicator
-          steps={BOOKING_STEPS}
-          current={selected ? 2 : 1}
-        />
+        <StepIndicator steps={BOOKING_STEPS} current={selected ? 2 : 1} />
       </nav>
 
       <div className="mt-6 grid items-start gap-6 lg:grid-cols-[1.4fr_1fr]">
@@ -346,8 +338,7 @@ function BookingForm({
                 </button>
                 <p className="mt-3 text-xs leading-relaxed text-ink-soft">
                   Your time is held briefly while you complete payment. The
-                  reservation expires automatically if payment is not
-                  completed.
+                  reservation expires automatically if payment is not completed.
                 </p>
               </div>
             </Card>
@@ -371,12 +362,6 @@ function BookingForm({
               <dd className="text-right text-ink">{context.houseName}</dd>
             </div>
             <div className="flex justify-between gap-4 py-2.5">
-              <dt className="text-ink-soft">Duration</dt>
-              <dd className="text-right text-ink">
-                {context.durationMinutes} minutes
-              </dd>
-            </div>
-            <div className="flex justify-between gap-4 py-2.5">
               <dt className="text-ink-soft">Selected time</dt>
               <dd className="text-right text-ink">
                 {selected
@@ -395,6 +380,11 @@ function BookingForm({
             Appointments are booked with {context.houseName}, never with an
             individual member. The Sacred House privately assigns the members
             responsible for your appointment.
+          </p>
+          <p className="mt-3 text-xs leading-relaxed text-ink-soft">
+            Your Prayer Room remains locked until your scheduled appointment
+            time. There is no fixed appointment duration; the experience follows
+            the approved video prepared for your booking.
           </p>
         </Card>
       </div>

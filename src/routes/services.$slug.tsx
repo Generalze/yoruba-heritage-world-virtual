@@ -18,12 +18,12 @@ import { formatAmountMinor } from '@/lib/display-time'
 /**
  * Service profile (Step 21A.3) — the last public step before booking.
  *
- * Price and duration are shown ONLY when the stored record actually
- * carries them, and the amount is formatted through the shared
+ * Price is shown ONLY when the stored record actually carries it, and
+ * the amount is formatted through the shared
  * currency helper, which derives the minor-unit scale from the
- * currency itself (a plain divide-by-100 is wrong for zero-decimal
- * currencies). The Book affordance appears only when the SERVER says a
- * genuine booking path exists.
+ * currency itself. Internal scheduling duration is not advertised as
+ * the length of the spiritual experience. The Book affordance appears
+ * only when the SERVER says a genuine booking path exists.
  */
 export const Route = createFileRoute('/services/$slug')({
   beforeLoad: async () => ({ user: await getCurrentUserFn() }),
@@ -79,10 +79,6 @@ function ServicePage() {
     service.priceMinor !== null && service.currency !== null
       ? formatAmountMinor(service.priceMinor, service.currency)
       : null
-  const duration =
-    service.durationMinutes !== null
-      ? `${service.durationMinutes} minutes`
-      : null
 
   return (
     <PublicPage user={user}>
@@ -131,26 +127,35 @@ function ServicePage() {
               <h2 className="text-sm font-semibold tracking-wide text-ink">
                 Booking
               </h2>
-              {price || duration ? (
+              {price ? (
                 <dl className="mt-4 divide-y divide-line text-sm">
-                  {duration ? (
-                    <div className="flex justify-between gap-4 py-2.5">
-                      <dt className="text-ink-soft">Duration</dt>
-                      <dd className="text-ink">{duration}</dd>
-                    </div>
-                  ) : null}
-                  {price ? (
-                    <div className="flex justify-between gap-4 py-2.5">
-                      <dt className="text-ink-soft">Price</dt>
-                      <dd className="font-semibold text-ink">{price}</dd>
-                    </div>
-                  ) : null}
+                  <div className="flex justify-between gap-4 py-2.5">
+                    <dt className="text-ink-soft">Private appointment</dt>
+                    <dd className="font-semibold text-ink">{price}</dd>
+                  </div>
                 </dl>
               ) : (
                 <p className="mt-3 text-sm leading-relaxed text-ink-soft">
                   Booking details are not open yet for this service.
                 </p>
               )}
+              <p className="mt-4 text-sm leading-relaxed text-ink-soft">
+                Select an available appointment date and time and provide a
+                brief private note about the matter you would like addressed.
+                Your appointment is with the Sacred House; the approved
+                representative is assigned privately.
+              </p>
+              <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                Following confirmation, the Sacred House prepares the spiritual
+                experience associated with your appointment. Your private Prayer
+                Room remains locked until your scheduled appointment time and
+                becomes accessible when that time arrives.
+              </p>
+              <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+                There is no fixed appointment duration. The length of the
+                experience follows the approved video prepared specifically for
+                your appointment.
+              </p>
 
               <div className="mt-5">
                 {service.bookable ? (
@@ -164,8 +169,7 @@ function ServicePage() {
                   </Link>
                 ) : (
                   <Notice>
-                    This service is not taking online bookings right now. Please
-                    choose another available service from this House.
+                    Online booking is currently unavailable for this service.
                   </Notice>
                 )}
               </div>
