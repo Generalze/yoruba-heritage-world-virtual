@@ -169,7 +169,9 @@ function ServicePage() {
                   </Link>
                 ) : (
                   <Notice>
-                    Online booking is currently unavailable for this service.
+                    Online booking is not open for this service yet. Please
+                    check back soon or contact Yoruba Heritage World for help
+                    with this Sacred House.
                   </Notice>
                 )}
               </div>
