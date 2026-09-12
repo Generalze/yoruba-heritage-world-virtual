@@ -348,6 +348,23 @@ describe('Stripe adapter', () => {
     amountMinor: 12_500,
   }
 
+  it('supports API-only mode with a restricted-style server key and no webhook secret', async () => {
+    const provider = createStripeProvider({
+      ...config,
+      secretKey: 'rk_test_restricted_server_key',
+      webhookSecret: '',
+    })
+    expect(provider.isEnabled()).toBe(true)
+    expect(provider.canVerifyWebhooks()).toBe(false)
+    const result = await provider.parseAndVerifyWebhook(
+      new TextEncoder().encode('{}'),
+      {},
+      nowMs,
+    )
+    expect(result.ok).toBe(false)
+    expect(result.reason).toBe('not_configured')
+  })
+
   it('creates a hosted Checkout Session with exact snapshot amount and idempotency key', async () => {
     const { transport, calls } = captureTransport([
       jsonResponse({
@@ -525,6 +542,66 @@ describe('Stripe adapter', () => {
       nowMs,
     )
     expect(expiredResult.verified?.outcome).toBe('EXPIRED')
+  })
+
+  it('retrieves Checkout Sessions server-side and normalizes paid, open and expired states', async () => {
+    const { transport } = captureTransport((url) => {
+      if (url.endsWith('/cs_paid')) {
+        return jsonResponse({
+          id: 'cs_paid',
+          payment_status: 'paid',
+          status: 'complete',
+          payment_intent: 'pi_paid',
+          amount_total: 12_500,
+          currency: 'usd',
+          client_reference_id: usdAttempt.publicId,
+          metadata: { paymentAttemptPublicId: usdAttempt.publicId },
+        })
+      }
+      if (url.endsWith('/cs_expired')) {
+        return jsonResponse({
+          id: 'cs_expired',
+          payment_status: 'unpaid',
+          status: 'expired',
+          amount_total: 12_500,
+          currency: 'usd',
+          client_reference_id: usdAttempt.publicId,
+        })
+      }
+      return jsonResponse({
+        id: 'cs_open',
+        payment_status: 'unpaid',
+        status: 'open',
+        amount_total: 12_500,
+        currency: 'usd',
+        client_reference_id: usdAttempt.publicId,
+      })
+    })
+    const provider = createStripeProvider({
+      ...config,
+      webhookSecret: '',
+      transport,
+    })
+
+    const paid = await provider.verifyPayment({
+      ...usdAttempt,
+      providerCheckoutId: 'cs_paid',
+    })
+    expect(paid.outcome).toBe('SUCCEEDED')
+    expect(paid.amountMinor).toBe(12_500)
+    expect(paid.currency).toBe('USD')
+
+    const open = await provider.verifyPayment({
+      ...usdAttempt,
+      providerCheckoutId: 'cs_open',
+    })
+    expect(open.outcome).toBe('PENDING')
+
+    const expired = await provider.verifyPayment({
+      ...usdAttempt,
+      providerCheckoutId: 'cs_expired',
+    })
+    expect(expired.outcome).toBe('EXPIRED')
   })
 
   it('scales Stripe special-case currencies (UGX) both directions — never a 1/100 charge', async () => {
@@ -1237,6 +1314,39 @@ describe('payment environment validation', () => {
     ).toBe(false)
     expect(
       envSchema.safeParse({ ...base, STRIPE_ENABLED: 'true' }).success,
+    ).toBe(false)
+    expect(
+      envSchema.safeParse({
+        ...base,
+        STRIPE_ENABLED: 'true',
+        STRIPE_SECRET_KEY: 'rk_test_restricted',
+      }).success,
+    ).toBe(false)
+    expect(
+      envSchema.safeParse({
+        ...base,
+        STRIPE_ENABLED: 'true',
+        STRIPE_SECRET_KEY: 'rk_test_restricted',
+        STRIPE_RECONCILIATION_MODE: 'API_POLL_ONLY',
+      }).success,
+    ).toBe(true)
+    expect(
+      envSchema.safeParse({
+        ...base,
+        STRIPE_ENABLED: 'true',
+        STRIPE_SECRET_KEY: 'sk_test_full',
+        STRIPE_WEBHOOK_SECRET: 'whsec_test',
+        STRIPE_RECONCILIATION_MODE: 'WEBHOOK_AND_API',
+      }).success,
+    ).toBe(true)
+    expect(
+      envSchema.safeParse({
+        ...base,
+        STRIPE_ENABLED: 'true',
+        STRIPE_SECRET_KEY: 'sk_test_full',
+        STRIPE_WEBHOOK_SECRET: 'whsec_test',
+        STRIPE_RECONCILIATION_MODE: 'API_POLL_ONLY',
+      }).success,
     ).toBe(false)
     expect(
       envSchema.safeParse({ ...base, PAYPAL_ENABLED: 'true' }).success,

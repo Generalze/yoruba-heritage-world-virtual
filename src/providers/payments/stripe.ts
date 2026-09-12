@@ -108,6 +108,7 @@ export function createStripeProvider(cfg: StripeConfig): PaymentProvider {
   const baseUrl = cfg.baseUrl ?? 'https://api.stripe.com'
   const tolerance = cfg.toleranceSeconds ?? 300
   const currencies = new Set(cfg.currencies.map((c) => c.toUpperCase()))
+  const serverApiKey = cfg.secretKey
 
   function normalizeSession(
     session: StripeCheckoutSession,
@@ -152,9 +153,7 @@ export function createStripeProvider(cfg: StripeConfig): PaymentProvider {
     displayName: 'Stripe',
 
     isEnabled() {
-      return (
-        cfg.enabled && cfg.secretKey.length > 0 && cfg.webhookSecret.length > 0
-      )
+      return cfg.enabled && serverApiKey.length > 0
     },
 
     canVerifyWebhooks() {
@@ -193,7 +192,7 @@ export function createStripeProvider(cfg: StripeConfig): PaymentProvider {
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${cfg.secretKey}`,
+            Authorization: `Bearer ${serverApiKey}`,
             'Content-Type': 'application/x-www-form-urlencoded',
             'Idempotency-Key': input.attempt.idempotencyKey,
           },
@@ -251,7 +250,7 @@ export function createStripeProvider(cfg: StripeConfig): PaymentProvider {
         `${baseUrl}/v1/checkout/sessions/${encodeURIComponent(attempt.providerCheckoutId)}`,
         {
           method: 'GET',
-          headers: { Authorization: `Bearer ${cfg.secretKey}` },
+          headers: { Authorization: `Bearer ${serverApiKey}` },
         },
       )
       if (response.status >= 500) {

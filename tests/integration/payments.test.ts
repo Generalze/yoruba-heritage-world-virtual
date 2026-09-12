@@ -34,6 +34,7 @@ import {
   getUserPaymentHistory,
   initiatePayment,
   processProviderWebhook,
+  pollStripeInitializedPayments,
   readBodyWithLimit,
   reconcilePayment,
   settleVerifiedPayment,
@@ -42,6 +43,7 @@ import {
 import { createCryptoProvider } from '@/providers/payments/crypto'
 import { buildMockWebhook, createMockProvider } from '@/providers/payments/mock'
 import { createPaystackProvider } from '@/providers/payments/paystack'
+import { createStripeProvider } from '@/providers/payments/stripe'
 import {
   resetPaymentRegistryForTests,
   setPaymentRegistryForTests,
@@ -214,6 +216,8 @@ async function insertAttempt(
     status: 'CREATED' | 'INITIALIZED' | 'PENDING' | 'FAILED'
     amountMinor: number
     currency: string
+    providerCheckoutId: string
+    initializedAt: string
   }> = {},
 ) {
   const publicId = crypto.randomUUID()
@@ -230,6 +234,10 @@ async function insertAttempt(
       currency: overrides.currency ?? 'NGN',
       idempotencyKey,
       providerReference: idempotencyKey,
+      providerCheckoutId: overrides.providerCheckoutId ?? null,
+      initializedAt:
+        overrides.initializedAt ??
+        (overrides.status === 'CREATED' ? null : utcMsToSql(Date.now())),
     })
   attemptCounter += 1
   return { id: inserted[0].insertId, publicId, reference: idempotencyKey }
@@ -1312,6 +1320,123 @@ describe('reconciliation and security boundaries', () => {
     expect(reconciled.status).toBe('INITIALIZED')
     expect(reconciled.appointmentStatus).toBe('PENDING_PAYMENT')
     expect(await readSettlement(reservation.appointmentId)).toBeUndefined()
+  })
+
+  it('Stripe API-only mode fails closed for webhooks but can poll without settling unpaid sessions', async () => {
+    const nowMs = Date.now()
+    const reservation = await reserve(payerA)
+    const attempt = await insertAttempt(reservation.appointmentId, payerA, {
+      provider: 'STRIPE',
+      status: 'INITIALIZED',
+      providerCheckoutId: 'cs_unpaid_api_only',
+      initializedAt: utcMsToSql(nowMs - 5 * 60_000),
+    })
+    const transport: ProviderTransport = (url) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: url.endsWith('/cs_unpaid_api_only')
+              ? 'cs_unpaid_api_only'
+              : 'cs_other',
+            payment_status: 'unpaid',
+            status: 'open',
+            amount_total: 500_000,
+            currency: 'ngn',
+            client_reference_id: attempt.publicId,
+            metadata: { paymentAttemptPublicId: attempt.publicId },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    setPaymentRegistryForTests(
+      [
+        ...defaultTestRegistry(),
+        createStripeProvider({
+          enabled: true,
+          secretKey: 'rk_test_restricted',
+          webhookSecret: '',
+          currencies: ['NGN'],
+          transport,
+        }),
+      ],
+      true,
+    )
+    try {
+      const webhook = await processProviderWebhook(
+        'STRIPE',
+        new TextEncoder().encode('{}'),
+        {},
+        nowMs,
+      )
+      expect(webhook.httpStatus).toBe(400)
+
+      const poll = await pollStripeInitializedPayments({ nowMs })
+      expect(poll.pending).toBeGreaterThanOrEqual(1)
+      expect((await readAttempt(attempt.id)).status).toBe('INITIALIZED')
+      expect(await readSettlement(reservation.appointmentId)).toBeUndefined()
+    } finally {
+      setPaymentRegistryForTests(defaultTestRegistry(), true)
+    }
+  })
+
+  it('Stripe API poll and authenticated return racing settle a paid session once', async () => {
+    const nowMs = Date.now()
+    const reservation = await reserve(payerA)
+    const attempt = await insertAttempt(reservation.appointmentId, payerA, {
+      provider: 'STRIPE',
+      status: 'INITIALIZED',
+      providerCheckoutId: 'cs_paid_race',
+      initializedAt: utcMsToSql(nowMs - 5 * 60_000),
+    })
+    const transport: ProviderTransport = (url) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: url.endsWith('/cs_paid_race')
+              ? 'cs_paid_race'
+              : 'cs_unpaid_other',
+            payment_status: url.endsWith('/cs_paid_race') ? 'paid' : 'unpaid',
+            status: url.endsWith('/cs_paid_race') ? 'complete' : 'open',
+            payment_intent: url.endsWith('/cs_paid_race')
+              ? 'pi_paid_race'
+              : null,
+            amount_total: 500_000,
+            currency: 'ngn',
+            client_reference_id: attempt.publicId,
+            metadata: { paymentAttemptPublicId: attempt.publicId },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+    setPaymentRegistryForTests(
+      [
+        ...defaultTestRegistry(),
+        createStripeProvider({
+          enabled: true,
+          secretKey: 'rk_test_restricted',
+          webhookSecret: '',
+          currencies: ['NGN'],
+          transport,
+        }),
+      ],
+      true,
+    )
+    try {
+      await Promise.all([
+        pollStripeInitializedPayments({ nowMs }),
+        reconcilePayment(payerA, ctx, attempt.publicId, nowMs),
+      ])
+      expect((await readAttempt(attempt.id)).status).toBe('SUCCEEDED')
+      expect((await readAppointment(reservation.appointmentId)).status).toBe(
+        'CONFIRMED',
+      )
+      expect(await readSettlement(reservation.appointmentId)).toBeDefined()
+
+      const duplicate = await pollStripeInitializedPayments({ nowMs })
+      expect(duplicate.settled).toBe(0)
+    } finally {
+      setPaymentRegistryForTests(defaultTestRegistry(), true)
+    }
   })
 
   it('payments permissions: ADMIN/SUPER_ADMIN only', async () => {

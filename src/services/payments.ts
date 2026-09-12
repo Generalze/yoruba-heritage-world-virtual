@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 
-import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, lte, or } from 'drizzle-orm'
 
 import { getDb } from '@/db'
 import {
@@ -1246,6 +1246,103 @@ export async function reconcilePayment(
     appointmentPublicId: appointment.publicId,
     appointmentStatus: freshAppointment?.status ?? appointment.status,
   }
+}
+
+export interface StripeApiPollOptions {
+  /** Batch cap for one worker tick. Keep small; external scheduler controls cadence. */
+  limit?: number
+  /** Do not poll brand-new sessions immediately after Checkout creation. */
+  minAgeMs?: number
+  /** Stop polling stale sessions; appointment/settlement rules still apply centrally. */
+  maxAgeMs?: number
+  nowMs?: number
+}
+
+export interface StripeApiPollResult {
+  scanned: number
+  settled: number
+  pending: number
+  expired: number
+  failed: number
+  errors: number
+}
+
+/**
+ * Bounded Stripe API reconciliation for no-webhook mode. This never
+ * trusts browser return parameters, never creates another Checkout
+ * Session, and never confirms directly: every non-pending provider
+ * result flows through settleVerifiedPayment().
+ */
+export async function pollStripeInitializedPayments(
+  options: StripeApiPollOptions = {},
+): Promise<StripeApiPollResult> {
+  const nowMs = options.nowMs ?? Date.now()
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 50))
+  const minAgeMs = options.minAgeMs ?? 2 * 60_000
+  const maxAgeMs = options.maxAgeMs ?? 48 * 60 * 60_000
+  const provider = getPaymentProvider('STRIPE')
+  if (!provider || !provider.isEnabled()) {
+    return {
+      scanned: 0,
+      settled: 0,
+      pending: 0,
+      expired: 0,
+      failed: 0,
+      errors: 0,
+    }
+  }
+
+  const rows = await getDb()
+    .select()
+    .from(paymentAttempts)
+    .where(
+      and(
+        eq(paymentAttempts.provider, 'STRIPE'),
+        inArray(paymentAttempts.status, ['INITIALIZED', 'PENDING']),
+        isNotNull(paymentAttempts.providerCheckoutId),
+        isNotNull(paymentAttempts.initializedAt),
+        lte(paymentAttempts.initializedAt, utcMsToSql(nowMs - minAgeMs)),
+        gte(paymentAttempts.initializedAt, utcMsToSql(nowMs - maxAgeMs)),
+      ),
+    )
+    .orderBy(paymentAttempts.initializedAt)
+    .limit(limit)
+
+  const result: StripeApiPollResult = {
+    scanned: rows.length,
+    settled: 0,
+    pending: 0,
+    expired: 0,
+    failed: 0,
+    errors: 0,
+  }
+  for (const row of rows) {
+    try {
+      const verified = await provider.verifyPayment(toAttemptIdentity(row))
+      if (verified.outcome === 'PENDING') {
+        result.pending += 1
+        continue
+      }
+      const settled = await settleVerifiedPayment(
+        verified,
+        SYSTEM_CONTEXT,
+        nowMs,
+      )
+      if (settled.status === 'SUCCEEDED') result.settled += 1
+      else if (settled.status === 'EXPIRED') result.expired += 1
+      else if (settled.status === 'FAILED') result.failed += 1
+    } catch (error) {
+      if (
+        error instanceof PaymentProviderError ||
+        error instanceof PaymentError
+      ) {
+        result.errors += 1
+        continue
+      }
+      throw error
+    }
+  }
+  return result
 }
 
 // --- Queries (user + admin) -------------------------------------------------

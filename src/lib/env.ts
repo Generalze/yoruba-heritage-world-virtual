@@ -134,6 +134,9 @@ const envObjectSchema = z
     STRIPE_ENABLED: z.stringbool().default(false),
     STRIPE_SECRET_KEY: z.string().default(''),
     STRIPE_WEBHOOK_SECRET: z.string().default(''),
+    STRIPE_RECONCILIATION_MODE: z
+      .enum(['API_POLL_ONLY', 'WEBHOOK_AND_API'])
+      .default('WEBHOOK_AND_API'),
     STRIPE_CURRENCIES: currencyList,
     CRYPTO_ENABLED: z.stringbool().default(false),
     CRYPTO_PROVIDER: z.string().default('mock'),
@@ -233,9 +236,7 @@ const envObjectSchema = z
      * memory and makes no network call, and DISABLED is the honest
      * production statement that email delivery is unavailable. The
      * in-app channel is independent of this setting and always works. */
-    NOTIFICATION_EMAIL_DRIVER: z
-      .enum(['MOCK', 'DISABLED'])
-      .default('MOCK'),
+    NOTIFICATION_EMAIL_DRIVER: z.enum(['MOCK', 'DISABLED']).default('MOCK'),
 
     // --- 9jaLingo TTS (Phase One, Step 20) --------------------------------
     //
@@ -288,17 +289,34 @@ const envObjectSchema = z
       }
     }
     if (cfg.STRIPE_ENABLED) {
-      for (const key of [
-        'STRIPE_SECRET_KEY',
-        'STRIPE_WEBHOOK_SECRET',
-      ] as const) {
-        if (cfg[key].length === 0) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [key],
-            message: `STRIPE_ENABLED=true requires ${key}`,
-          })
-        }
+      if (cfg.STRIPE_SECRET_KEY.length === 0) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['STRIPE_SECRET_KEY'],
+          message: 'STRIPE_ENABLED=true requires STRIPE_SECRET_KEY',
+        })
+      }
+      if (
+        cfg.STRIPE_WEBHOOK_SECRET.length === 0 &&
+        cfg.STRIPE_RECONCILIATION_MODE !== 'API_POLL_ONLY'
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['STRIPE_RECONCILIATION_MODE'],
+          message:
+            'Stripe without STRIPE_WEBHOOK_SECRET requires STRIPE_RECONCILIATION_MODE=API_POLL_ONLY',
+        })
+      }
+      if (
+        cfg.STRIPE_WEBHOOK_SECRET.length > 0 &&
+        cfg.STRIPE_RECONCILIATION_MODE !== 'WEBHOOK_AND_API'
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['STRIPE_RECONCILIATION_MODE'],
+          message:
+            'Stripe with STRIPE_WEBHOOK_SECRET requires STRIPE_RECONCILIATION_MODE=WEBHOOK_AND_API',
+        })
       }
     }
     // Crypto fails SAFE: no concrete processor has been approved or

@@ -24,7 +24,8 @@
     "smoke:tts": "bun run scripts/tts-preflight.ts",
     "smoke:tts:provider": "bun run scripts/tts-provider-diagnostic.ts",
     "verify:launch-content": "bun run scripts/verify-launch-content.ts",
-    "media:import-babalawo-proof": "bun run scripts/import-babalawo-production-proof.ts"
+    "media:import-babalawo-proof": "bun run scripts/import-babalawo-production-proof.ts",
+    "payments:poll-stripe": "bun run scripts/poll-stripe-api-reconciliation.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",
