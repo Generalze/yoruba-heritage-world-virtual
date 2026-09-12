@@ -41,8 +41,8 @@ function SacredContentLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold">Sacred Runtime Content</h1>
           <p className="mt-1 text-sm text-ink-soft">
-            Human-authored sacred blocks for the future autonomous Prayer Room
-            engine. This library is separate from appointment guidance.
+            Human-authored sacred blocks approved for staff-prepared Prayer Room
+            production. This library is separate from appointment guidance.
           </p>
         </div>
         <div className="flex gap-2">

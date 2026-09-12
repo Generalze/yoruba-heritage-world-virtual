@@ -155,7 +155,7 @@ export async function notifyPrayerRoomReady(
     userId: snap.userId,
     type: 'PRAYER_ROOM_READY',
     title: 'Your Prayer Room is ready',
-    body: `Your recording for ${snap.serviceName} with ${snap.houseName} is now available.`,
+    body: `Your recording for ${snap.serviceName} with ${snap.houseName} is ready for your scheduled Prayer Room.`,
     linkPublicId: snap.publicId,
   })
 }

@@ -34,7 +34,6 @@ import {
   subtractInterval,
 } from './scheduling'
 import { assignGuidanceForAppointmentUnderTx } from './guidance'
-import { enqueuePrayerGenerationUnderTx } from './generation-jobs'
 import type { GuidanceAssignmentSummary } from './guidance'
 import {
   notifyAppointmentCancelled,
@@ -605,13 +604,6 @@ export async function confirmReservationUnderLock(
     throw new AppointmentError('Only pending reservations can be confirmed.')
   }
   const guidance = await assignGuidanceForAppointmentUnderTx(tx, appointmentId)
-  // Step 12: atomically enqueue the prayer generation job in the SAME
-  // transaction (lightweight row insert only — recipe building, media
-  // hashing and any provider work happen asynchronously in the DB
-  // worker). A genuine failure here rolls back the confirmation,
-  // preserving the all-or-nothing invariant; the UNIQUE appointment_id
-  // makes payment/webhook replays incapable of a second job.
-  await enqueuePrayerGenerationUnderTx(tx, appointmentId)
   return guidance
 }
 

@@ -288,7 +288,9 @@ function AppointmentDetailPage() {
                       <li key={slot.startsAtUtc}>
                         <button
                           type="button"
-                          onClick={() => void handleReschedule(slot.startsAtUtc)}
+                          onClick={() =>
+                            void handleReschedule(slot.startsAtUtc)
+                          }
                           disabled={busy}
                           className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink transition-colors hover:border-gold-deep hover:text-gold-deep disabled:cursor-not-allowed disabled:opacity-60"
                         >
@@ -395,15 +397,15 @@ function AppointmentDetailPage() {
 
 /**
  * Recorded Prayer Room entry point (Step 18). Deliberately a LINK, not
- * a status readout. Availability depends on the generation job being
- * READY and its upload still verifying — neither of which this page
- * knows — so it never claims a room is open on the strength of the
- * clock alone, and it does not duplicate the Step 18 verifier to find
- * out. The Prayer Room page proves ownership, the appointment-time
- * gate and the full upload verification server-side on every load.
+ * a status readout. Availability depends on an admin-prepared video
+ * being attached and its private upload still verifying; legacy
+ * generated appointments still work, but this page never claims a room
+ * is open on the strength of the clock alone. The Prayer Room page
+ * proves ownership, the appointment-time gate and the full upload
+ * verification server-side on every load.
  *
  * It appears only for statuses that can ever have a recording, and it
- * shows nothing about the generation pipeline.
+ * shows nothing about storage internals or production workflow.
  */
 function PrayerRoomSection({
   publicId,

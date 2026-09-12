@@ -72,8 +72,8 @@ function MediaLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold">Media Assets</h1>
           <p className="mt-1 text-sm text-ink-soft">
-            Approved audio/image/video the future autonomous recipe engine may
-            draw from. Private storage only — nothing is public.
+            Approved audio/image/video for staff-prepared Prayer Room
+            production. Private storage only — nothing is public.
           </p>
         </div>
         <button
@@ -213,9 +213,7 @@ function MediaLibraryPage() {
                 <th className="border-b border-line px-3 py-2">Code</th>
                 <th className="border-b border-line px-3 py-2">Kind</th>
                 <th className="border-b border-line px-3 py-2">Scope</th>
-                <th className="border-b border-line px-3 py-2">
-                  Versions
-                </th>
+                <th className="border-b border-line px-3 py-2">Versions</th>
                 <th className="border-b border-line px-3 py-2">Rights</th>
                 <th className="border-b border-line px-3 py-2">Runtime</th>
                 <th className="border-b border-line px-3 py-2">Active</th>

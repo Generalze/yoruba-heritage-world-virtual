@@ -21,9 +21,8 @@ function PrayerTemplateLibraryPage() {
         <div>
           <h1 className="text-2xl font-bold">Prayer Session Templates</h1>
           <p className="mt-1 text-sm text-ink-soft">
-            Approved structures and selection rules the autonomous engine
-            executes. Humans approve the rules once — no per-appointment
-            approval exists.
+            Approved structures and selection rules staff can use when preparing
+            appointment-bound Prayer Room recordings.
           </p>
         </div>
         <div className="flex gap-2">

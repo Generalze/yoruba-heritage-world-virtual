@@ -1,10 +1,15 @@
 import { and, eq } from 'drizzle-orm'
 
 import { getDb } from '@/db'
-import { appointments, prayerGenerationJobs } from '@/db/schema'
+import {
+  appointmentPrayerRoomMedia,
+  appointments,
+  prayerGenerationJobs,
+} from '@/db/schema'
 import { MAX_SIGNED_URL_TTL_SECONDS } from '@/providers/object-storage/types'
 import { computeFileSha256 } from '@/providers/media/storage'
 import { verifyCompletedUpload } from './render-upload'
+import { verifyManualPrayerRoomMedia } from './prayer-room-media'
 import { buildPrivateMediaResponse } from '@/lib/media-range'
 import { mediaOriginFromEndpoint } from '@/lib/security-headers'
 import { env } from '@/lib/env'
@@ -16,8 +21,8 @@ import type { RenderContext } from './render-assembly'
  * ```text
  * authenticated appointment OWNER
  * → appointment-time gate (CURRENT startsAtUtc)
- * → generation job READY
- * → verifyCompletedUpload()  (the SAME Step 17 proof, re-run)
+ * → admin-prepared media ACTIVE, or legacy generation job READY
+ * → private-object proof re-run
  * → private playback of the recorded prayer
  * ```
  *
@@ -116,7 +121,26 @@ interface OwnedAppointmentRow {
   languageSnapshot: string | null
   jobId: number | null
   jobStatus: string | null
+  manualMediaId: number | null
+  manualMediaStatus: string | null
+  manualProviderCode: string | null
+  manualProviderIsLocal: number | null
+  manualObjectKey: string | null
+  manualFileSha256: string | null
+  manualMimeType: string | null
+  manualByteSize: number | null
 }
+
+type ManualMediaAccessRow = Pick<
+  typeof appointmentPrayerRoomMedia.$inferSelect,
+  | 'status'
+  | 'providerCode'
+  | 'providerIsLocal'
+  | 'objectKey'
+  | 'fileSha256'
+  | 'byteSize'
+  | 'mimeType'
+>
 
 /**
  * Loads the appointment ONLY when it belongs to this exact user.
@@ -150,11 +174,23 @@ async function loadOwnedAppointment(
         jobId: prayerGenerationJobs.id,
         jobStatus: prayerGenerationJobs.status,
         languageSnapshot: prayerGenerationJobs.languageSnapshot,
+        manualMediaId: appointmentPrayerRoomMedia.id,
+        manualMediaStatus: appointmentPrayerRoomMedia.status,
+        manualProviderCode: appointmentPrayerRoomMedia.providerCode,
+        manualProviderIsLocal: appointmentPrayerRoomMedia.providerIsLocal,
+        manualObjectKey: appointmentPrayerRoomMedia.objectKey,
+        manualFileSha256: appointmentPrayerRoomMedia.fileSha256,
+        manualMimeType: appointmentPrayerRoomMedia.mimeType,
+        manualByteSize: appointmentPrayerRoomMedia.byteSize,
       })
       .from(appointments)
       .leftJoin(
         prayerGenerationJobs,
         eq(prayerGenerationJobs.appointmentId, appointments.id),
+      )
+      .leftJoin(
+        appointmentPrayerRoomMedia,
+        eq(appointmentPrayerRoomMedia.appointmentId, appointments.id),
       )
       .where(
         and(
@@ -172,10 +208,37 @@ export type PrayerRoomAccess =
   | {
       ok: true
       appointment: OwnedAppointmentRow
-      context: RenderContext
-      jobId: number
+      source:
+        | { kind: 'MANUAL'; media: ManualMediaAccessRow }
+        | { kind: 'GENERATED'; context: RenderContext; jobId: number }
     }
   | { ok: false; state: PrayerRoomState }
+
+function manualMediaFromAppointment(
+  appointment: OwnedAppointmentRow,
+): ManualMediaAccessRow | null {
+  if (
+    appointment.manualMediaId == null ||
+    appointment.manualMediaStatus == null ||
+    appointment.manualProviderCode == null ||
+    appointment.manualProviderIsLocal == null ||
+    appointment.manualObjectKey == null ||
+    appointment.manualFileSha256 == null ||
+    appointment.manualMimeType == null ||
+    appointment.manualByteSize == null
+  ) {
+    return null
+  }
+  return {
+    status: appointment.manualMediaStatus as ManualMediaAccessRow['status'],
+    providerCode: appointment.manualProviderCode,
+    providerIsLocal: appointment.manualProviderIsLocal,
+    objectKey: appointment.manualObjectKey,
+    fileSha256: appointment.manualFileSha256,
+    mimeType: appointment.manualMimeType,
+    byteSize: appointment.manualByteSize,
+  }
+}
 
 /**
  * The complete access proof, cheapest refusal first: ownership, then
@@ -198,14 +261,25 @@ async function proveAccess(
   if (!PLAYABLE_APPOINTMENT_STATUSES.includes(appointment.status)) {
     return { ok: false, state: 'UNAVAILABLE' }
   }
+  const manualMedia = manualMediaFromAppointment(appointment)
+  if (manualMedia?.status === 'ACTIVE') {
+    if (now.getTime() < utcSqlToMs(appointment.startsAtUtc)) {
+      return { ok: false, state: 'LOCKED' }
+    }
+    return {
+      ok: true,
+      appointment,
+      source: { kind: 'MANUAL', media: manualMedia },
+    }
+  }
   // READINESS FIRST, THEN THE CLOCK. A recording that does not exist
   // yet is PREPARING whether or not the appointment has started —
   // telling an owner their room is merely "locked" when nothing has
   // been made would be the wrong thing to say.
   //
-  // A job that has not been enqueued yet is legitimately PREPARING: the
-  // enqueue happens inside the confirmation transaction, so this is a
-  // momentary gap, not an absence.
+  // New bookings use the manual staff-prepared media row. While staff
+  // are producing/uploading it, there may be no row and no legacy
+  // generation job yet; the owner-facing truth is still PREPARING.
   if (appointment.jobId == null) return { ok: false, state: 'PREPARING' }
   if (appointment.jobStatus !== 'READY') {
     // STILL COMING versus NEVER COMING. Only a job that can still
@@ -231,11 +305,14 @@ async function proveAccess(
   return {
     ok: true,
     appointment,
-    jobId: appointment.jobId,
-    context: {
-      serviceId: appointment.serviceId,
-      sacredHouseId: appointment.sacredHouseId,
-      language: appointment.languageSnapshot ?? 'en',
+    source: {
+      kind: 'GENERATED',
+      jobId: appointment.jobId,
+      context: {
+        serviceId: appointment.serviceId,
+        sacredHouseId: appointment.sacredHouseId,
+        language: appointment.languageSnapshot ?? 'en',
+      },
     },
   }
 }
@@ -265,10 +342,13 @@ export async function getPrayerRoomStatus(
   }
   const access = await proveAccess(userId, publicId, now)
   if (!access.ok) return { ...base, state: access.state }
-  const verified = await verifyCompletedUpload(access.jobId, access.context)
+  const verified =
+    access.source.kind === 'MANUAL'
+      ? await verifyManualPrayerRoomMedia(access.source.media)
+      : await verifyCompletedUpload(access.source.jobId, access.source.context)
   // A recording that can no longer be verified is UNAVAILABLE, and the
   // reason stays in the logs: an owner is never shown a hash, a
-  // provider code, an object key or a pipeline error.
+  // provider code, an object key or a storage error.
   return { ...base, state: verified.ok ? 'AVAILABLE' : 'UNAVAILABLE' }
 }
 
@@ -286,13 +366,12 @@ export type PrayerRoomMediaAccess =
     }
   | { ok: false; state: PrayerRoomState }
 
-type VerifiedProvider = Awaited<
-  ReturnType<typeof verifyCompletedUpload>
-> extends infer R
-  ? R extends { ok: true; verified: { provider: infer P } }
-    ? P
+type VerifiedProvider =
+  Awaited<ReturnType<typeof verifyCompletedUpload>> extends infer R
+    ? R extends { ok: true; verified: { provider: infer P } }
+      ? P
+      : never
     : never
-  : never
 
 /**
  * The playback authorization, run in full on EVERY media request —
@@ -307,7 +386,10 @@ export async function authorizePrayerRoomMedia(
 ): Promise<PrayerRoomMediaAccess> {
   const access = await proveAccess(userId, publicId, now)
   if (!access.ok) return { ok: false, state: access.state }
-  const verified = await verifyCompletedUpload(access.jobId, access.context)
+  const verified =
+    access.source.kind === 'MANUAL'
+      ? await verifyManualPrayerRoomMedia(access.source.media)
+      : await verifyCompletedUpload(access.source.jobId, access.source.context)
   if (!verified.ok) return { ok: false, state: 'UNAVAILABLE' }
   return {
     ok: true,
@@ -456,7 +538,10 @@ function isAcceptableSignedRead(
   // redirect to somebody else’s host, and neither is followed. With
   // no endpoint configured (local development, where storage is
   // proxied rather than redirected) there is nothing to pin to.
-  if (options.expectedOrigin != null && parsed.origin !== options.expectedOrigin) {
+  if (
+    options.expectedOrigin != null &&
+    parsed.origin !== options.expectedOrigin
+  ) {
     return false
   }
   const expiresMs = signed.expiresAt.getTime()
@@ -464,10 +549,7 @@ function isAcceptableSignedRead(
   // Already dead, or longer-lived than the ceiling this stage promises
   // (and therefore than Step 17's own maximum).
   if (expiresMs <= now.getTime()) return false
-  if (
-    expiresMs >
-    now.getTime() + PRAYER_ROOM_SIGNED_URL_TTL_SECONDS * 1000
-  ) {
+  if (expiresMs > now.getTime() + PRAYER_ROOM_SIGNED_URL_TTL_SECONDS * 1000) {
     return false
   }
   return true

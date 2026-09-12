@@ -1,0 +1,394 @@
+{
+  "rules": [
+    {
+      "category": "ENVIRONMENT",
+      "position": 1,
+      "ruleText": "The canonical environment is a private, enclosed or substantially enclosed Yorùbá sacred room for Ilé Àwọn Babaláwo, designed for recorded online prayer, spiritual guidance and divination-related visual presence."
+    },
+    {
+      "category": "ENVIRONMENT",
+      "position": 2,
+      "ruleText": "The room must feel wise, grounded, calm, mature, private, sacred, photorealistic and actively maintained; it must not feel abandoned, theatrical or designed as a tourist display."
+    },
+    {
+      "category": "ENVIRONMENT",
+      "position": 3,
+      "ruleText": "Preserve the spatial sequence: left-side entrance/threshold → open woven-mat working area → Babaláwo prayer position → perimeter sacred-object zones → deeper dark shrine recess."
+    },
+    {
+      "category": "ENVIRONMENT",
+      "position": 4,
+      "ruleText": "The central floor must remain visually open enough for the seated Babaláwo and the principal working objects; sacred objects should primarily enrich the perimeter and rear zones rather than form uncontrolled clutter."
+    },
+    {
+      "category": "ENVIRONMENT",
+      "position": 5,
+      "ruleText": "The background must contain visible architectural and sacred-object depth. Do not place the Babaláwo against a plain empty wall."
+    },
+    {
+      "category": "ARCHITECTURE",
+      "position": 6,
+      "ruleText": "Use human-scale Yorùbá-inspired domestic sacred-room proportions rather than monumental fantasy-temple proportions."
+    },
+    {
+      "category": "ARCHITECTURE",
+      "position": 7,
+      "ruleText": "The dominant architectural materials are warm earth/plaster surfaces, aged dark timber, woven natural fibre, low wooden platforms and matte, naturally patinated finishes."
+    },
+    {
+      "category": "ARCHITECTURE",
+      "position": 8,
+      "ruleText": "Preserve the dark recessed rear sacred zone as a major architectural identity anchor behind the Babaláwo."
+    },
+    {
+      "category": "ARCHITECTURE",
+      "position": 9,
+      "ruleText": "Use timber uprights, recessed wall planes, low platforms, niches or ledges to create believable depth and to integrate sacred objects into the room."
+    },
+    {
+      "category": "ARCHITECTURE",
+      "position": 10,
+      "ruleText": "Modern glossy tile, polished marble, chrome, glass-office architecture, luxury-showroom surfaces and contemporary office furniture must not define the room."
+    },
+    {
+      "category": "NATURAL_SETTING",
+      "position": 11,
+      "ruleText": "Ilé Àwọn Babaláwo is interior-first; exterior nature may appear only as a restrained view through the established left-side doorway/opening."
+    },
+    {
+      "category": "NATURAL_SETTING",
+      "position": 12,
+      "ruleText": "The doorway may reveal believable natural greenery, earth and daylight, but an exterior landscape must never replace the sacred interior."
+    },
+    {
+      "category": "NATURAL_SETTING",
+      "position": 13,
+      "ruleText": "Water is not a defining environmental feature of this House. A small approved cleansing vessel may appear only when separately justified by approved content; no river, pool, waterfall or permanent architectural water feature belongs to the canonical room."
+    },
+    {
+      "category": "COLOR",
+      "position": 14,
+      "ruleText": "Base the environment on aged wood brown, earth brown, warm clay, charcoal-brown, natural fibre, cream and warm off-white."
+    },
+    {
+      "category": "COLOR",
+      "position": 15,
+      "ruleText": "Keep the architecture muted and allow controlled color concentration through approved clothing, beads and the Àpò Ifá rather than saturating the whole room."
+    },
+    {
+      "category": "COLOR",
+      "position": 16,
+      "ruleText": "Deep indigo/navy patterned Yorùbá clothing is an approved practitioner color family for this environment."
+    },
+    {
+      "category": "COLOR",
+      "position": 17,
+      "ruleText": "Avoid neon color, excessive metallic gold, uniform orange grading and palette drift that makes the House read primarily as a water, prosperity or herbal environment."
+    },
+    {
+      "category": "SYMBOL",
+      "position": 18,
+      "ruleText": "Sacred identity should come primarily from approved Ifá-associated objects, carving, material, arrangement and atmosphere rather than invented wall symbolism."
+    },
+    {
+      "category": "SYMBOL",
+      "position": 19,
+      "ruleText": "Do not invent pseudo-Yorùbá writing, sacred alphabets, magical runes, sigils or readable ritual inscriptions."
+    },
+    {
+      "category": "SYMBOL",
+      "position": 20,
+      "ruleText": "Restrained carved motifs may appear on approved object forms, but the Visual Bible does not assign unapproved spiritual meanings to generated decorative markings."
+    },
+    {
+      "category": "SYMBOL",
+      "position": 21,
+      "ruleText": "A figurative motif integrated into an approved functional object does not authorize a separate depicted deity or named divine character."
+    },
+    {
+      "category": "CLOTHING",
+      "position": 22,
+      "ruleText": "The Babaláwo must wear dignified, modest, well-fitted Yorùbá attire that reads as authentic human clothing rather than theatrical costume."
+    },
+    {
+      "category": "CLOTHING",
+      "position": 23,
+      "ruleText": "Deep indigo/navy patterned garments, an appropriate Yorùbá cap and restrained bead accessories are approved visual directions."
+    },
+    {
+      "category": "CLOTHING",
+      "position": 24,
+      "ruleText": "Wardrobe and accessories must remain consistent throughout one generated prayer sequence; do not change garment design, colors, cap or principal beads between neighboring shots."
+    },
+    {
+      "category": "CLOTHING",
+      "position": 25,
+      "ruleText": "Avoid fantasy robes, exaggerated crowns, warrior armor, masquerade costuming, Egyptian styling and generalized “witch doctor” presentation."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 26,
+      "ruleText": "A circular aged-dark-hardwood Ọ̀pọ́n Ifá is a principal identity anchor in the low working area before the Babaláwo."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 27,
+      "ruleText": "Where scale is clearly visible, keep the canonical Ọ̀pọ́n Ifá approximately 34–40 cm in diameter; it must not become table-sized, monumental or a generic serving tray."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 28,
+      "ruleText": "The Ọ̀pọ́n Ifá should have a shallow profile, broad central working field and restrained carved rim; approved carved motifs may be present without being assigned new meanings."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 29,
+      "ruleText": "An Ìróké/ìrófá Ifá may appear in the working area at believable hand-held scale, approximately 25–30 cm long; never enlarge it into a tall staff."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 30,
+      "ruleText": "The canonical Àgéré Ifá is a dark wooden figurative vessel approximately 20–30 cm high, using the approved kneeling-female support family and normally positioned rear-left on a low raised support."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 31,
+      "ruleText": "One approved Àpò Ifá may remain near the Babaláwo as a supporting object and controlled color accent; do not multiply bags around the room."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 32,
+      "ruleText": "A large carved lidded Ifá implement-container class may occupy the rear-right zone at approximately 45–60 cm high; it must read as a functional sacred container, not as a giant deity, throne idol or luxury urn."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 33,
+      "ruleText": "Supporting bowls, vessels, containers, beads and other small approved objects must remain secondary and limited in number; do not allow generative models to populate every surface with new ritual-looking props."
+    },
+    {
+      "category": "CEREMONIAL_OBJECT",
+      "position": 34,
+      "ruleText": "Major object positions and object families must remain stable across neighboring shots so the Sacred House reads as one physical room."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 35,
+      "ruleText": "For the Phase One recorded personalized prayer experience, only one approved Babaláwo/practitioner is physically present in the room by default."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 36,
+      "ruleText": "The online prayer recipient must not appear as a second physical person, client, worshipper or listener inside the Sacred House; the camera/lens occupies the recipient’s point of presence."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 37,
+      "ruleText": "Within a single prayer video, preserve one practitioner identity consistently; no face replacement, age drift, skin-tone drift or unexplained change of person is permitted."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 38,
+      "ruleText": "The practitioner should appear mature, calm, dignified, prayerful, emotionally steady and human; never portray him as a supernatural entity."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 39,
+      "ruleText": "Preferred behavior includes calm prayer, reflection, restrained speech, subtle hand movement, natural resting hands and measured attention to the working area."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 40,
+      "ruleText": "The practitioner may make brief natural eye contact with the camera during selected direct-address moments, but continuous staring into the lens is not the default performance."
+    },
+    {
+      "category": "CHARACTER_CONSTRAINT",
+      "position": 41,
+      "ruleText": "Do not materialize Ọ̀rúnmìlà, Èṣù, Olódùmárè or any named Òrìṣà as a humanlike or supernatural character in this House under the current catalogue state."
+    },
+    {
+      "category": "CAMERA",
+      "position": 42,
+      "ruleText": "Treat the approved Sacred House as one persistent physical set; all camera views must feel like different cameras or lenses photographing the same room rather than separately generated rooms."
+    },
+    {
+      "category": "CAMERA",
+      "position": 43,
+      "ruleText": "Approved shot families are: wide establishing room, medium prayer, direct-to-camera prayer address, three-quarter/side prayer, rear/environmental insert and working-object close-up."
+    },
+    {
+      "category": "CAMERA",
+      "position": 44,
+      "ruleText": "Preserve the left-side doorway, central woven-mat zone, Babaláwo working position, rear-left Àgéré zone, rear-right large container zone and central dark recess as continuity landmarks."
+    },
+    {
+      "category": "CAMERA",
+      "position": 45,
+      "ruleText": "Use natural human-scale cinematic perspective, normally at seated-human or eye-level height, with believable room proportions."
+    },
+    {
+      "category": "CAMERA",
+      "position": 46,
+      "ruleText": "Direct-to-camera framing is reserved for occasional personal prayer address; the camera represents the remote recipient rather than an in-room character."
+    },
+    {
+      "category": "CAMERA",
+      "position": 47,
+      "ruleText": "Environmental and object inserts may contain no human at all while the approved prayer audio continues over the image."
+    },
+    {
+      "category": "CAMERA",
+      "position": 48,
+      "ruleText": "Avoid fisheye distortion, aggressive Dutch angles, impossible interior drone movement, extreme low-angle intimidation and visually gimmicky camera positions."
+    },
+    {
+      "category": "LIGHTING",
+      "position": 49,
+      "ruleText": "The canonical primary light direction is soft natural daylight entering from the established left/front-left doorway."
+    },
+    {
+      "category": "LIGHTING",
+      "position": 50,
+      "ruleText": "The Babaláwo and principal working zone should remain readable while the rear recess is darker and more mysterious without becoming featureless black."
+    },
+    {
+      "category": "LIGHTING",
+      "position": 51,
+      "ruleText": "Restrained warm practical/rear accents may reveal selected carving, vessels and depth, but the light must remain physically believable."
+    },
+    {
+      "category": "LIGHTING",
+      "position": 52,
+      "ruleText": "Preserve approximately the same light geography throughout neighboring shots; do not relocate the dominant daylight source without a legitimate reverse-angle explanation."
+    },
+    {
+      "category": "LIGHTING",
+      "position": 53,
+      "ruleText": "Prohibit neon lighting, supernatural glow, horror underlighting, unmotivated volumetric beams and an all-orange cinematic wash."
+    },
+    {
+      "category": "MOVEMENT",
+      "position": 54,
+      "ruleText": "Human movement should remain slow, restrained, prayerful and believable."
+    },
+    {
+      "category": "MOVEMENT",
+      "position": 55,
+      "ruleText": "Preferred performance motion includes natural breathing, small head movements, subtle gaze changes, restrained hand gestures and occasional measured interaction with approved objects."
+    },
+    {
+      "category": "MOVEMENT",
+      "position": 56,
+      "ruleText": "Do not require the practitioner to manipulate complicated ceremonial objects continuously merely to create visual action."
+    },
+    {
+      "category": "MOVEMENT",
+      "position": 57,
+      "ruleText": "Camera movement should be minimal and controlled: stable compositions, subtle push-ins or restrained lateral movement are preferred."
+    },
+    {
+      "category": "MOVEMENT",
+      "position": 58,
+      "ruleText": "Prohibit frantic orbiting, whip pans, spinning camera movement, impossible floating movement and constant dramatic gesturing."
+    },
+    {
+      "category": "ATMOSPHERE",
+      "position": 59,
+      "ruleText": "The emotional atmosphere is sacred, private, contemplative, serious, welcoming, premium and photorealistic."
+    },
+    {
+      "category": "ATMOSPHERE",
+      "position": 60,
+      "ruleText": "Age should be expressed through patina, worn timber, woven fibres and careful long-term use; aged must not become derelict, dirty or abandoned."
+    },
+    {
+      "category": "ATMOSPHERE",
+      "position": 61,
+      "ruleText": "Subtle natural haze, dust or warm atmospheric depth may appear only when physically plausible and must not become fantasy smoke or supernatural particles."
+    },
+    {
+      "category": "ATMOSPHERE",
+      "position": 62,
+      "ruleText": "Sacredness must be communicated through the practitioner, architecture, approved objects, composition, silence and material culture rather than visual magic."
+    },
+    {
+      "category": "PROHIBITED_IMAGERY",
+      "position": 63,
+      "ruleText": "Prohibit additional physical clients, assistants, crowds or worshippers inside the canonical recorded online-prayer scene unless a future separately approved production mode explicitly requires them."
+    },
+    {
+      "category": "PROHIBITED_IMAGERY",
+      "position": 64,
+      "ruleText": "Prohibit giant invented deity statues, throne idols, random mask walls, generic “voodoo” imagery, horror-shrine imagery, skulls, gore, demonic imagery and frightening possession spectacle."
+    },
+    {
+      "category": "PROHIBITED_IMAGERY",
+      "position": 65,
+      "ruleText": "Prohibit fantasy African temples, Egyptian/pharaonic architecture, unrelated cross-cultural shrine language, luxury palaces, modern offices and hotel-like interiors."
+    },
+    {
+      "category": "PROHIBITED_IMAGERY",
+      "position": 66,
+      "ruleText": "Prohibit dominant river, pool, waterfall, ocean or flooded-room imagery for Ilé Àwọn Babaláwo."
+    },
+    {
+      "category": "PROHIBITED_IMAGERY",
+      "position": 67,
+      "ruleText": "Prohibit excessive sacred-object clutter, unexplained new staffs, unverified wall panels and background figures generated merely to make the room appear more mystical."
+    },
+    {
+      "category": "PROHIBITED_SYMBOL",
+      "position": 68,
+      "ruleText": "Prohibit invented readable sacred text, pseudo-Yorùbá inscriptions, glowing runes, magical circles and fantasy occult sigils."
+    },
+    {
+      "category": "PROHIBITED_SYMBOL",
+      "position": 69,
+      "ruleText": "Prohibit assigning a generated decorative motif a named spiritual meaning unless that meaning exists in separately approved source material."
+    },
+    {
+      "category": "PROHIBITED_SYMBOL",
+      "position": 70,
+      "ruleText": "Prohibit turning a documented object motif into permission for a standalone named deity depiction."
+    },
+    {
+      "category": "PROHIBITED_COMBINATION",
+      "position": 71,
+      "ruleText": "Do not combine the Ilé Àwọn Babaláwo room identity with a dominant Ọ̀ṣun river/water aesthetic, Ajé/Olókun prosperity spectacle or Ọ̀sanyìn herbal-room identity."
+    },
+    {
+      "category": "PROHIBITED_COMBINATION",
+      "position": 72,
+      "ruleText": "Do not combine an approved Babaláwo prayer scene with an in-room physical recipient when the scene belongs to the Phase One recorded personalized online prayer experience."
+    },
+    {
+      "category": "PROHIBITED_COMBINATION",
+      "position": 73,
+      "ruleText": "Do not combine credible Ifá-associated objects with fantasy architecture, supernatural energy effects, invented writing or horror styling."
+    },
+    {
+      "category": "PROHIBITED_COMBINATION",
+      "position": 74,
+      "ruleText": "Do not display every approved object in every shot; excessive over-combination that turns the working room into a museum or prop warehouse is a continuity failure."
+    },
+    {
+      "category": "NEGATIVE_PROMPT_GUIDANCE",
+      "position": 75,
+      "ruleText": "Negative generation guidance: no extra people, no client in room, no assistant, no crowd, no face swap, no identity drift, no wardrobe change, no giant deity, no fantasy shrine, no voodoo stereotype, no horror shrine, no skulls, no gore, no glowing eyes."
+    },
+    {
+      "category": "NEGATIVE_PROMPT_GUIDANCE",
+      "position": 76,
+      "ruleText": "Negative generation guidance: no fake Yoruba text, no invented sacred writing, no glowing runes, no magic circle, no cross-cultural temple motifs, no random mask wall, no unexplained religious murals."
+    },
+    {
+      "category": "NEGATIVE_PROMPT_GUIDANCE",
+      "position": 77,
+      "ruleText": "Negative continuity guidance: no doorway relocation, no changing room geometry, no changing light direction, no disappearing rear recess, no changing Ọ̀pọ́n family, no changing Àgéré family, no changing Àpò Ifá, no unexplained replacement of major room anchors."
+    },
+    {
+      "category": "NEGATIVE_PROMPT_GUIDANCE",
+      "position": 78,
+      "ruleText": "Negative quality guidance: no extra fingers, fused hands, malformed hands, warped face, duplicated body, morphing objects, floating objects, impossible shadows, unstable architecture, unreadable fake text or obvious AI artifacts."
+    }
+  ]
+}

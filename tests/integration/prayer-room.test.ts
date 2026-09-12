@@ -88,6 +88,7 @@ import {
 import {
   AUDIO_TASK_POLL_DELAY_MS,
   VISUAL_TASK_POLL_DELAY_MS,
+  enqueuePrayerGenerationUnderTx,
   runAudioGenerationOnce,
   runGenerationPreparationOnce,
   runVisualGenerationOnce,
@@ -99,17 +100,13 @@ import {
   computeUploadIdempotencyKey,
   runUploadOnce,
 } from '@/services/render-upload'
-import {
-  LocalPrivateObjectStorage,
-} from '@/providers/object-storage/local'
+import { LocalPrivateObjectStorage } from '@/providers/object-storage/local'
 import {
   checkObjectStorageAllowed,
   resetObjectStorageForTests,
   setObjectStorageForTests,
 } from '@/providers/object-storage/registry'
-import {
-  MAX_SIGNED_URL_TTL_SECONDS,
-} from '@/providers/object-storage/types'
+import { MAX_SIGNED_URL_TTL_SECONDS } from '@/providers/object-storage/types'
 import {
   addDays,
   currentLocalDate,
@@ -453,6 +450,12 @@ async function makeUploadableJob(): Promise<{
     startsAtUtc: nextSlot(),
   })
   await confirmReservation(reservation.appointmentId, ctx)
+  // New bookings no longer auto-enqueue generation. These tests still
+  // exercise the legacy generated-media compatibility path, so the
+  // fixture creates that job explicitly.
+  await getDb().transaction((tx) =>
+    enqueuePrayerGenerationUnderTx(tx, reservation.appointmentId),
+  )
   const job = (
     await getDb()
       .select()
@@ -641,7 +644,10 @@ afterAll(async () => {
         await db
           .delete(prayerGenerationStoryboardSnapshots)
           .where(
-            inArray(prayerGenerationStoryboardSnapshots.generationJobId, jobIds),
+            inArray(
+              prayerGenerationStoryboardSnapshots.generationJobId,
+              jobIds,
+            ),
           )
         await db
           .delete(prayerGenerationJobEvents)
@@ -826,7 +832,13 @@ async function setAppointmentStart(
 
 async function setAppointmentStatus(
   appointmentId: number,
-  status: 'PENDING_PAYMENT' | 'CONFIRMED' | 'CANCELLED' | 'COMPLETED' | 'NO_SHOW' | 'EXPIRED',
+  status:
+    | 'PENDING_PAYMENT'
+    | 'CONFIRMED'
+    | 'CANCELLED'
+    | 'COMPLETED'
+    | 'NO_SHOW'
+    | 'EXPIRED',
 ): Promise<void> {
   await getDb()
     .update(appointments)
@@ -925,7 +937,9 @@ describe('prayer room: only the appointment owner, ever', () => {
     // of other people's appointments.
     expect(crossUser.status).toBe(404)
     expect(unknownRoom.status).toBe(404)
-    expect(await getPrayerRoomStatus(stranger, crypto.randomUUID(), now)).toBeNull()
+    expect(
+      await getPrayerRoomStatus(stranger, crypto.randomUUID(), now),
+    ).toBeNull()
   }, 240_000)
 
   it('STAFF ROLES GRANT NO BYPASS — an admin still cannot open it', async () => {
@@ -1003,9 +1017,8 @@ describe('prayer room: the gate is the CURRENT appointment start', () => {
     await setAppointmentStart(appointmentId, startMs)
     // One second before: still closed.
     expect(
-      (
-        await getPrayerRoomStatus(ownerId, publicId, new Date(startMs - 1000))
-      )?.state,
+      (await getPrayerRoomStatus(ownerId, publicId, new Date(startMs - 1000)))
+        ?.state,
     ).toBe('LOCKED')
     // TEETH: at exactly startsAtUtc it is open — the boundary is
     // inclusive, not "some time after".
@@ -1131,9 +1144,9 @@ describe('prayer room: playback re-proves the whole upload, every time', () => {
     await setAppointmentStart(made.appointmentId, now.getTime() - 60_000)
     // Sanity: it plays BEFORE the tamper, so a later refusal is caused
     // by the tamper and nothing else.
-    expect((await getPrayerRoomStatus(made.ownerId, made.publicId, now))?.state).toBe(
-      'AVAILABLE',
-    )
+    expect(
+      (await getPrayerRoomStatus(made.ownerId, made.publicId, now))?.state,
+    ).toBe('AVAILABLE')
     return { ...made, now }
   }
 
@@ -1449,8 +1462,9 @@ describe('prayer room: a remote provider gets a short-lived signed GET, after au
       code: 'REMOTE_PRIVATE_TEST',
       isLocal: false,
       isEnabled: () => true,
-      putPrivateObject: (input: Parameters<typeof objectStorage.putPrivateObject>[0]) =>
-        objectStorage.putPrivateObject(input),
+      putPrivateObject: (
+        input: Parameters<typeof objectStorage.putPrivateObject>[0],
+      ) => objectStorage.putPrivateObject(input),
       headPrivateObject: (key: string) => objectStorage.headPrivateObject(key),
       getPrivateObject: (key: string) => objectStorage.getPrivateObject(key),
       removePrivateObject: (key: string) =>
@@ -1603,7 +1617,9 @@ describe('prayer room: a remote provider gets a short-lived signed GET, after au
     // The environment guard is what stops a local object ever being
     // served from production, and it is re-checked on every request
     // through the shared upload proof.
-    expect(checkObjectStorageAllowed(objectStorage, 'production').ok).toBe(false)
+    expect(checkObjectStorageAllowed(objectStorage, 'production').ok).toBe(
+      false,
+    )
     expect(checkObjectStorageAllowed(objectStorage, 'test').ok).toBe(true)
   })
 
@@ -1698,7 +1714,7 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
 
   it('adds no table of its own, and the schema only grows when authorised', async () => {
     const rows = (await getDb().execute(
-      "SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE()",
+      'SELECT COUNT(*) AS c FROM information_schema.tables WHERE table_schema = DATABASE()',
     )) as unknown as Array<Array<{ c: number }>>
     const count = Number(rows[0][0].c)
     // TEETH: Step 18 stores nothing of its own — appointment, job and
@@ -1708,7 +1724,7 @@ describe('prayer room: the Step 18 layer stays local, private and quiet', () => 
     // item 22, rules in §47), three notification tables (§42 item 23,
     // rules in §48) and one Visual Bible reference-media table
     // (Step 24). Nothing may move it without an authorised reason.
-    expect(count).toBe(63)
+    expect(count).toBe(64)
   }, 240_000)
 })
 
@@ -1832,8 +1848,9 @@ describe('prayer room: a signed read capability is checked before it is handed o
       code: 'REMOTE_SIGNED_TEST',
       isLocal: false,
       isEnabled: () => true,
-      putPrivateObject: (input: Parameters<typeof objectStorage.putPrivateObject>[0]) =>
-        objectStorage.putPrivateObject(input),
+      putPrivateObject: (
+        input: Parameters<typeof objectStorage.putPrivateObject>[0],
+      ) => objectStorage.putPrivateObject(input),
       headPrivateObject: (k: string) => objectStorage.headPrivateObject(k),
       getPrivateObject: (k: string) => objectStorage.getPrivateObject(k),
       removePrivateObject: (k: string) => objectStorage.removePrivateObject(k),

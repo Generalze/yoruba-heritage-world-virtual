@@ -4,6 +4,10 @@ import { getSacredHouseFn } from '@/services/catalogue-actions'
 import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
 import {
+  getHouseVisualsBySlug,
+  type GovernedHouseVisuals,
+} from '@/lib/governed-house-visuals'
+import {
   BackLink,
   Badge,
   Card,
@@ -70,22 +74,35 @@ function HouseNotFound() {
 function SacredHousePage() {
   const { user } = Route.useRouteContext()
   const house = Route.useLoaderData()
+  const visuals = getHouseVisualsBySlug(house.slug)
 
   return (
     <PublicPage user={user}>
-      <PageBanner
-        kicker="Sacred House"
-        title={house.name}
-        intro={house.shortDescription ?? undefined}
-      >
-        <div className="mt-6">
-          <BackLink to="/sacred-houses">All Sacred Houses</BackLink>
-        </div>
-      </PageBanner>
+      {visuals ? (
+        <HouseVisualBanner
+          name={house.name}
+          intro={house.shortDescription}
+          visuals={visuals}
+        />
+      ) : (
+        <PageBanner
+          kicker="Sacred House"
+          title={house.name}
+          intro={house.shortDescription ?? undefined}
+        >
+          <div className="mt-6">
+            <BackLink to="/sacred-houses">All Sacred Houses</BackLink>
+          </div>
+        </PageBanner>
+      )}
 
       <Container className="py-12 sm:py-16">
         <div className="grid gap-6 lg:grid-cols-3">
           <div className="grid gap-6 lg:col-span-2">
+            {house.slug === 'ile-awon-babalawo' && visuals ? (
+              <BabalawoProfilePanel visuals={visuals} />
+            ) : null}
+
             {house.services.length > 0 ? (
               <Card>
                 <h2 className="text-sm font-semibold tracking-wide text-ink">
@@ -181,5 +198,85 @@ function SacredHousePage() {
         </div>
       </Container>
     </PublicPage>
+  )
+}
+
+function HouseVisualBanner({
+  name,
+  intro,
+  visuals,
+}: {
+  name: string
+  intro: string | null
+  visuals: GovernedHouseVisuals
+}) {
+  return (
+    <section className="relative isolate overflow-hidden bg-night">
+      <img
+        src={visuals.environment.src}
+        alt=""
+        aria-hidden="true"
+        width={visuals.environment.width}
+        height={visuals.environment.height}
+        fetchPriority="high"
+        className="absolute inset-0 -z-20 h-full w-full object-cover object-center"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 bg-gradient-to-r from-night via-night/88 to-night/45"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 -z-10 bg-gradient-to-t from-night/75 via-transparent to-night/25"
+      />
+      <Container className="py-16 sm:py-20 lg:py-24">
+        <div className="max-w-3xl">
+          <p className="text-xs font-semibold tracking-[0.28em] text-gold-bright uppercase">
+            Sacred House
+          </p>
+          <h1 className="font-display mt-3 text-3xl leading-tight text-balance text-cream-on-night sm:text-5xl">
+            {name}
+          </h1>
+          {intro ? (
+            <p className="mt-4 text-base leading-relaxed text-cream-soft-on-night">
+              {intro}
+            </p>
+          ) : null}
+          <div className="mt-6">
+            <BackLink to="/sacred-houses">All Sacred Houses</BackLink>
+          </div>
+        </div>
+      </Container>
+    </section>
+  )
+}
+
+function BabalawoProfilePanel({ visuals }: { visuals: GovernedHouseVisuals }) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="grid gap-0 md:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
+        <div className="relative aspect-[16/9] min-h-64 overflow-hidden bg-night md:aspect-auto">
+          <img
+            src={visuals.profile.src}
+            alt="Babalawo practitioner profile portrait"
+            width={visuals.profile.width}
+            height={visuals.profile.height}
+            loading="lazy"
+            className="h-full w-full object-cover"
+          />
+        </div>
+        <div className="p-6">
+          <h2 className="text-sm font-semibold tracking-wide text-ink">
+            Babalawo profile
+          </h2>
+          <p className="mt-3 text-sm leading-relaxed text-ink-soft">
+            Individual practitioner details are not published in the current
+            governed catalogue. Appointments are booked with Ilé Àwọn Babalawo,
+            and the House privately assigns the members responsible for each
+            appointment.
+          </p>
+        </div>
+      </div>
+    </Card>
   )
 }

@@ -30,6 +30,12 @@ import {
   removeRepresentative,
   rescheduleAppointment,
 } from './appointments'
+import {
+  PRAYER_ROOM_MEDIA_MAX_BYTES,
+  getPrayerRoomMediaForAdmin,
+  revokePrayerRoomMediaForAppointment,
+  uploadPrayerRoomMediaForAppointment,
+} from './prayer-room-media'
 import type { SafeUser } from '@/auth/session'
 
 /**
@@ -58,6 +64,17 @@ const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 const utcSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, 'Invalid UTC timestamp.')
+const PRAYER_ROOM_MEDIA_UPLOAD_BASE64_MAX =
+  Math.ceil(PRAYER_ROOM_MEDIA_MAX_BYTES / 3) * 4
+const base64UploadSchema = z
+  .string()
+  .min(1)
+  .max(PRAYER_ROOM_MEDIA_UPLOAD_BASE64_MAX)
+  .refine((value) => value.length % 4 === 0, 'Invalid video encoding.')
+  .refine(
+    (value) => /^[A-Za-z0-9+/]*={0,2}$/.test(value),
+    'Invalid video encoding.',
+  )
 
 // --- Scheduling -------------------------------------------------------------
 
@@ -198,7 +215,10 @@ export const adminGetAppointmentFn = createServerFn({ method: 'GET' })
   .validator(z.object({ id: idSchema }))
   .handler(async ({ data }) => {
     const actor = await requireActor()
-    return getAppointmentAdmin(actor.id, data.id)
+    const appointment = await getAppointmentAdmin(actor.id, data.id)
+    if (!appointment) return null
+    const prayerRoomMedia = await getPrayerRoomMediaForAdmin(data.id)
+    return { ...appointment, prayerRoomMedia }
   })
 
 export const adminCancelAppointmentFn = createServerFn({ method: 'POST' })
@@ -274,6 +294,47 @@ export const adminRemoveRepresentativeFn = createServerFn({ method: 'POST' })
       requestContext(),
       data.id,
       data.memberId,
+    )
+    return { ok: true }
+  })
+
+export const adminUploadPrayerRoomMediaFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      id: idSchema,
+      mimeType: z.enum(['video/mp4', 'video/webm']),
+      bytesBase64: base64UploadSchema,
+      durationSeconds: z.number().int().min(1).max(36_000).optional(),
+      adminNote: z.string().trim().max(500).optional(),
+    }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireActor()
+    const bytes = Buffer.from(data.bytesBase64, 'base64')
+    return uploadPrayerRoomMediaForAppointment(
+      actor.id,
+      requestContext(),
+      data.id,
+      bytes,
+      data.mimeType,
+      {
+        durationSeconds: data.durationSeconds ?? null,
+        adminNote: data.adminNote ?? null,
+      },
+    )
+  })
+
+export const adminRevokePrayerRoomMediaFn = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({ id: idSchema, reason: z.string().trim().min(1).max(500) }),
+  )
+  .handler(async ({ data }) => {
+    const actor = await requireActor()
+    await revokePrayerRoomMediaForAppointment(
+      actor.id,
+      requestContext(),
+      data.id,
+      data.reason,
     )
     return { ok: true }
   })

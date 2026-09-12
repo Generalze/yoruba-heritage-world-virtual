@@ -1537,14 +1537,14 @@ describe('orchestration contract', () => {
     // item 22, rules in §47), three notification tables (§42 item 23,
     // rules in §48) and one Visual Bible reference-media table (Step 24). This pipeline still stores nothing of its own,
     // which is what the guard is really for.
-    expect(Number(rows[0][0].c)).toBe(63)
+    expect(Number(rows[0][0].c)).toBe(64)
     const migrations = readdirSync(join(process.cwd(), 'migrations'))
       .filter((name) => name.endsWith('.sql'))
       .sort()
     // 0020 adds ONE COLUMN to sacred_houses — the House's approved
     // speaking voice (canon §50). Still no table: the pipeline stores
     // nothing of its own, and the voice belongs to the House.
-    expect(migrations).toHaveLength(21)
-    expect(migrations.at(-1)).toMatch(/^0020_/)
+    expect(migrations).toHaveLength(22)
+    expect(migrations.at(-1)).toMatch(/^0021_/)
   }, 240_000)
 })

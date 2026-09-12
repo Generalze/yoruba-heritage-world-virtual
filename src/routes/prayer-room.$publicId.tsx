@@ -5,8 +5,11 @@ import { getCurrentUserFn } from '@/auth/actions'
 import { getPrayerRoomStatusFn } from '@/services/prayer-room-actions'
 import { formatUtcSqlInTimezone } from '@/lib/display-time'
 import {
+  getHouseVisualsByName,
+  type GovernedHouseVisuals,
+} from '@/lib/governed-house-visuals'
+import {
   SPIRITUAL_SERVICE_NOTICE_BODY,
-  SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER,
   SPIRITUAL_SERVICE_NOTICE_TITLE,
 } from '@/lib/spiritual-service-notice'
 import { BrandMark, Container, PatternDivider, SkipLink } from '@/components/ui'
@@ -66,8 +69,10 @@ function PrayerRoomPage() {
     )
   }
 
+  const visuals = getHouseVisualsByName(status.houseName)
+
   return (
-    <Shell backLabel="Appointment" publicId={publicId}>
+    <Shell backLabel="Appointment" publicId={publicId} visuals={visuals}>
       <div className="grid gap-8 lg:grid-cols-[1.6fr_1fr]">
         <div>
           <h1 className="font-display text-3xl text-cream-on-night sm:text-4xl">
@@ -78,7 +83,11 @@ function PrayerRoomPage() {
           </p>
 
           <div className="mt-6">
-            <PrayerRoomBody state={status.state} publicId={publicId} />
+            <PrayerRoomBody
+              state={status.state}
+              publicId={publicId}
+              visuals={visuals}
+            />
           </div>
         </div>
 
@@ -109,8 +118,8 @@ function PrayerRoomPage() {
               Preparing for your session
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-cream-soft-on-night">
-              Any guidance your Sacred House has prepared for this
-              appointment appears with the appointment itself.
+              Any guidance your Sacred House has prepared for this appointment
+              appears with the appointment itself.
             </p>
             <Link
               to="/appointments/$publicId"
@@ -131,7 +140,6 @@ function PrayerRoomPage() {
           {SPIRITUAL_SERVICE_NOTICE_TITLE}
         </p>
         <p className="mt-2">{SPIRITUAL_SERVICE_NOTICE_BODY}</p>
-        <p className="mt-2">{SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER}</p>
       </div>
     </Shell>
   )
@@ -161,16 +169,38 @@ function NightPanel({ children }: { children: ReactNode }) {
 function Shell({
   backLabel,
   publicId,
+  visuals,
   children,
 }: {
   backLabel: string
   /** Present once the appointment is known: the way back points at the
    * appointment itself rather than the whole list. */
   publicId?: string
+  visuals?: GovernedHouseVisuals
   children: ReactNode
 }) {
   return (
-    <div className="texture-night flex min-h-screen flex-col bg-night text-cream-on-night">
+    <div className="texture-night relative isolate flex min-h-screen flex-col overflow-hidden bg-night text-cream-on-night">
+      {visuals ? (
+        <>
+          <img
+            src={visuals.environment.src}
+            alt=""
+            aria-hidden="true"
+            width={visuals.environment.width}
+            height={visuals.environment.height}
+            className="absolute inset-0 -z-30 h-full w-full object-cover opacity-28"
+          />
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 -z-20 bg-gradient-to-r from-night via-night/92 to-night/78"
+          />
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 -z-20 bg-gradient-to-t from-night via-night/65 to-night/30"
+          />
+        </>
+      ) : null}
       <SkipLink />
       <header className="border-b border-night-line">
         <Container className="flex flex-wrap items-center justify-between gap-4 py-4">
@@ -225,26 +255,31 @@ function Shell({
 function PrayerRoomBody({
   state,
   publicId,
+  visuals,
 }: {
   state: 'PREPARING' | 'LOCKED' | 'AVAILABLE' | 'UNAVAILABLE'
   publicId: string
+  visuals?: GovernedHouseVisuals
 }) {
   if (state === 'AVAILABLE') {
+    const poster = visuals?.prayerPoster?.src ?? visuals?.environment.src
     return (
       <section aria-labelledby="prayer-recording">
         <h2
           id="prayer-recording"
           className="text-xs font-semibold tracking-[0.28em] text-gold-bright uppercase"
         >
-          Your recorded prayer
+          Your Prayer Room video
         </h2>
         {/* Plain HTML video against the AUTHENTICATED endpoint. The
             browser never learns where the recording actually lives. */}
         <video
-          className="mt-4 w-full rounded-lg border border-night-line bg-black shadow-[0_24px_60px_rgba(0,0,0,0.55)]"
+          className="mt-4 aspect-video w-full rounded-lg border border-night-line bg-black object-contain shadow-[0_24px_60px_rgba(0,0,0,0.55)]"
           controls
           controlsList="nodownload"
+          playsInline
           preload="metadata"
+          poster={poster}
           src={`/api/prayer-room/${publicId}/media`}
         >
           Your browser cannot play this recording.
@@ -275,18 +310,33 @@ function PrayerRoomBody({
   return (
     <section
       aria-labelledby="prayer-state"
-      className="rounded-lg border border-night-line bg-night-raised px-6 py-14 text-center"
+      className="relative overflow-hidden rounded-lg border border-night-line bg-night-raised px-6 py-14 text-center"
     >
-      <PatternDivider onDark />
-      <h2
-        id="prayer-state"
-        className="font-display mt-8 text-2xl text-cream-on-night sm:text-3xl"
-      >
-        {heading}
-      </h2>
-      <p className="mx-auto mt-4 max-w-md leading-relaxed text-cream-soft-on-night">
-        {body}
-      </p>
+      {visuals ? (
+        <>
+          <img
+            src={visuals.environment.src}
+            alt=""
+            aria-hidden="true"
+            width={visuals.environment.width}
+            height={visuals.environment.height}
+            className="absolute inset-0 h-full w-full object-cover opacity-35"
+          />
+          <span aria-hidden="true" className="absolute inset-0 bg-night/74" />
+        </>
+      ) : null}
+      <div className="relative">
+        <PatternDivider onDark />
+        <h2
+          id="prayer-state"
+          className="font-display mt-8 text-2xl text-cream-on-night sm:text-3xl"
+        >
+          {heading}
+        </h2>
+        <p className="mx-auto mt-4 max-w-md leading-relaxed text-cream-soft-on-night">
+          {body}
+        </p>
+      </div>
     </section>
   )
 }

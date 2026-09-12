@@ -3,6 +3,7 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { listSacredHousesFn } from '@/services/catalogue-actions'
 import { getCurrentUserFn } from '@/auth/actions'
 import { PublicPage } from '@/components/site-chrome'
+import { getHouseVisualsBySlug } from '@/lib/governed-house-visuals'
 import { EmblemMedallion } from '@/components/motifs'
 import { Badge, Container, IconArrow, PageBanner } from '@/components/ui'
 
@@ -41,49 +42,77 @@ function SacredHousesPage() {
           </p>
         ) : (
           <ul className="grid gap-6 sm:grid-cols-2">
-            {houses.map((house) => (
-              <li key={house.id}>
-                <Link
-                  to="/sacred-houses/$slug"
-                  params={{ slug: house.slug }}
-                  className="group flex h-full flex-col rounded-lg border border-line bg-surface-raised p-6 shadow-[0_1px_3px_rgba(43,32,24,0.08)] transition-colors hover:border-gold-deep"
-                >
-                  <div className="flex items-start gap-4">
-                    <EmblemMedallion name="lattice" className="h-14 w-14" />
-                    <div className="min-w-0">
-                      <h2 className="font-display text-xl leading-snug text-ink transition-colors group-hover:text-gold-deep">
-                        {house.name}
-                      </h2>
-                      {house.shortDescription ? (
-                        <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-                          {house.shortDescription}
-                        </p>
+            {houses.map((house) => {
+              const visuals = getHouseVisualsBySlug(house.slug)
+              return (
+                <li key={house.id}>
+                  <Link
+                    to="/sacred-houses/$slug"
+                    params={{ slug: house.slug }}
+                    className="group flex h-full flex-col overflow-hidden rounded-lg border border-line bg-surface-raised shadow-[0_1px_3px_rgba(43,32,24,0.08)] transition-colors hover:border-gold-deep"
+                  >
+                    {visuals ? (
+                      <span className="relative block aspect-[16/9] overflow-hidden bg-night">
+                        <img
+                          src={visuals.environment.src}
+                          alt=""
+                          aria-hidden="true"
+                          width={visuals.environment.width}
+                          height={visuals.environment.height}
+                          loading="lazy"
+                          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                        />
+                        <span
+                          aria-hidden="true"
+                          className="absolute inset-0 bg-gradient-to-t from-night/60 via-night/10 to-transparent"
+                        />
+                      </span>
+                    ) : null}
+
+                    <div className="flex grow flex-col p-6">
+                      <div className="flex items-start gap-4">
+                        {!visuals ? (
+                          <EmblemMedallion
+                            name="lattice"
+                            className="h-14 w-14"
+                          />
+                        ) : null}
+                        <div className="min-w-0">
+                          <h2 className="font-display text-xl leading-snug text-ink transition-colors group-hover:text-gold-deep">
+                            {house.name}
+                          </h2>
+                          {house.shortDescription ? (
+                            <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+                              {house.shortDescription}
+                            </p>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {house.focusAreas.length > 0 ? (
+                        <ul className="mt-5 flex flex-wrap gap-2">
+                          {house.focusAreas.slice(0, 6).map((area) => (
+                            <li key={area}>
+                              <Badge>{area}</Badge>
+                            </li>
+                          ))}
+                          {house.focusAreas.length > 6 ? (
+                            <li>
+                              <Badge>+{house.focusAreas.length - 6} more</Badge>
+                            </li>
+                          ) : null}
+                        </ul>
                       ) : null}
+
+                      <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-gold-deep">
+                        View Sacred House
+                        <IconArrow />
+                      </span>
                     </div>
-                  </div>
-
-                  {house.focusAreas.length > 0 ? (
-                    <ul className="mt-5 flex flex-wrap gap-2">
-                      {house.focusAreas.slice(0, 6).map((area) => (
-                        <li key={area}>
-                          <Badge>{area}</Badge>
-                        </li>
-                      ))}
-                      {house.focusAreas.length > 6 ? (
-                        <li>
-                          <Badge>+{house.focusAreas.length - 6} more</Badge>
-                        </li>
-                      ) : null}
-                    </ul>
-                  ) : null}
-
-                  <span className="mt-5 inline-flex items-center gap-2 text-sm font-semibold text-gold-deep">
-                    View Sacred House
-                    <IconArrow />
-                  </span>
-                </Link>
-              </li>
-            ))}
+                  </Link>
+                </li>
+              )
+            })}
           </ul>
         )}
       </Container>

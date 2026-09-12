@@ -9,6 +9,7 @@ import {
 import { checkProductionPreflight } from '@/server/production-preflight'
 import { getReadinessStatus } from '@/server/health'
 import { PRAYER_ROOM_SIGNED_URL_TTL_SECONDS } from '@/services/prayer-room'
+import { buildManualPrayerRoomObjectKey } from '@/services/prayer-room-media'
 import { MAX_SIGNED_URL_TTL_SECONDS } from '@/providers/object-storage/types'
 
 /**
@@ -49,7 +50,9 @@ describe('media origin extraction', () => {
     // effective configuration would differ without anyone being told.
     expect(mediaOriginFromEndpoint(`${STORAGE_ORIGIN}?ignored=1`)).toBeNull()
     expect(mediaOriginFromEndpoint(`${STORAGE_ORIGIN}#frag`)).toBeNull()
-    expect(mediaOriginFromEndpoint('https://user:pass@objects.example')).toBeNull()
+    expect(
+      mediaOriginFromEndpoint('https://user:pass@objects.example'),
+    ).toBeNull()
   })
 
   it('refuses anything that is not HTTPS, and anything unparseable', () => {
@@ -105,7 +108,10 @@ describe('content security policy for media', () => {
   it('falls back to self and blob when no storage origin is configured', () => {
     // Local storage is proxied through this origin and needs no
     // external source at all.
-    const policy = contentSecurityPolicy({ isProduction: false, isHttps: false })
+    const policy = contentSecurityPolicy({
+      isProduction: false,
+      isHttps: false,
+    })
     expect(policy).toContain("media-src 'self' blob:")
     const mediaSrc = policy
       .split('; ')
@@ -198,6 +204,39 @@ describe('the signed capability stays short and response-only', () => {
     // never persisted, never logged.
     expect(service).not.toContain('console.log(signed')
     expect(service).toContain('Location: signed.url')
+  })
+})
+
+describe('manual Prayer Room media bindings', () => {
+  it('uses private render-shaped object keys without exposing booking details', () => {
+    const result = buildManualPrayerRoomObjectKey({
+      appointmentId: 42,
+      fileSha256: 'a'.repeat(64),
+      mimeType: 'video/mp4',
+    })
+    const otherAppointment = buildManualPrayerRoomObjectKey({
+      appointmentId: 43,
+      fileSha256: 'a'.repeat(64),
+      mimeType: 'video/mp4',
+    })
+    expect(result.ok).toBe(true)
+    expect(otherAppointment.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.objectKey).toMatch(
+      /^renders\/[0-9a-f]{2}\/[0-9a-f]{64}\.mp4$/,
+    )
+    expect(result.objectKey).not.toContain('appointment')
+    if (otherAppointment.ok) {
+      expect(result.objectKey).not.toBe(otherAppointment.objectKey)
+    }
+  })
+
+  it('does not enqueue autonomous generation when appointment payment settles', async () => {
+    const appointmentsService = await Bun.file(
+      'src/services/appointments.ts',
+    ).text()
+    expect(appointmentsService).not.toContain('enqueuePrayerGenerationUnderTx')
+    expect(appointmentsService).not.toContain('enqueuePrayerGeneration')
   })
 })
 

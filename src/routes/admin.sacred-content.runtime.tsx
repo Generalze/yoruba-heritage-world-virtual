@@ -30,8 +30,8 @@ function SacredRuntimePage() {
       <p className="mt-1 text-sm text-ink-soft">
         Computed from all gates simultaneously: published + storage authorized +
         rights cleared + prayer-room access + runtime enabled + integrity hash.
-        No human approves individual appointments — the autonomous engine will
-        only ever draw from the eligible set below.
+        Staff-prepared Prayer Room videos may use only eligible approved
+        material from the set below.
       </p>
 
       <h2 className="mt-8 text-sm font-medium tracking-widest text-affirm uppercase">
@@ -76,9 +76,7 @@ function RuntimeTable({
             <th className="border-b border-line px-3 py-2">Rights</th>
             <th className="border-b border-line px-3 py-2">Enabled</th>
             {showFailures ? (
-              <th className="border-b border-line px-3 py-2">
-                Blocked by
-              </th>
+              <th className="border-b border-line px-3 py-2">Blocked by</th>
             ) : null}
           </tr>
         </thead>
@@ -100,9 +98,7 @@ function RuntimeTable({
               <td className="border-b border-line px-3 py-2">
                 {row.scopeType}
               </td>
-              <td className="border-b border-line px-3 py-2">
-                {row.language}
-              </td>
+              <td className="border-b border-line px-3 py-2">{row.language}</td>
               <td className="border-b border-line px-3 py-2">
                 v{row.versionNumber}
               </td>

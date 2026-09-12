@@ -8,7 +8,6 @@ import {
 import { useServerFn } from '@tanstack/react-start'
 import {
   SPIRITUAL_SERVICE_NOTICE_BODY,
-  SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER,
   SPIRITUAL_SERVICE_NOTICE_TITLE,
 } from '@/lib/spiritual-service-notice'
 
@@ -56,7 +55,9 @@ function ConsentsPage() {
   const [busy, setBusy] = useState(false)
   const [agreed, setAgreed] = useState(false)
 
-  const allAccepted = data.consents.required.every((consent) => consent.accepted)
+  const allAccepted = data.consents.required.every(
+    (consent) => consent.accepted,
+  )
 
   async function run(action: () => Promise<unknown>) {
     setError(null)
@@ -118,7 +119,6 @@ function ConsentsPage() {
               {SPIRITUAL_SERVICE_NOTICE_TITLE}
             </p>
             <p className="mt-2">{SPIRITUAL_SERVICE_NOTICE_BODY}</p>
-            <p className="mt-2">{SPIRITUAL_SERVICE_NOTICE_PLACEHOLDER}</p>
           </div>
 
           {!allAccepted ? (
@@ -130,8 +130,8 @@ function ConsentsPage() {
                   onChange={(event) => setAgreed(event.target.checked)}
                   className="mt-1 h-4 w-4 shrink-0 accent-[var(--color-gold-deep)]"
                 />
-                I have read and accept the Terms of Service, the Privacy
-                Notice, and the Spiritual Service Notice.
+                I have read and accept the Terms of Service, the Privacy Notice,
+                and the Spiritual Service Notice.
               </label>
               <button
                 type="button"
@@ -166,8 +166,8 @@ function ConsentsPage() {
           </label>
           <p className="mt-3 text-xs leading-relaxed text-ink-soft">
             Entirely optional — declining never affects your account, your
-            profile completion, or future service booking. You can change this
-            at any time.
+            profile completion, or service booking. You can change this at any
+            time.
           </p>
         </Card>
 

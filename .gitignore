@@ -47,3 +47,14 @@ var/media/
 # --- Private object storage (Step 17) ---
 # Uploaded render objects are NEVER committed.
 var/objects/
+
+# --- Governed Babalawo proof package ---
+# Keep the approved private baseline and QA notes reproducible, but do
+# not commit raw provider clips, source audio or QA frame grabs.
+/BABALAWO_90S/*
+!/BABALAWO_90S/final/
+/BABALAWO_90S/final/*
+!/BABALAWO_90S/final/BABALAWO_PRAYER_ROOM_90S_MASTER_V2.mp4
+!/BABALAWO_90S/qa/
+/BABALAWO_90S/qa/*
+!/BABALAWO_90S/qa/*.md

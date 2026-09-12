@@ -57,8 +57,8 @@ function VideoRecipePreviewPage() {
     <div>
       <h1 className="text-2xl font-bold">Video Recipe Preview</h1>
       <p className="mt-1 text-sm text-ink-soft">
-        Deterministic dry-run of the autonomous recipe engine: approved session
-        plan + eligible media + verified Visual Bible. Nothing is persisted or
+        Deterministic dry-run of an approved session plan: eligible content,
+        eligible media and verified Visual Bible. Nothing is persisted or
         generated.
       </p>
 

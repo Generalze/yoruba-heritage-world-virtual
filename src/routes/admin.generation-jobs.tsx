@@ -58,9 +58,8 @@ function GenerationJobsPage() {
     <div>
       <h1 className="text-2xl font-bold">Generation Jobs</h1>
       <p className="mt-1 text-sm text-ink-soft">
-        DB-backed prayer generation queue. Preparation runs autonomously in the
-        worker (`bun run worker:generation`) — no per-appointment human approval
-        exists.
+        Legacy DB-backed generation queue for technical review. New bookings
+        use admin-prepared Prayer Room media attached from the appointment page.
       </p>
 
       {rows.length === 0 ? (

@@ -23,7 +23,8 @@
     "smoke:runtime": "bun run scripts/runtime-smoke.ts",
     "smoke:tts": "bun run scripts/tts-preflight.ts",
     "smoke:tts:provider": "bun run scripts/tts-provider-diagnostic.ts",
-    "verify:launch-content": "bun run scripts/verify-launch-content.ts"
+    "verify:launch-content": "bun run scripts/verify-launch-content.ts",
+    "media:import-babalawo-proof": "bun run scripts/import-babalawo-production-proof.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",

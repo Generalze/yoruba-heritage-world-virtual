@@ -22,11 +22,15 @@ import {
   adminCompleteAppointmentFn,
   adminGetAppointmentFn,
   adminMarkNoShowFn,
+  adminRevokePrayerRoomMediaFn,
   adminRemoveRepresentativeFn,
   adminRescheduleAppointmentFn,
+  adminUploadPrayerRoomMediaFn,
 } from '@/services/appointment-actions'
 import { adminGetAppointmentGuidanceFn } from '@/services/spiritual-content-actions'
 import { LANGUAGE_LABELS, contentTypeLabel } from '@/lib/guidance-labels'
+
+const PRAYER_ROOM_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
 
 export const Route = createFileRoute('/admin/appointments/$id')({
   params: {
@@ -57,11 +61,16 @@ function AppointmentDetail() {
   const noShow = useServerFn(adminMarkNoShowFn)
   const assign = useServerFn(adminAssignRepresentativeFn)
   const removeRep = useServerFn(adminRemoveRepresentativeFn)
+  const uploadRoomMedia = useServerFn(adminUploadPrayerRoomMediaFn)
+  const revokeRoomMedia = useServerFn(adminRevokePrayerRoomMediaFn)
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [newStart, setNewStart] = useState('')
+  const [roomFile, setRoomFile] = useState<File | null>(null)
+  const [roomNote, setRoomNote] = useState('')
+  const [revokeReason, setRevokeReason] = useState('')
 
   async function run(action: () => Promise<unknown>) {
     setError(null)
@@ -77,6 +86,36 @@ function AppointmentDetail() {
   }
 
   const confirmed = appointment.status === 'CONFIRMED'
+  const canCarryPrayerRoomMedia =
+    appointment.status === 'CONFIRMED' || appointment.status === 'COMPLETED'
+
+  async function handleUploadRoomMedia() {
+    if (!roomFile) {
+      setError('Choose a Prayer Room video first.')
+      return
+    }
+    if (roomFile.type !== 'video/mp4' && roomFile.type !== 'video/webm') {
+      setError('Upload an MP4 or WebM video.')
+      return
+    }
+    if (roomFile.size > PRAYER_ROOM_UPLOAD_MAX_BYTES) {
+      setError('Upload a Prayer Room video that is 100 MiB or smaller.')
+      return
+    }
+    await run(async () => {
+      const bytesBase64 = await readFileBase64(roomFile)
+      await uploadRoomMedia({
+        data: {
+          id: appointment.id,
+          mimeType: roomFile.type as 'video/mp4' | 'video/webm',
+          bytesBase64,
+          adminNote: roomNote.trim() || undefined,
+        },
+      })
+      setRoomFile(null)
+      setRoomNote('')
+    })
+  }
 
   return (
     <div className="max-w-2xl">
@@ -140,6 +179,131 @@ function AppointmentDetail() {
           </div>
         ) : null}
       </section>
+
+      {canCarryPrayerRoomMedia ? (
+        <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-medium tracking-widest text-gold-deep uppercase">
+                Prayer Room media
+              </h2>
+              {appointment.prayerRoomMedia ? (
+                <p className="mt-2 text-sm text-ink-soft">
+                  {appointment.prayerRoomMedia.status} ·{' '}
+                  {appointment.prayerRoomMedia.mimeType} ·{' '}
+                  {formatBytes(appointment.prayerRoomMedia.byteSize)}
+                </p>
+              ) : (
+                <p className="mt-2 text-sm text-ink-soft">
+                  No recording attached.
+                </p>
+              )}
+            </div>
+            {appointment.prayerRoomMedia?.status === 'ACTIVE' ? (
+              <StatusBadge status="READY" />
+            ) : (
+              <StatusBadge status="PENDING" />
+            )}
+          </div>
+
+          {appointment.prayerRoomMedia ? (
+            <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+              <Row
+                label="Uploaded"
+                value={new Date(
+                  appointment.prayerRoomMedia.uploadedAt,
+                ).toISOString()}
+              />
+              <Row
+                label="SHA-256"
+                value={appointment.prayerRoomMedia.fileSha256.slice(0, 16)}
+              />
+              {appointment.prayerRoomMedia.adminNote ? (
+                <div className="sm:col-span-2">
+                  <p className="text-ink-soft">Admin note</p>
+                  <p className="mt-1 whitespace-pre-wrap">
+                    {appointment.prayerRoomMedia.adminNote}
+                  </p>
+                </div>
+              ) : null}
+            </dl>
+          ) : null}
+
+          <div className="mt-5 grid gap-3">
+            <AdminField label="Recording file">
+              <input
+                type="file"
+                accept="video/mp4,video/webm"
+                onChange={(event) =>
+                  setRoomFile(event.currentTarget.files?.[0] ?? null)
+                }
+                className={adminInputClass}
+              />
+              <p className="mt-1 text-xs text-ink-soft">
+                MP4 or WebM, up to 100 MiB. The room remains locked until the
+                scheduled appointment time.
+              </p>
+            </AdminField>
+            <AdminField label="Admin note">
+              <input
+                value={roomNote}
+                onChange={(event) =>
+                  setRoomNote(event.currentTarget.value.slice(0, 500))
+                }
+                maxLength={500}
+                className={adminInputClass}
+              />
+            </AdminField>
+            <div>
+              <button
+                type="button"
+                disabled={busy || !roomFile}
+                onClick={() => void handleUploadRoomMedia()}
+                className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink hover:border-gold-deep disabled:opacity-40"
+              >
+                {appointment.prayerRoomMedia?.status === 'ACTIVE'
+                  ? 'Replace recording'
+                  : 'Attach recording'}
+              </button>
+            </div>
+          </div>
+
+          {appointment.prayerRoomMedia?.status === 'ACTIVE' ? (
+            <div className="mt-5 border-t border-line pt-5">
+              <div className="flex flex-wrap items-end gap-2">
+                <AdminField label="Revocation reason">
+                  <input
+                    value={revokeReason}
+                    onChange={(event) =>
+                      setRevokeReason(event.currentTarget.value.slice(0, 500))
+                    }
+                    maxLength={500}
+                    className={adminInputClass}
+                  />
+                </AdminField>
+                <button
+                  type="button"
+                  disabled={busy || revokeReason.trim().length === 0}
+                  onClick={() =>
+                    void run(async () => {
+                      await revokeRoomMedia({
+                        data: {
+                          id: appointment.id,
+                          reason: revokeReason.trim(),
+                        },
+                      })
+                      setRevokeReason('')
+                    })
+                  }
+                  className="rounded-md border border-alert/40 px-4 py-2 text-sm text-alert hover:border-alert disabled:opacity-40"
+                >
+                  Revoke recording
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {confirmed ? (
         <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6">
@@ -327,45 +491,47 @@ function AppointmentDetail() {
                 className="mt-4"
               >
                 <table className="w-full min-w-[760px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
-                    <th className="py-2 pr-4">Title</th>
-                    <th className="py-2 pr-4">Type</th>
-                    <th className="py-2 pr-4">Lang</th>
-                    <th className="py-2 pr-4">Version</th>
-                    <th className="py-2 pr-4">Stage</th>
-                    <th className="py-2">Acknowledged</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {appointment.guidanceSet.assignments.map((assignment) => (
-                    <tr
-                      key={assignment.contentVersionId}
-                      className="border-b border-line"
-                    >
-                      <td className="py-2 pr-4">{assignment.title}</td>
-                      <td className="py-2 pr-4">
-                        {contentTypeLabel(assignment.contentType)}
-                      </td>
-                      <td className="py-2 pr-4">
-                        {LANGUAGE_LABELS[assignment.language] ??
-                          assignment.language}
-                        {assignment.fallbackUsed ? ' (fallback)' : ''}
-                      </td>
-                      <td className="py-2 pr-4">v{assignment.versionNumber}</td>
-                      <td className="py-2 pr-4 text-ink-soft">
-                        {assignment.visibilityStage.replaceAll('_', ' ')}
-                      </td>
-                      <td className="py-2">
-                        {assignment.acknowledgementRequired
-                          ? assignment.acknowledgedAt
-                            ? '✓ yes'
-                            : 'pending'
-                          : 'not required'}
-                      </td>
+                  <thead>
+                    <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
+                      <th className="py-2 pr-4">Title</th>
+                      <th className="py-2 pr-4">Type</th>
+                      <th className="py-2 pr-4">Lang</th>
+                      <th className="py-2 pr-4">Version</th>
+                      <th className="py-2 pr-4">Stage</th>
+                      <th className="py-2">Acknowledged</th>
                     </tr>
-                  ))}
-                </tbody>
+                  </thead>
+                  <tbody>
+                    {appointment.guidanceSet.assignments.map((assignment) => (
+                      <tr
+                        key={assignment.contentVersionId}
+                        className="border-b border-line"
+                      >
+                        <td className="py-2 pr-4">{assignment.title}</td>
+                        <td className="py-2 pr-4">
+                          {contentTypeLabel(assignment.contentType)}
+                        </td>
+                        <td className="py-2 pr-4">
+                          {LANGUAGE_LABELS[assignment.language] ??
+                            assignment.language}
+                          {assignment.fallbackUsed ? ' (fallback)' : ''}
+                        </td>
+                        <td className="py-2 pr-4">
+                          v{assignment.versionNumber}
+                        </td>
+                        <td className="py-2 pr-4 text-ink-soft">
+                          {assignment.visibilityStage.replaceAll('_', ' ')}
+                        </td>
+                        <td className="py-2">
+                          {assignment.acknowledgementRequired
+                            ? assignment.acknowledgedAt
+                              ? '✓ yes'
+                              : 'pending'
+                            : 'not required'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </AdminTableFrame>
             ) : null}
@@ -385,4 +551,25 @@ function Row(props: { label: string; value: string }) {
       <dd>{props.value}</dd>
     </div>
   )
+}
+
+function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = String(reader.result ?? '')
+      const comma = result.indexOf(',')
+      resolve(comma === -1 ? result : result.slice(comma + 1))
+    }
+    reader.onerror = () =>
+      reject(reader.error ?? new Error('File read failed.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const kib = bytes / 1024
+  if (kib < 1024) return `${kib.toFixed(1)} KiB`
+  return `${(kib / 1024).toFixed(1)} MiB`
 }
