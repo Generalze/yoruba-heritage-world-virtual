@@ -210,8 +210,11 @@ function HouseVisualBanner({
   intro: string | null
   visuals: GovernedHouseVisuals
 }) {
+  const setting = visuals.spiritualSetting
   return (
-    <section className="relative isolate overflow-hidden bg-night">
+    <section
+      className={`relative isolate overflow-hidden ${setting.surfaceClassName}`}
+    >
       <img
         src={visuals.environment.src}
         alt=""
@@ -223,11 +226,19 @@ function HouseVisualBanner({
       />
       <div
         aria-hidden="true"
-        className="absolute inset-0 -z-10 bg-gradient-to-r from-night via-night/88 to-night/45"
+        className={`absolute inset-0 -z-10 ${setting.overlayClassName}`}
       />
       <div
         aria-hidden="true"
         className="absolute inset-0 -z-10 bg-gradient-to-t from-night/75 via-transparent to-night/25"
+      />
+      <div
+        aria-hidden="true"
+        className={`absolute top-8 right-8 hidden h-24 w-24 rotate-45 border sm:block ${setting.motifClassName}`}
+      />
+      <div
+        aria-hidden="true"
+        className={`absolute right-0 bottom-0 left-0 h-1 ${setting.accentClassName}`}
       />
       <Container className="py-16 sm:py-20 lg:py-24">
         <div className="max-w-3xl">

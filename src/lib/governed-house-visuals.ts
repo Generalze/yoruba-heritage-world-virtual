@@ -11,6 +11,12 @@ export interface GovernedHouseVisuals {
   code: string
   name: string
   slug: string
+  spiritualSetting: {
+    surfaceClassName: string
+    overlayClassName: string
+    accentClassName: string
+    motifClassName: string
+  }
   environment: GovernedImageAsset
   profile: GovernedImageAsset
   prayerPoster?: GovernedImageAsset
@@ -26,6 +32,13 @@ export const HOUSE_VISUALS: ReadonlyArray<GovernedHouseVisuals> = [
     code: 'ABULE_OSUN',
     name: 'Abúlé Ọ̀ṣun',
     slug: 'abule-osun',
+    spiritualSetting: {
+      surfaceClassName: 'bg-[#071b18]',
+      overlayClassName:
+        'bg-[radial-gradient(circle_at_20%_18%,rgba(44,153,132,0.34),transparent_34%),linear-gradient(105deg,rgba(4,18,20,0.94),rgba(15,62,55,0.78)_52%,rgba(153,116,38,0.42))]',
+      accentClassName: 'bg-[#d8b158]',
+      motifClassName: 'border-[#d8b158]/45 bg-[#0d302a]/65',
+    },
     environment: {
       src: `${ROOT}/02_ABULE_OSUN/06_ENVIRONMENT_INSERT.png`,
       width: 1672,
@@ -48,6 +61,13 @@ export const HOUSE_VISUALS: ReadonlyArray<GovernedHouseVisuals> = [
     code: 'ABULE_AJE',
     name: 'Abúlé Ajé Ṣalúgà / Ajé Olókun',
     slug: 'abule-aje',
+    spiritualSetting: {
+      surfaceClassName: 'bg-[#111827]',
+      overlayClassName:
+        'bg-[radial-gradient(circle_at_76%_22%,rgba(222,180,80,0.28),transparent_30%),linear-gradient(112deg,rgba(8,12,28,0.96),rgba(30,44,74,0.78)_48%,rgba(75,52,21,0.5))]',
+      accentClassName: 'bg-[#e1bd69]',
+      motifClassName: 'border-[#e1bd69]/45 bg-[#18233d]/65',
+    },
     environment: {
       src: `${ROOT}/03_ABULE_AJE/06_ENVIRONMENT_INSERT.png`,
       width: 1672,
@@ -70,6 +90,13 @@ export const HOUSE_VISUALS: ReadonlyArray<GovernedHouseVisuals> = [
     code: 'ABULE_OSANYIN_AJA',
     name: 'Abúlé Ọ̀sanyìn àti Àjà',
     slug: 'abule-osanyin-aja',
+    spiritualSetting: {
+      surfaceClassName: 'bg-[#111a12]',
+      overlayClassName:
+        'bg-[radial-gradient(circle_at_30%_22%,rgba(97,128,68,0.34),transparent_32%),linear-gradient(110deg,rgba(11,21,13,0.95),rgba(38,61,36,0.8)_54%,rgba(93,72,38,0.45))]',
+      accentClassName: 'bg-[#b5c46c]',
+      motifClassName: 'border-[#b5c46c]/45 bg-[#1d321f]/65',
+    },
     environment: {
       src: `${ROOT}/04_ABULE_OSANYIN_AJA/06_ENVIRONMENT_INSERT.png`,
       width: 1672,
@@ -92,6 +119,13 @@ export const HOUSE_VISUALS: ReadonlyArray<GovernedHouseVisuals> = [
     code: 'ILE_AWON_BABALAWO',
     name: 'Ilé Àwọn Babaláwo',
     slug: 'ile-awon-babalawo',
+    spiritualSetting: {
+      surfaceClassName: 'bg-[#17110d]',
+      overlayClassName:
+        'bg-[radial-gradient(circle_at_72%_18%,rgba(194,143,49,0.3),transparent_30%),linear-gradient(108deg,rgba(16,10,7,0.96),rgba(45,29,18,0.84)_50%,rgba(96,62,25,0.5))]',
+      accentClassName: 'bg-[#c8942f]',
+      motifClassName: 'border-[#c8942f]/45 bg-[#2d1d12]/68',
+    },
     environment: {
       src: `${ROOT}/01_ILE_AWON_BABALAWO/06_ENVIRONMENT_INSERT.png`,
       width: 1536,

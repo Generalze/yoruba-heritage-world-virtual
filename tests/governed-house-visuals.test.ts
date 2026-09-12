@@ -61,7 +61,21 @@ describe('governed Sacred House visuals', () => {
     for (const visuals of HOUSE_VISUALS) {
       expect(getHouseVisualsBySlug(visuals.slug)).toBe(visuals)
       expect(getHouseVisualsByName(visuals.name)).toBe(visuals)
+      expect(visuals.spiritualSetting.surfaceClassName).toMatch(/^bg-\[/)
+      expect(visuals.spiritualSetting.overlayClassName).toContain(
+        'linear-gradient',
+      )
     }
+  })
+
+  it('gives each launch House a distinct spiritual setting treatment', () => {
+    expect(
+      new Set(
+        HOUSE_VISUALS.map(
+          (visuals) => visuals.spiritualSetting.overlayClassName,
+        ),
+      ).size,
+    ).toBe(HOUSE_VISUALS.length)
   })
 
   it('uses the exact approved image bytes and dimensions', () => {
@@ -118,6 +132,7 @@ describe('governed Sacred House visuals', () => {
     const detail = withoutComments(read('src/routes/sacred-houses.$slug.tsx'))
     expect(detail).toContain('HouseVisualBanner')
     expect(detail).toContain('BabalawoProfilePanel')
+    expect(detail).toContain('visuals.spiritualSetting')
     expect(detail).toContain('visuals.profile.src')
     expect(detail).not.toMatch(/testimonial|review|rating/i)
 
