@@ -31,6 +31,7 @@ import {
   updateFocusArea,
   updateMember,
   updateSacredHouse,
+  updateService,
 } from '@/services/admin-catalogue'
 import {
   getPublishedDeityBySlug,
@@ -101,6 +102,12 @@ async function houseRow(id: number) {
       .from(sacredHouses)
       .where(eq(sacredHouses.id, id))
       .limit(1)
+  ).at(0)!
+}
+
+async function serviceRow(id: number) {
+  return (
+    await getDb().select().from(services).where(eq(services.id, id)).limit(1)
   ).at(0)!
 }
 
@@ -572,5 +579,46 @@ describe('publication safety', () => {
     const row = await houseRow(houseId)
     expect(row.status).toBe('PUBLISHED')
     expect(row.sortOrder).toBe(901)
+  })
+
+  it('published service price-only update preserves identity and publication', async () => {
+    const houseKey = uid()
+    const houseId = await createSacredHouse(contentManager, ctx, {
+      code: `T35H_${houseKey}`,
+      name: `T35 PriceHouse ${houseKey}`,
+      slug: `t35h-${houseKey.toLowerCase()}`,
+    })
+    tempHouseIds.push(houseId)
+
+    const svcKey = uid()
+    const serviceId = await createService(contentManager, ctx, {
+      sacredHouseId: houseId,
+      code: `T35S_${svcKey}`,
+      name: 'Fertility',
+      slug: `t35s-${svcKey.toLowerCase()}`,
+    })
+    tempServiceIds.push(serviceId)
+
+    await updateService(contentManager, ctx, serviceId, {
+      durationMinutes: 60,
+      priceMinor: 3000,
+      currency: 'USD',
+    })
+    await serviceWorkflow(contentManager, ctx, serviceId, 'submit')
+    await serviceWorkflow(admin, ctx, serviceId, 'approve')
+    await serviceWorkflow(admin, ctx, serviceId, 'publish')
+
+    await updateService(admin, ctx, serviceId, {
+      priceMinor: 500,
+      currency: 'USD',
+    })
+
+    const row = await serviceRow(serviceId)
+    expect(row.name).toBe('Fertility')
+    expect(row.slug).toBe(`t35s-${svcKey.toLowerCase()}`)
+    expect(row.serviceStatus).toBe('PUBLISHED')
+    expect(row.durationMinutes).toBe(60)
+    expect(row.priceMinor).toBe(500)
+    expect(row.currency).toBe('USD')
   })
 })

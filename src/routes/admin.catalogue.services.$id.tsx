@@ -21,6 +21,7 @@ import {
   adminServiceWorkflowFn,
   adminUpdateServiceFn,
 } from '@/services/admin-catalogue-actions'
+import { buildAdminServiceUpdateData } from '@/lib/admin-service-form'
 import type { WorkflowEvent } from '@/services/admin-catalogue'
 
 export const Route = createFileRoute('/admin/catalogue/services/$id')({
@@ -78,24 +79,9 @@ function EditServicePage() {
   async function handleSave(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const duration = String(form.get('durationMinutes') ?? '').trim()
-    const price = String(form.get('priceMinor') ?? '').trim()
-    const currency = String(form.get('currency') ?? '').trim()
     await run(() =>
       update({
-        data: {
-          id: service.id,
-          name: String(form.get('name') ?? ''),
-          slug: String(form.get('slug') ?? ''),
-          shortDescription: String(form.get('shortDescription') ?? ''),
-          sortOrder: Number(form.get('sortOrder') ?? 0),
-          ...(houseChangeable
-            ? { sacredHouseId: Number(form.get('sacredHouseId')) }
-            : {}),
-          durationMinutes: duration === '' ? null : Number(duration),
-          priceMinor: price === '' ? null : Number(price),
-          currency: currency === '' ? null : currency.toUpperCase(),
-        },
+        data: buildAdminServiceUpdateData(service, form, { houseChangeable }),
       }),
     )
   }
