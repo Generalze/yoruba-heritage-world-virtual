@@ -181,25 +181,25 @@ const INITIAL_HOUSE_SERVICE_SETUP: Record<
   }
 > = {
   ABULE_OSUN: {
-    priceMinor: 3000,
+    priceMinor: 500,
     currency: 'USD',
     shortDescription:
       'A private appointment with Abúlé Ọ̀ṣun for reflection, harmony, compassion, relationships, inner balance and the nurturing dimensions of Yorùbá spiritual heritage. Your appointment is prepared by the Sacred House, and your Prayer Room opens at the scheduled appointment time.',
   },
   ABULE_AJE: {
-    priceMinor: 3500,
+    priceMinor: 700,
     currency: 'USD',
     shortDescription:
       'A private appointment with Abúlé Ajé for spiritual reflection around prosperity, enterprise, livelihood, opportunity, responsibility and wise stewardship. The service does not promise wealth or financial success; it provides a respectful spiritual setting prepared by the Sacred House.',
   },
   ABULE_OSANYIN_AJA: {
-    priceMinor: 3500,
+    priceMinor: 700,
     currency: 'USD',
     shortDescription:
       'A private appointment with Abúlé Ọ̀sanyìn àti Àjà for culturally grounded prayer, reflection and spiritual support concerning wellbeing, restoration and balance. This service is spiritual and cultural in nature and is not a substitute for medical or mental-health care.',
   },
   ILE_AWON_BABALAWO: {
-    priceMinor: 4500,
+    priceMinor: 1000,
     currency: 'USD',
     shortDescription:
       'A private appointment with Ilé Àwọn Babaláwo for wisdom, reflection, spiritual guidance and the pursuit of clarity within Yorùbá spiritual tradition. The House prepares the appointment respectfully and your Prayer Room opens at the scheduled appointment time.',
