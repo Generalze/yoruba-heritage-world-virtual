@@ -17,6 +17,7 @@ import {
 } from '@/providers/object-storage/types'
 import { computeFileSha256 } from '@/providers/media/storage'
 import { notifyPrayerRoomReady } from './notification-events'
+import { PRAYER_ROOM_MEDIA_MAX_BYTES } from '@/lib/prayer-room-media-policy'
 import type { RequestContext } from '@/auth/service'
 import type { ObjectStorageProvider } from '@/providers/object-storage/types'
 
@@ -46,8 +47,6 @@ const PRAYER_ROOM_VIDEO_MIME_EXTENSIONS: Record<string, string> = {
   'video/mp4': 'mp4',
   'video/webm': 'webm',
 }
-
-export const PRAYER_ROOM_MEDIA_MAX_BYTES = 100 * 1024 * 1024
 
 export function buildManualPrayerRoomObjectKey(input: {
   appointmentId: number

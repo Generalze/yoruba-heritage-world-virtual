@@ -10,6 +10,10 @@ import { checkProductionPreflight } from '@/server/production-preflight'
 import { getReadinessStatus } from '@/server/health'
 import { PRAYER_ROOM_SIGNED_URL_TTL_SECONDS } from '@/services/prayer-room'
 import { buildManualPrayerRoomObjectKey } from '@/services/prayer-room-media'
+import {
+  PRAYER_ROOM_MEDIA_MAX_BYTES,
+  PRAYER_ROOM_MEDIA_MAX_GIB,
+} from '@/lib/prayer-room-media-policy'
 import { MAX_SIGNED_URL_TTL_SECONDS } from '@/providers/object-storage/types'
 
 /**
@@ -208,6 +212,20 @@ describe('the signed capability stays short and response-only', () => {
 })
 
 describe('manual Prayer Room media bindings', () => {
+  it('allows full session videos without reverting to the old small upload cap', async () => {
+    expect(PRAYER_ROOM_MEDIA_MAX_BYTES).toBe(1024 * 1024 * 1024)
+    expect(PRAYER_ROOM_MEDIA_MAX_GIB).toBe(1)
+
+    const adminPage = await Bun.file(
+      'src/routes/admin.appointments.$id.tsx',
+    ).text()
+    expect(adminPage).toContain('PRAYER_ROOM_MEDIA_MAX_BYTES')
+    expect(adminPage.replace(/\s+/g, ' ')).toContain(
+      'The room remains locked until',
+    )
+    expect(adminPage).not.toContain('100 MiB')
+  })
+
   it('uses private render-shaped object keys without exposing booking details', () => {
     const result = buildManualPrayerRoomObjectKey({
       appointmentId: 42,

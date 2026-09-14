@@ -31,11 +31,11 @@ import {
   rescheduleAppointment,
 } from './appointments'
 import {
-  PRAYER_ROOM_MEDIA_MAX_BYTES,
   getPrayerRoomMediaForAdmin,
   revokePrayerRoomMediaForAppointment,
   uploadPrayerRoomMediaForAppointment,
 } from './prayer-room-media'
+import { PRAYER_ROOM_MEDIA_MAX_BYTES } from '@/lib/prayer-room-media-policy'
 import type { SafeUser } from '@/auth/session'
 
 /**

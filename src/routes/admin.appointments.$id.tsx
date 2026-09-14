@@ -29,8 +29,10 @@ import {
 } from '@/services/appointment-actions'
 import { adminGetAppointmentGuidanceFn } from '@/services/spiritual-content-actions'
 import { LANGUAGE_LABELS, contentTypeLabel } from '@/lib/guidance-labels'
-
-const PRAYER_ROOM_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+import {
+  PRAYER_ROOM_MEDIA_MAX_BYTES,
+  PRAYER_ROOM_MEDIA_MAX_GIB,
+} from '@/lib/prayer-room-media-policy'
 
 export const Route = createFileRoute('/admin/appointments/$id')({
   params: {
@@ -98,8 +100,10 @@ function AppointmentDetail() {
       setError('Upload an MP4 or WebM video.')
       return
     }
-    if (roomFile.size > PRAYER_ROOM_UPLOAD_MAX_BYTES) {
-      setError('Upload a Prayer Room video that is 100 MiB or smaller.')
+    if (roomFile.size > PRAYER_ROOM_MEDIA_MAX_BYTES) {
+      setError(
+        `Upload a Prayer Room video that is ${PRAYER_ROOM_MEDIA_MAX_GIB} GiB or smaller.`,
+      )
       return
     }
     await run(async () => {
@@ -240,8 +244,8 @@ function AppointmentDetail() {
                 className={adminInputClass}
               />
               <p className="mt-1 text-xs text-ink-soft">
-                MP4 or WebM, up to 100 MiB. The room remains locked until the
-                scheduled appointment time.
+                MP4 or WebM, up to {PRAYER_ROOM_MEDIA_MAX_GIB} GiB. The room
+                remains locked until the scheduled appointment time.
               </p>
             </AdminField>
             <AdminField label="Admin note">
