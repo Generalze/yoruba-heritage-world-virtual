@@ -6,7 +6,11 @@ import {
   useRouter,
 } from '@tanstack/react-router'
 
-import { AdminTableFrame, StatusBadge } from '@/components/admin'
+import {
+  AdminHelpPanel,
+  AdminTableFrame,
+  StatusBadge,
+} from '@/components/admin'
 import { adminListAppointmentsFn } from '@/services/appointment-actions'
 import { APPOINTMENT_STATUSES } from '@/db/schema'
 
@@ -64,6 +68,18 @@ function AppointmentsList() {
   return (
     <div>
       <h1 className="text-2xl font-bold">Appointments</h1>
+      <AdminHelpPanel>
+        <p>
+          Appointment status follows the operational chain: Booking → Verified
+          Payment → Confirmed Appointment → Video Upload → Prayer Room locked
+          until scheduled time → Available → Completed.
+        </p>
+        <p>
+          Admin video upload is allowed only for CONFIRMED or COMPLETED
+          appointments. Prayer Room media is private and the upload limit is 1
+          GiB.
+        </p>
+      </AdminHelpPanel>
       <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
         <select
           value={search.status ?? ''}
@@ -127,9 +143,7 @@ function AppointmentsList() {
                 <td className="py-3 pr-4 font-mono text-xs">
                   {appointment.startsAtUtc}
                 </td>
-                <td className="py-3 pr-4">
-                  {appointment.serviceNameSnapshot}
-                </td>
+                <td className="py-3 pr-4">{appointment.serviceNameSnapshot}</td>
                 <td className="py-3 pr-4">{appointment.houseNameSnapshot}</td>
                 <td className="py-3 pr-4">
                   <StatusBadge status={appointment.status} />

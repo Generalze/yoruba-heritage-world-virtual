@@ -8,6 +8,7 @@ import {
   listGenerationJobsFn,
   retryGenerationJobFn,
 } from '@/services/generation-job-actions'
+import { AdminHelpPanel } from '@/components/admin'
 
 /**
  * Generation job operations (Step 12) — staff view of the DB queue:
@@ -58,9 +59,19 @@ function GenerationJobsPage() {
     <div>
       <h1 className="text-2xl font-bold">Generation Jobs</h1>
       <p className="mt-1 text-sm text-ink-soft">
-        Legacy DB-backed generation queue for technical review. New bookings
-        use admin-prepared Prayer Room media attached from the appointment page.
+        Legacy DB-backed generation queue for technical review. New bookings use
+        admin-prepared Prayer Room media attached from the appointment page.
       </p>
+      <AdminHelpPanel>
+        <p>
+          Automated visual generation and TTS are currently disabled. Manual
+          prepared-video upload is the Phase-One production path.
+        </p>
+        <p>
+          Use this page only to inspect or resolve legacy generation jobs. Do
+          not invent sacred content or provider results.
+        </p>
+      </AdminHelpPanel>
 
       {rows.length === 0 ? (
         <p className="mt-8 text-ink-soft">No generation jobs yet.</p>
@@ -70,19 +81,13 @@ function GenerationJobsPage() {
             <thead>
               <tr className="text-left text-xs tracking-wider text-ink-soft uppercase">
                 <th className="border-b border-line px-3 py-2">Job</th>
-                <th className="border-b border-line px-3 py-2">
-                  Appointment
-                </th>
+                <th className="border-b border-line px-3 py-2">Appointment</th>
                 <th className="border-b border-line px-3 py-2">
                   Service / House
                 </th>
                 <th className="border-b border-line px-3 py-2">Status</th>
-                <th className="border-b border-line px-3 py-2">
-                  Attempts
-                </th>
-                <th className="border-b border-line px-3 py-2">
-                  Next / Lease
-                </th>
+                <th className="border-b border-line px-3 py-2">Attempts</th>
+                <th className="border-b border-line px-3 py-2">Next / Lease</th>
                 <th className="border-b border-line px-3 py-2">Error</th>
                 <th className="border-b border-line px-3 py-2">Actions</th>
               </tr>

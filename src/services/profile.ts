@@ -12,6 +12,7 @@ import {
 import { recordAuditEvent } from '@/auth/audit'
 import { calculateAge, isAgeEligibleInTimeZone } from '@/lib/age'
 import { isValidCountryCode } from '@/lib/countries'
+import { CONSENT_VERSIONS, REQUIRED_CONSENT_TYPES } from '@/lib/consent-policy'
 import type { RequestContext } from '@/auth/service'
 import type { ConsentType } from '@/db/schema'
 
@@ -28,28 +29,6 @@ import type { ConsentType } from '@/db/schema'
  * providers. Completion and booking eligibility are always computed
  * server-side from actual data — no trusted client flags.
  */
-
-// --- Consent configuration --------------------------------------------------
-
-/**
- * Development version identifiers. The legal text and real version
- * numbers are replaced before production; bumping a version here makes
- * re-acceptance required because consent rows are (type, version)
- * scoped.
- */
-export const CONSENT_VERSIONS: Record<ConsentType, string> = {
-  TERMS: '1',
-  PRIVACY: '1',
-  SPIRITUAL_NOTICE: '1',
-  MARKETING: '1',
-}
-
-/** Marketing is deliberately NOT here — it is optional, never required. */
-export const REQUIRED_CONSENT_TYPES: ReadonlyArray<ConsentType> = [
-  'TERMS',
-  'PRIVACY',
-  'SPIRITUAL_NOTICE',
-]
 
 // --- Validation -------------------------------------------------------------
 

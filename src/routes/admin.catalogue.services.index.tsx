@@ -1,6 +1,10 @@
 import { Link, createFileRoute } from '@tanstack/react-router'
 
-import { AdminTableFrame, StatusBadge } from '@/components/admin'
+import {
+  AdminHelpPanel,
+  AdminTableFrame,
+  StatusBadge,
+} from '@/components/admin'
 import { adminListServicesFn } from '@/services/admin-catalogue-actions'
 
 export const Route = createFileRoute('/admin/catalogue/services/')({
@@ -22,6 +26,19 @@ function AdminServicesList() {
           New service
         </Link>
       </div>
+      <AdminHelpPanel>
+        <p>
+          Services define what a customer can book with a Sacred House. Global
+          payment currency is USD, and prices must be approved rather than
+          invented.
+        </p>
+        <p>
+          Do not describe a fixed customer-facing appointment duration. The
+          public flow is booking, verified payment, confirmed appointment,
+          prepared video upload, then a private Prayer Room that opens at the
+          scheduled time.
+        </p>
+      </AdminHelpPanel>
       <AdminTableFrame label="Services">
         <table className="w-full min-w-[560px] text-left text-sm">
           <thead>

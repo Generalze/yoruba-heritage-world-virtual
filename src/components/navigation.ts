@@ -143,4 +143,20 @@ export const ADMIN_NAV: ReadonlyArray<AdminNavGroup> = [
       },
     ],
   },
+  {
+    label: 'System',
+    items: [
+      {
+        label: 'Notices & Consent',
+        to: '/admin/system/notices-consent',
+        permission: null,
+      },
+      {
+        label: 'System Status',
+        to: '/admin/system/status',
+        permission: null,
+      },
+      { label: 'Admin Guide', to: '/admin/system/guide', permission: null },
+    ],
+  },
 ]

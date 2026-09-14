@@ -152,3 +152,20 @@ export function AdminError(props: { message: string | null }) {
     </p>
   )
 }
+
+export function AdminHelpPanel(props: {
+  title?: string
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <section
+      className={`mt-5 rounded-lg border border-line bg-surface-raised p-4 text-sm text-ink-soft ${props.className ?? ''}`}
+    >
+      <h2 className="text-sm font-semibold tracking-wide text-ink">
+        {props.title ?? 'How this page works'}
+      </h2>
+      <div className="mt-2 space-y-2 leading-relaxed">{props.children}</div>
+    </section>
+  )
+}

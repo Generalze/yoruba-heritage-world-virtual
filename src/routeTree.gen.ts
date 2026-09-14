@@ -59,6 +59,9 @@ import { Route as AdminSpiritualContentIndexRouteImport } from './routes/admin.s
 import { Route as AdminSpiritualContentIdRouteImport } from './routes/admin.spiritual-content.$id'
 import { Route as AdminSpiritualContentNewRouteImport } from './routes/admin.spiritual-content.new'
 import { Route as AdminSpiritualContentReviewRouteImport } from './routes/admin.spiritual-content.review'
+import { Route as AdminSystemGuideRouteImport } from './routes/admin.system.guide'
+import { Route as AdminSystemNoticesConsentRouteImport } from './routes/admin.system.notices-consent'
+import { Route as AdminSystemStatusRouteImport } from './routes/admin.system.status'
 import { Route as AdminVisualBiblesIndexRouteImport } from './routes/admin.visual-bibles.index'
 import { Route as AdminVisualBiblesIdRouteImport } from './routes/admin.visual-bibles.$id'
 import { Route as ApiWebhooksProviderRouteImport } from './routes/api.webhooks.$provider'
@@ -333,6 +336,22 @@ const AdminSpiritualContentReviewRoute =
     path: '/spiritual-content/review',
     getParentRoute: () => AdminRoute,
   } as any)
+const AdminSystemGuideRoute = AdminSystemGuideRouteImport.update({
+  id: '/system/guide',
+  path: '/system/guide',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSystemNoticesConsentRoute =
+  AdminSystemNoticesConsentRouteImport.update({
+    id: '/system/notices-consent',
+    path: '/system/notices-consent',
+    getParentRoute: () => AdminRoute,
+  } as any)
+const AdminSystemStatusRoute = AdminSystemStatusRouteImport.update({
+  id: '/system/status',
+  path: '/system/status',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminVisualBiblesIndexRoute = AdminVisualBiblesIndexRouteImport.update({
   id: '/visual-bibles/',
   path: '/visual-bibles/',
@@ -462,6 +481,9 @@ export interface FileRoutesByFullPath {
   '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
   '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
   '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
+  '/admin/system/guide': typeof AdminSystemGuideRoute
+  '/admin/system/notices-consent': typeof AdminSystemNoticesConsentRoute
+  '/admin/system/status': typeof AdminSystemStatusRoute
   '/admin/visual-bibles/$id': typeof AdminVisualBiblesIdRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
@@ -528,6 +550,9 @@ export interface FileRoutesByTo {
   '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
   '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
   '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
+  '/admin/system/guide': typeof AdminSystemGuideRoute
+  '/admin/system/notices-consent': typeof AdminSystemNoticesConsentRoute
+  '/admin/system/status': typeof AdminSystemStatusRoute
   '/admin/visual-bibles/$id': typeof AdminVisualBiblesIdRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
@@ -596,6 +621,9 @@ export interface FileRoutesById {
   '/admin/spiritual-content/$id': typeof AdminSpiritualContentIdRoute
   '/admin/spiritual-content/new': typeof AdminSpiritualContentNewRoute
   '/admin/spiritual-content/review': typeof AdminSpiritualContentReviewRoute
+  '/admin/system/guide': typeof AdminSystemGuideRoute
+  '/admin/system/notices-consent': typeof AdminSystemNoticesConsentRoute
+  '/admin/system/status': typeof AdminSystemStatusRoute
   '/admin/visual-bibles/$id': typeof AdminVisualBiblesIdRoute
   '/api/webhooks/$provider': typeof ApiWebhooksProviderRoute
   '/payments/receipt/$attemptPublicId': typeof PaymentsReceiptAttemptPublicIdRoute
@@ -665,6 +693,9 @@ export interface FileRouteTypes {
     | '/admin/spiritual-content/$id'
     | '/admin/spiritual-content/new'
     | '/admin/spiritual-content/review'
+    | '/admin/system/guide'
+    | '/admin/system/notices-consent'
+    | '/admin/system/status'
     | '/admin/visual-bibles/$id'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
@@ -731,6 +762,9 @@ export interface FileRouteTypes {
     | '/admin/spiritual-content/$id'
     | '/admin/spiritual-content/new'
     | '/admin/spiritual-content/review'
+    | '/admin/system/guide'
+    | '/admin/system/notices-consent'
+    | '/admin/system/status'
     | '/admin/visual-bibles/$id'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
@@ -798,6 +832,9 @@ export interface FileRouteTypes {
     | '/admin/spiritual-content/$id'
     | '/admin/spiritual-content/new'
     | '/admin/spiritual-content/review'
+    | '/admin/system/guide'
+    | '/admin/system/notices-consent'
+    | '/admin/system/status'
     | '/admin/visual-bibles/$id'
     | '/api/webhooks/$provider'
     | '/payments/receipt/$attemptPublicId'
@@ -1206,6 +1243,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSpiritualContentReviewRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/system/guide': {
+      id: '/admin/system/guide'
+      path: '/system/guide'
+      fullPath: '/admin/system/guide'
+      preLoaderRoute: typeof AdminSystemGuideRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/system/notices-consent': {
+      id: '/admin/system/notices-consent'
+      path: '/system/notices-consent'
+      fullPath: '/admin/system/notices-consent'
+      preLoaderRoute: typeof AdminSystemNoticesConsentRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/system/status': {
+      id: '/admin/system/status'
+      path: '/system/status'
+      fullPath: '/admin/system/status'
+      preLoaderRoute: typeof AdminSystemStatusRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/visual-bibles/': {
       id: '/admin/visual-bibles/'
       path: '/visual-bibles'
@@ -1333,6 +1391,9 @@ interface AdminRouteChildren {
   AdminSpiritualContentIdRoute: typeof AdminSpiritualContentIdRoute
   AdminSpiritualContentNewRoute: typeof AdminSpiritualContentNewRoute
   AdminSpiritualContentReviewRoute: typeof AdminSpiritualContentReviewRoute
+  AdminSystemGuideRoute: typeof AdminSystemGuideRoute
+  AdminSystemNoticesConsentRoute: typeof AdminSystemNoticesConsentRoute
+  AdminSystemStatusRoute: typeof AdminSystemStatusRoute
   AdminVisualBiblesIdRoute: typeof AdminVisualBiblesIdRoute
   AdminAppointmentsIndexRoute: typeof AdminAppointmentsIndexRoute
   AdminCatalogueIndexRoute: typeof AdminCatalogueIndexRoute
@@ -1373,6 +1434,9 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminSpiritualContentIdRoute: AdminSpiritualContentIdRoute,
   AdminSpiritualContentNewRoute: AdminSpiritualContentNewRoute,
   AdminSpiritualContentReviewRoute: AdminSpiritualContentReviewRoute,
+  AdminSystemGuideRoute: AdminSystemGuideRoute,
+  AdminSystemNoticesConsentRoute: AdminSystemNoticesConsentRoute,
+  AdminSystemStatusRoute: AdminSystemStatusRoute,
   AdminVisualBiblesIdRoute: AdminVisualBiblesIdRoute,
   AdminAppointmentsIndexRoute: AdminAppointmentsIndexRoute,
   AdminCatalogueIndexRoute: AdminCatalogueIndexRoute,

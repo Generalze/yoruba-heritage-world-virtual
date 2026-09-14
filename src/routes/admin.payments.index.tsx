@@ -6,6 +6,7 @@ import {
   PAYMENT_PROVIDERS,
   PAYMENT_RESOLUTION_STATUSES,
 } from '@/db/schema'
+import { AdminHelpPanel } from '@/components/admin'
 import { adminListPaymentsFn } from '@/services/payment-admin-actions'
 import { formatAmountMinor } from '@/lib/display-time'
 
@@ -74,6 +75,17 @@ function AdminPaymentsPage() {
           />
         </div>
       </div>
+      <AdminHelpPanel>
+        <p>
+          Global payment currency is USD. PayPal is live and Stripe is disabled
+          for this phase.
+        </p>
+        <p>
+          Payment state comes only from verified provider evidence. Do not
+          invent payment states, mark payments manually, or create user data to
+          make a booking look paid.
+        </p>
+      </AdminHelpPanel>
 
       {rows.length === 0 ? (
         <p className="mt-8 text-ink-soft">No payments match this filter.</p>

@@ -3,6 +3,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useServerFn } from '@tanstack/react-start'
 
 import { MEDIA_ASSET_KINDS, SACRED_RUNTIME_CONTENT_TYPES } from '@/db/schema'
+import { AdminHelpPanel } from '@/components/admin'
 import {
   createMediaAssetFn,
   listMediaAssetsFn,
@@ -84,6 +85,17 @@ function MediaLibraryPage() {
           New asset
         </button>
       </div>
+      <AdminHelpPanel>
+        <p>
+          Media assets support staff-prepared production and remain governed by
+          publication, rights, consent and runtime gates.
+        </p>
+        <p>
+          Prayer Room media for a booked session is private. Upload finished
+          appointment videos from the appointment detail page, not as public
+          files.
+        </p>
+      </AdminHelpPanel>
 
       {showForm ? (
         <div className="mt-6 grid gap-3 rounded-lg border border-dashed border-line-strong p-4 sm:grid-cols-3">
