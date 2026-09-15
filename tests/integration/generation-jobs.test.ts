@@ -633,6 +633,9 @@ describe('atomic confirmation enqueue', () => {
         .where(eq(appointments.id, appointmentId))
         .limit(1)
     ).at(0)!
+    if (appointment.startsAtUtc == null) {
+      throw new Error('Expected scheduled appointment start.')
+    }
     expect(job!.variationSeed).toBe(
       computeVariationSeed({
         userId,
@@ -1189,7 +1192,9 @@ describe('guards', () => {
     // longer the fence. The fence is now the SHAPE of that surface:
     // exactly one owner-only page and one AUTHENTICATED media endpoint,
     // and nothing else — no public route, no second media path.
-    const prayerRoomPaths = [...routeTree.matchAll(/fullPath: '([^']*prayer-room[^']*)'/g)]
+    const prayerRoomPaths = [
+      ...routeTree.matchAll(/fullPath: '([^']*prayer-room[^']*)'/g),
+    ]
       .map((match) => match[1])
       .sort()
     expect(prayerRoomPaths).toEqual([
@@ -1245,9 +1250,9 @@ describe('lease hardening', () => {
     expect(stuck.status).toBe('PREPARING')
 
     // Recovery counts the crashed attempt against the budget.
-    expect(
-      await recoverExpiredGenerationLeases(clock),
-    ).toBeGreaterThanOrEqual(1)
+    expect(await recoverExpiredGenerationLeases(clock)).toBeGreaterThanOrEqual(
+      1,
+    )
     const recovered = (await jobForAppointment(appointmentId))!
     expect(recovered.status).toBe('RETRYING')
     expect(recovered.attemptCount).toBe(1)
@@ -1312,9 +1317,9 @@ describe('lease hardening', () => {
     if (recipe.status !== 'RECIPE_READY') return
     // …but its lease expires and is recovered before finalization.
     clock.advance(DEFAULT_LEASE_MS + 60_000)
-    expect(
-      await recoverExpiredGenerationLeases(clock),
-    ).toBeGreaterThanOrEqual(1)
+    expect(await recoverExpiredGenerationLeases(clock)).toBeGreaterThanOrEqual(
+      1,
+    )
 
     // The stale worker's atomic finalize must insert NOTHING.
     const persisted = await persistPreparedRecipeUnderLease(
@@ -1355,9 +1360,9 @@ describe('lease hardening', () => {
       ),
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
-    expect(
-      await recoverExpiredGenerationLeases(clock),
-    ).toBeGreaterThanOrEqual(1)
+    expect(await recoverExpiredGenerationLeases(clock)).toBeGreaterThanOrEqual(
+      1,
+    )
     let row = (await jobForAppointment(appointmentId))!
     expect(row.status).toBe('RETRYING')
     expect(row.attemptCount).toBe(1)
@@ -1376,9 +1381,9 @@ describe('lease hardening', () => {
       ),
     ).toBe(true)
     clock.advance(DEFAULT_LEASE_MS + 60_000)
-    expect(
-      await recoverExpiredGenerationLeases(clock),
-    ).toBeGreaterThanOrEqual(1)
+    expect(await recoverExpiredGenerationLeases(clock)).toBeGreaterThanOrEqual(
+      1,
+    )
     row = (await jobForAppointment(appointmentId))!
     expect(row.status).toBe('FAILED')
     expect(row.attemptCount).toBe(2)

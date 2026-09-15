@@ -57,15 +57,15 @@ function ReceiptPage() {
           <ReceiptRow label="Service" value={receipt.serviceNameSnapshot} />
           <ReceiptRow label="Sacred House" value={receipt.houseNameSnapshot} />
           <ReceiptRow
-            label="Appointment"
-            value={`${formatUtcSqlInTimezone(
-              receipt.appointmentStartsAtUtc,
-              receipt.userTimezone,
-            )} (${receipt.userTimezone})`}
-          />
-          <ReceiptRow
-            label="Duration"
-            value={`${receipt.durationMinutesSnapshot} minutes`}
+            label="Scheduling"
+            value={
+              receipt.appointmentStartsAtUtc
+                ? `${formatUtcSqlInTimezone(
+                    receipt.appointmentStartsAtUtc,
+                    receipt.userTimezone,
+                  )} (${receipt.userTimezone})`
+                : 'Awaiting admin scheduling'
+            }
           />
           <ReceiptRow
             label="Appointment reference"

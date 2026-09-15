@@ -98,10 +98,14 @@ function MyAppointmentsPage() {
                   <div className="flex justify-between gap-3 sm:justify-start sm:gap-2">
                     <dt className="text-ink-soft">When</dt>
                     <dd className="text-right text-ink sm:text-left">
-                      {formatUtcSqlInTimezone(
-                        row.startsAtUtc,
-                        row.userTimezone,
-                      )}
+                      {row.startsAtUtc
+                        ? formatUtcSqlInTimezone(
+                            row.startsAtUtc,
+                            row.userTimezone,
+                          )
+                        : row.status === 'CONFIRMED'
+                          ? 'Awaiting scheduling'
+                          : 'Assigned after payment'}
                     </dd>
                   </div>
                   <div className="flex justify-between gap-3 sm:justify-start sm:gap-2">
@@ -118,9 +122,11 @@ function MyAppointmentsPage() {
                   </div>
                 </dl>
 
-                <p className="mt-3 text-xs text-ink-soft">
-                  Times shown in your timezone ({row.userTimezone}).
-                </p>
+                {row.startsAtUtc ? (
+                  <p className="mt-3 text-xs text-ink-soft">
+                    Times shown in your timezone ({row.userTimezone}).
+                  </p>
+                ) : null}
               </Link>
             </li>
           ))}

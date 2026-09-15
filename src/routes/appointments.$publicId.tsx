@@ -12,20 +12,15 @@ import {
   acknowledgeGuidanceFn,
   cancelMyAppointmentFn,
   getMyAppointmentFn,
-  getRescheduleSlotsFn,
-  rescheduleMyAppointmentFn,
 } from '@/services/booking-actions'
 import { AppShell } from '@/components/app-shell'
 import {
   Card,
   ErrorNotice,
-  Field,
   IconArrow,
-  Notice,
   StatusChip,
   buttonClass,
   humanizeStatus,
-  inputClass,
   statusTone,
 } from '@/components/ui'
 import {
@@ -67,34 +62,25 @@ function AppointmentDetailPage() {
   const { user, data, nowMs } = Route.useLoaderData()
   const router = useRouter()
   const cancel = useServerFn(cancelMyAppointmentFn)
-  const reschedule = useServerFn(rescheduleMyAppointmentFn)
-  const loadSlots = useServerFn(getRescheduleSlotsFn)
 
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmCancel, setConfirmCancel] = useState(false)
-  const [rescheduling, setRescheduling] = useState(false)
-  const [date, setDate] = useState('')
-  const [slots, setSlots] = useState<Array<{
-    startsAtUtc: string
-    houseLocalTime: string
-  }> | null>(null)
 
   const appointment = data.appointment
   const tz = appointment.userTimezone
-  const startMs = new Date(
-    `${appointment.startsAtUtc.replace(' ', 'T')}Z`,
-  ).getTime()
+  const scheduledStart = appointment.startsAtUtc
+  const scheduled = scheduledStart != null
+  const startMs = scheduledStart
+    ? new Date(`${scheduledStart.replace(' ', 'T')}Z`).getTime()
+    : null
   const outsideCancelCutoff =
+    startMs == null ||
     startMs - data.cutoffs.cancellationCutoffMinutes * 60_000 > nowMs
-  const outsideRescheduleCutoff =
-    startMs - data.cutoffs.rescheduleCutoffMinutes * 60_000 > nowMs
 
   const canCancel =
     appointment.status === 'PENDING_PAYMENT' ||
     (appointment.status === 'CONFIRMED' && outsideCancelCutoff)
-  const canReschedule =
-    appointment.status === 'CONFIRMED' && outsideRescheduleCutoff
   const holdLive =
     appointment.status === 'PENDING_PAYMENT' &&
     appointment.reservationExpiresAt != null &&
@@ -112,49 +98,6 @@ function AppointmentDetailPage() {
         cancelError instanceof Error
           ? cancelError.message
           : 'The appointment could not be cancelled.',
-      )
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleLoadSlots(chosenDate: string) {
-    setDate(chosenDate)
-    setSlots(null)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(chosenDate)) return
-    setBusy(true)
-    setError(null)
-    try {
-      const result = await loadSlots({
-        data: {
-          publicId: appointment.publicId,
-          fromDate: chosenDate,
-          toDate: chosenDate,
-        },
-      })
-      setSlots(result)
-    } catch {
-      setError('Available times could not be loaded for that date.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleReschedule(startsAtUtc: string) {
-    setBusy(true)
-    setError(null)
-    try {
-      await reschedule({
-        data: { publicId: appointment.publicId, newStartsAtUtc: startsAtUtc },
-      })
-      await router.invalidate()
-      setRescheduling(false)
-      setSlots(null)
-    } catch (rescheduleError) {
-      setError(
-        rescheduleError instanceof Error
-          ? rescheduleError.message
-          : 'The appointment could not be rescheduled.',
       )
     } finally {
       setBusy(false)
@@ -197,18 +140,16 @@ function AppointmentDetailPage() {
               <div className="flex justify-between gap-4 py-2.5">
                 <dt className="text-ink-soft">Date and time</dt>
                 <dd className="text-right text-ink">
-                  {formatUtcSqlInTimezone(appointment.startsAtUtc, tz)}
+                  {appointment.startsAtUtc
+                    ? formatUtcSqlInTimezone(appointment.startsAtUtc, tz)
+                    : appointment.status === 'CONFIRMED'
+                      ? 'Awaiting scheduling'
+                      : 'Assigned after payment'}
                 </dd>
               </div>
               <div className="flex justify-between gap-4 py-2.5">
                 <dt className="text-ink-soft">Timezone</dt>
                 <dd className="text-right text-ink">{tz}</dd>
-              </div>
-              <div className="flex justify-between gap-4 py-2.5">
-                <dt className="text-ink-soft">Duration</dt>
-                <dd className="text-right text-ink">
-                  {appointment.durationMinutesSnapshot} minutes
-                </dd>
               </div>
               <div className="flex justify-between gap-4 py-2.5">
                 <dt className="text-ink-soft">Amount</dt>
@@ -248,64 +189,6 @@ function AppointmentDetailPage() {
             publicId={appointment.publicId}
           />
 
-          {rescheduling ? (
-            <Card>
-              <div className="flex items-center justify-between gap-4">
-                <h2 className="text-sm font-semibold tracking-wide text-ink">
-                  Choose a new time
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRescheduling(false)
-                    setSlots(null)
-                  }}
-                  className="text-xs font-semibold text-ink-soft transition-colors hover:text-ink"
-                >
-                  Close
-                </button>
-              </div>
-              <div className="mt-4 max-w-xs">
-                <Field label="New date">
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={(event) =>
-                      void handleLoadSlots(event.target.value)
-                    }
-                    className={inputClass}
-                  />
-                </Field>
-              </div>
-              {slots ? (
-                slots.length === 0 ? (
-                  <div className="mt-4">
-                    <Notice>No available times on this date.</Notice>
-                  </div>
-                ) : (
-                  <ul className="mt-4 flex flex-wrap gap-2">
-                    {slots.map((slot) => (
-                      <li key={slot.startsAtUtc}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void handleReschedule(slot.startsAtUtc)
-                          }
-                          disabled={busy}
-                          className="rounded-md border border-line-strong px-4 py-2 text-sm text-ink transition-colors hover:border-gold-deep hover:text-gold-deep disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          {formatUtcSqlInTimezone(slot.startsAtUtc, tz, {
-                            timeStyle: 'short',
-                          })}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )
-              ) : null}
-            </Card>
-          ) : null}
-
           <ErrorNotice message={error} />
         </div>
 
@@ -334,24 +217,15 @@ function AppointmentDetailPage() {
           <PrayerRoomSection
             publicId={appointment.publicId}
             status={appointment.status}
+            scheduled={scheduled}
           />
 
-          {canCancel || canReschedule ? (
+          {canCancel ? (
             <Card>
               <h2 className="text-sm font-semibold tracking-wide text-ink">
                 Manage this appointment
               </h2>
               <div className="mt-4 flex flex-col gap-3">
-                {canReschedule && !rescheduling ? (
-                  <button
-                    type="button"
-                    onClick={() => setRescheduling(true)}
-                    className={buttonClass('secondary', 'md')}
-                  >
-                    Reschedule
-                  </button>
-                ) : null}
-
                 {canCancel ? (
                   confirmCancel ? (
                     <div className="rounded-md border border-alert/40 bg-alert/10 p-4">
@@ -410,9 +284,11 @@ function AppointmentDetailPage() {
 function PrayerRoomSection({
   publicId,
   status,
+  scheduled,
 }: {
   publicId: string
   status: string
+  scheduled: boolean
 }) {
   if (status !== 'CONFIRMED' && status !== 'COMPLETED') return null
   return (
@@ -421,8 +297,9 @@ function PrayerRoomSection({
         Prayer Room
       </h2>
       <p className="mt-2 text-sm leading-relaxed text-ink-soft">
-        Your recorded Prayer Room opens at the time of your appointment, once
-        the recording is ready.
+        {scheduled
+          ? 'Your recorded Prayer Room opens at the scheduled appointment time, once the recording is ready.'
+          : 'Your Prayer Room is awaiting admin scheduling and remains locked until a date and time are assigned.'}
       </p>
       <div className="mt-4">
         <Link

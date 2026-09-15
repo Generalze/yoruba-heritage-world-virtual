@@ -617,10 +617,11 @@ describe('booking and payment surface', () => {
     }
   })
 
-  it('never invents availability or an amount', () => {
+  it('keeps scheduling admin-assigned and never invents an amount', () => {
     const booking = withoutComments(read('src/routes/book.$serviceSlug.tsx'))
-    // Slots come from the server; the page never generates times.
-    expect(booking).toContain('getBookingSlotsFn')
+    // Customers do not choose appointment slots; admin assigns time after payment.
+    expect(booking).not.toContain('getBookingSlotsFn')
+    expect(booking).not.toContain('startsAtUtc')
     expect(booking).toContain('getBookingContextFn')
     // Amounts always go through the shared currency helper.
     expect(booking).toContain('formatAmountMinor')

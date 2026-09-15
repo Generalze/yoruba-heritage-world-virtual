@@ -56,15 +56,25 @@ export const Route = createFileRoute('/dashboard')({
     // serialized once and reused for hydration, so "upcoming" cannot
     // disagree between the server pass and the client pass.
     const nowMs = Date.now()
-    const upcoming =
-      appointments
-        .filter(
-          (row) =>
-            (row.status === 'CONFIRMED' || row.status === 'PENDING_PAYMENT') &&
-            msUntilUtcSql(row.startsAtUtc, nowMs) > 0,
-        )
+    const awaitingScheduling =
+      appointments.find(
+        (row) => row.status === 'CONFIRMED' && row.startsAtUtc == null,
+      ) ?? null
+    const scheduledCandidates = appointments.filter(
+      (
+        row,
+      ): row is typeof row & {
+        startsAtUtc: string
+      } =>
+        (row.status === 'CONFIRMED' || row.status === 'PENDING_PAYMENT') &&
+        row.startsAtUtc != null &&
+        msUntilUtcSql(row.startsAtUtc, nowMs) > 0,
+    )
+    const scheduledUpcoming =
+      scheduledCandidates
         .sort((a, b) => a.startsAtUtc.localeCompare(b.startsAtUtc))
         .at(0) ?? null
+    const upcoming = awaitingScheduling ?? scheduledUpcoming
     return { user: context.user, status, upcoming }
   },
   head: () => ({
@@ -167,8 +177,7 @@ function DashboardPage() {
       <div className="mt-6">
         {completion.complete ? (
           <Notice tone="affirm">
-            Your profile is complete. Your account is ready for service
-            booking.{' '}
+            Your profile is complete. Your account is ready for service booking.{' '}
             <Link
               to="/services"
               className="font-semibold underline underline-offset-4"
@@ -309,14 +318,23 @@ function DashboardPage() {
                 {upcoming.houseNameSnapshot}
               </p>
               <p className="mt-3 text-sm text-ink">
-                {formatUtcSqlInTimezone(
-                  upcoming.startsAtUtc,
-                  upcoming.userTimezone,
-                )}
+                {upcoming.startsAtUtc
+                  ? formatUtcSqlInTimezone(
+                      upcoming.startsAtUtc,
+                      upcoming.userTimezone,
+                    )
+                  : 'Awaiting scheduling'}
               </p>
-              <p className="mt-1 text-xs text-ink-soft">
-                Shown in your timezone ({upcoming.userTimezone}).
-              </p>
+              {upcoming.startsAtUtc ? (
+                <p className="mt-1 text-xs text-ink-soft">
+                  Shown in your timezone ({upcoming.userTimezone}).
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-ink-soft">
+                  The Sacred House admin will assign the appointment date and
+                  time.
+                </p>
+              )}
               <div className="mt-4 flex flex-wrap items-center gap-3">
                 <Badge>{upcoming.status.replace('_', ' ')}</Badge>
                 <Link

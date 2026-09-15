@@ -62,7 +62,9 @@ async function loadSnapshot(
       publicId: row.publicId,
       serviceName: row.serviceName,
       houseName: row.houseName,
-      whenLocal: formatUtcSqlInTimezone(row.startsAtUtc, row.userTimezone),
+      whenLocal: row.startsAtUtc
+        ? formatUtcSqlInTimezone(row.startsAtUtc, row.userTimezone)
+        : 'awaiting scheduling',
     }
   } catch {
     return null
@@ -78,7 +80,10 @@ export async function notifyAppointmentConfirmed(
     userId: snap.userId,
     type: 'APPOINTMENT_CONFIRMED',
     title: 'Your appointment is confirmed',
-    body: `${snap.serviceName} with ${snap.houseName} on ${snap.whenLocal}.`,
+    body:
+      snap.whenLocal === 'awaiting scheduling'
+        ? `${snap.serviceName} with ${snap.houseName} is confirmed and awaiting scheduling.`
+        : `${snap.serviceName} with ${snap.houseName} on ${snap.whenLocal}.`,
     linkPublicId: snap.publicId,
   })
 }
@@ -120,7 +125,7 @@ export async function notifyAppointmentExpired(
     userId: snap.userId,
     type: 'APPOINTMENT_EXPIRED',
     title: 'Your reservation has expired',
-    body: `${snap.serviceName} with ${snap.houseName} was not confirmed in time and the time has been released.`,
+    body: `${snap.serviceName} with ${snap.houseName} was not confirmed in time.`,
     linkPublicId: snap.publicId,
   })
 }

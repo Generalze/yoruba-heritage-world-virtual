@@ -58,7 +58,7 @@ export const Route = createFileRoute('/checkout/$appointmentPublicId')({
   component: CheckoutPage,
 })
 
-const BOOKING_STEPS = ['Service', 'Date and time', 'Review', 'Payment'] as const
+const BOOKING_STEPS = ['Service', 'Request', 'Payment', 'Scheduling'] as const
 
 function useCountdown(expiresAtUtcSql: string | null): string | null {
   const [label, setLabel] = useState<string | null>(null)
@@ -116,11 +116,7 @@ function CheckoutPage() {
         data: {
           appointmentPublicId: appointment.publicId,
           provider: provider as
-            | 'PAYSTACK'
-            | 'PAYPAL'
-            | 'STRIPE'
-            | 'CRYPTO'
-            | 'MOCK',
+            'PAYSTACK' | 'PAYPAL' | 'STRIPE' | 'CRYPTO' | 'MOCK',
         },
       })
       if (result.checkoutUrl) {
@@ -204,8 +200,7 @@ function CheckoutPage() {
         </h1>
         <div className="mt-6 max-w-2xl">
           <Notice tone="caution">
-            This reservation is no longer active. Your chosen time was
-            released. Please start a new booking.
+            This reservation is no longer active. Please start a new booking.
           </Notice>
           <div className="mt-5">
             <Link to="/services" className={buttonClass('primary', 'md')}>
@@ -255,20 +250,19 @@ function CheckoutPage() {
               </dd>
             </div>
             <div className="flex justify-between gap-4 py-2.5">
-              <dt className="text-ink-soft">Date and time</dt>
+              <dt className="text-ink-soft">Scheduling</dt>
               <dd className="text-right text-ink">
-                {formatUtcSqlInTimezone(appointment.startsAtUtc, userTimezone)}
+                {appointment.startsAtUtc
+                  ? formatUtcSqlInTimezone(
+                      appointment.startsAtUtc,
+                      userTimezone,
+                    )
+                  : 'Assigned by admin after payment'}
               </dd>
             </div>
             <div className="flex justify-between gap-4 py-2.5">
               <dt className="text-ink-soft">Timezone</dt>
               <dd className="text-right text-ink">{userTimezone}</dd>
-            </div>
-            <div className="flex justify-between gap-4 py-2.5">
-              <dt className="text-ink-soft">Duration</dt>
-              <dd className="text-right text-ink">
-                {appointment.durationMinutesSnapshot} minutes
-              </dd>
             </div>
             <div className="flex justify-between gap-4 py-3">
               <dt className="font-semibold text-ink">Amount</dt>
@@ -298,8 +292,8 @@ function CheckoutPage() {
             {checkout.providers.length === 0 ? (
               <div className="mt-4">
                 <Notice>
-                  No payment method is currently available for this
-                  appointment. Please contact support.
+                  No payment method is currently available for this appointment.
+                  Please contact support.
                 </Notice>
               </div>
             ) : (

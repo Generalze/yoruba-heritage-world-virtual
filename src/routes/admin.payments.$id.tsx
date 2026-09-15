@@ -128,7 +128,10 @@ function AdminPaymentDetailPage() {
           <dl className="mt-4 space-y-2 text-sm">
             <Row label="Service" value={payment.serviceNameSnapshot} />
             <Row label="Sacred House" value={payment.houseNameSnapshot} />
-            <Row label="Starts (UTC)" value={payment.appointmentStartsAtUtc} />
+            <Row
+              label="Scheduled start (UTC)"
+              value={payment.appointmentStartsAtUtc ?? 'Needs scheduling'}
+            />
             <Row label="Appointment status" value={payment.appointmentStatus} />
             <Row label="User" value={payment.userEmail} />
             <Row
@@ -171,37 +174,37 @@ function AdminPaymentDetailPage() {
         ) : (
           <AdminTableFrame label="Webhook history" className="mt-4">
             <table className="w-full min-w-[760px] text-left text-sm">
-            <thead>
-              <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
-                <th className="py-2 pr-4">Event</th>
-                <th className="py-2 pr-4">Type</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4">Received</th>
-                <th className="py-2">Error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {payment.webhookEvents.map((event) => (
-                <tr key={event.id} className="border-b border-line">
-                  <td className="py-2 pr-4 text-ink-soft">
-                    {event.eventKey.slice(0, 32)}
-                  </td>
-                  <td className="py-2 pr-4">{event.eventType}</td>
-                  <td className="py-2 pr-4">{event.processingStatus}</td>
-                  <td className="py-2 pr-4 text-ink-soft">
-                    {event.receivedAt instanceof Date
-                      ? event.receivedAt
-                          .toISOString()
-                          .slice(0, 19)
-                          .replace('T', ' ')
-                      : String(event.receivedAt)}
-                  </td>
-                  <td className="py-2 text-ink-soft">
-                    {event.errorCode ?? '—'}
-                  </td>
+              <thead>
+                <tr className="border-b border-line text-xs tracking-wider text-ink-soft uppercase">
+                  <th className="py-2 pr-4">Event</th>
+                  <th className="py-2 pr-4">Type</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Received</th>
+                  <th className="py-2">Error</th>
                 </tr>
-              ))}
-            </tbody>
+              </thead>
+              <tbody>
+                {payment.webhookEvents.map((event) => (
+                  <tr key={event.id} className="border-b border-line">
+                    <td className="py-2 pr-4 text-ink-soft">
+                      {event.eventKey.slice(0, 32)}
+                    </td>
+                    <td className="py-2 pr-4">{event.eventType}</td>
+                    <td className="py-2 pr-4">{event.processingStatus}</td>
+                    <td className="py-2 pr-4 text-ink-soft">
+                      {event.receivedAt instanceof Date
+                        ? event.receivedAt
+                            .toISOString()
+                            .slice(0, 19)
+                            .replace('T', ' ')
+                        : String(event.receivedAt)}
+                    </td>
+                    <td className="py-2 text-ink-soft">
+                      {event.errorCode ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
           </AdminTableFrame>
         )}

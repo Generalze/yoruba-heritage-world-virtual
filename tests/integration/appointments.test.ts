@@ -53,6 +53,8 @@ import {
   sqlToUtcMs,
   utcMsToSql,
 } from '@/lib/schedule-time'
+import { uploadPrayerRoomMediaForAppointment } from '@/services/prayer-room-media'
+import { getPrayerRoomStatus } from '@/services/prayer-room'
 
 const ctx = { ipAddress: null, userAgent: 'bun-test' }
 const PASSPHRASE = `appt test passphrase ${crypto.randomUUID()}`
@@ -269,6 +271,11 @@ afterAll(async () => {
       await db
         .delete(schema.appointmentGuidanceSets)
         .where(inArray(schema.appointmentGuidanceSets.appointmentId, apptIds))
+      await db
+        .delete(schema.appointmentPrayerRoomMedia)
+        .where(
+          inArray(schema.appointmentPrayerRoomMedia.appointmentId, apptIds),
+        )
       await db
         .delete(appointmentRepresentatives)
         .where(inArray(appointmentRepresentatives.appointmentId, apptIds))
@@ -873,6 +880,167 @@ describe('cancellation and rescheduling', () => {
     )
   })
 
+  describe('admin-scheduled appointment flow', () => {
+    async function confirmedUnscheduled(userId = eligibleA) {
+      const created = await createReservation(userId, ctx, {
+        serviceId: bookableServiceId,
+      })
+      await confirmReservation(created.appointmentId, ctx)
+      return created
+    }
+
+    it('customer cannot schedule or reschedule an appointment', async () => {
+      const created = await confirmedUnscheduled()
+      let thrown: unknown = null
+      try {
+        await rescheduleAppointment(
+          { userId: eligibleA, isOperator: false },
+          ctx,
+          created.appointmentId,
+          slotUtc(D(30), '09:00'),
+        )
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(AppointmentError)
+      expect(String((thrown as Error).message)).toContain(
+        'Appointment scheduling is handled by admin.',
+      )
+    })
+
+    it('unpaid/unconfirmed appointment cannot be scheduled', async () => {
+      const created = await createReservation(eligibleA, ctx, {
+        serviceId: bookableServiceId,
+      })
+      let thrown: unknown = null
+      try {
+        await rescheduleAppointment(
+          { userId: adminId, isOperator: true },
+          ctx,
+          created.appointmentId,
+          slotUtc(D(30), '10:00'),
+        )
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(AppointmentError)
+      expect(String((thrown as Error).message)).toContain(
+        'Only confirmed appointments can be scheduled.',
+      )
+    })
+
+    it('admin can schedule a confirmed appointment', async () => {
+      const created = await confirmedUnscheduled()
+      const start = slotUtc(D(31), '09:00')
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        start,
+      )
+      const row = (
+        await getDb()
+          .select()
+          .from(appointments)
+          .where(eq(appointments.id, created.appointmentId))
+          .limit(1)
+      ).at(0)!
+      expect(row.status).toBe('CONFIRMED')
+      expect(row.startsAtUtc).toBe(start)
+      expect(row.endsAtUtc).toBe(utcMsToSql(sqlToUtcMs(start) + 60 * 60_000))
+    })
+
+    it('unscheduled confirmed Prayer Room stays locked', async () => {
+      const created = await confirmedUnscheduled()
+      const status = await getPrayerRoomStatus(
+        eligibleA,
+        created.publicId,
+        new Date(),
+      )
+      expect(status?.startsAtUtc).toBeNull()
+      expect(status?.state).toBe('LOCKED')
+    })
+
+    it('scheduled Prayer Room unlocks only at the scheduled time', async () => {
+      const created = await confirmedUnscheduled()
+      const start = slotUtc(D(32), '09:00')
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        start,
+      )
+      await uploadPrayerRoomMediaForAppointment(
+        adminId,
+        ctx,
+        created.appointmentId,
+        new Uint8Array([1, 2, 3, 4]),
+        'video/mp4',
+      )
+      const startMs = sqlToUtcMs(start)
+      expect(
+        (
+          await getPrayerRoomStatus(
+            eligibleA,
+            created.publicId,
+            new Date(startMs - 1),
+          )
+        )?.state,
+      ).toBe('LOCKED')
+      expect(
+        (
+          await getPrayerRoomStatus(
+            eligibleA,
+            created.publicId,
+            new Date(startMs),
+          )
+        )?.state,
+      ).toBe('AVAILABLE')
+    })
+
+    it('rescheduling updates the Prayer Room access time', async () => {
+      const created = await confirmedUnscheduled()
+      const firstStart = slotUtc(D(33), '09:00')
+      const secondStart = slotUtc(D(33), '11:00')
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        firstStart,
+      )
+      await uploadPrayerRoomMediaForAppointment(
+        adminId,
+        ctx,
+        created.appointmentId,
+        new Uint8Array([5, 6, 7, 8]),
+        'video/mp4',
+      )
+      await rescheduleAppointment(
+        { userId: adminId, isOperator: true },
+        ctx,
+        created.appointmentId,
+        secondStart,
+      )
+      expect(
+        (
+          await getPrayerRoomStatus(
+            eligibleA,
+            created.publicId,
+            new Date(sqlToUtcMs(firstStart)),
+          )
+        )?.state,
+      ).toBe('LOCKED')
+      const finalStatus = await getPrayerRoomStatus(
+        eligibleA,
+        created.publicId,
+        new Date(sqlToUtcMs(secondStart)),
+      )
+      expect(finalStatus?.startsAtUtc).toBe(secondStart)
+      expect(finalStatus?.opensAtUtc).toBe(secondStart)
+      expect(finalStatus?.state).toBe('AVAILABLE')
+    })
+  })
+
   it('reschedules atomically with the same lock; keeps service/House; increments count', async () => {
     const created = await createReservation(eligibleA, ctx, {
       serviceId: bookableServiceId,
@@ -891,7 +1059,7 @@ describe('cancellation and rescheduling', () => {
     let thrown: unknown = null
     try {
       await rescheduleAppointment(
-        { userId: eligibleA, isOperator: false },
+        { userId: adminId, isOperator: true },
         ctx,
         created.appointmentId,
         blockerStart,
@@ -903,7 +1071,7 @@ describe('cancellation and rescheduling', () => {
 
     // Valid destination succeeds.
     await rescheduleAppointment(
-      { userId: eligibleA, isOperator: false },
+      { userId: adminId, isOperator: true },
       ctx,
       created.appointmentId,
       slotUtc(D(14), '15:00'),
@@ -1405,6 +1573,7 @@ describe('hardening: lifecycle and configuration races', () => {
         .where(eq(appointments.id, created.appointmentId))
     ).at(0)!
     expect(row.rescheduleCount).toBe(fulfilled)
+    if (row.startsAtUtc == null) throw new Error('Expected scheduled start.')
     expect(destinations).toContain(row.startsAtUtc)
   })
 

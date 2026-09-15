@@ -50,7 +50,7 @@ export const Route = createFileRoute('/admin/appointments/$id')({
     const guidance = await adminGetAppointmentGuidanceFn({
       data: { appointmentId: params.id },
     })
-    return { ...appointment, guidanceSet: guidance }
+    return { ...appointment, guidanceSet: guidance, nowMs: Date.now() }
   },
   component: AppointmentDetail,
 })
@@ -88,8 +88,21 @@ function AppointmentDetail() {
   }
 
   const confirmed = appointment.status === 'CONFIRMED'
+  const scheduledStart = appointment.startsAtUtc
+  const scheduled = scheduledStart != null
   const canCarryPrayerRoomMedia =
     appointment.status === 'CONFIRMED' || appointment.status === 'COMPLETED'
+  const activePrayerRoomMedia = appointment.prayerRoomMedia?.status === 'ACTIVE'
+  const prayerRoomStatus = !canCarryPrayerRoomMedia
+    ? 'Unavailable'
+    : !scheduledStart
+      ? 'Locked - needs scheduling'
+      : !activePrayerRoomMedia
+        ? 'Preparing - video needed'
+        : new Date(`${scheduledStart.replace(' ', 'T')}Z`).getTime() >
+            appointment.nowMs
+          ? 'Locked until scheduled time'
+          : 'Available'
 
   async function handleUploadRoomMedia() {
     if (!roomFile) {
@@ -133,7 +146,13 @@ function AppointmentDetail() {
         <h1 className="text-2xl font-bold">
           {appointment.serviceNameSnapshot}
         </h1>
-        <StatusBadge status={appointment.status} />
+        {confirmed && !scheduled ? (
+          <span className="rounded-full border border-gold/40 bg-gold/10 px-2.5 py-1 text-xs font-semibold text-gold-deep">
+            Confirmed - Needs Scheduling
+          </span>
+        ) : (
+          <StatusBadge status={appointment.status} />
+        )}
       </div>
       <p className="mt-1 font-mono text-xs text-ink-soft">
         {appointment.publicId}
@@ -142,12 +161,15 @@ function AppointmentDetail() {
       <section className="mt-6 rounded-lg border border-line bg-surface-raised p-6 text-sm">
         <dl className="space-y-2">
           <Row label="Sacred House" value={appointment.houseNameSnapshot} />
-          <Row label="Starts (UTC)" value={appointment.startsAtUtc} />
-          <Row label="Ends (UTC)" value={appointment.endsAtUtc} />
+          <Row
+            label="Scheduled date/time (UTC)"
+            value={appointment.startsAtUtc ?? 'Needs scheduling'}
+          />
+          <Row label="Ends (UTC)" value={appointment.endsAtUtc ?? '-'} />
           <Row label="House timezone" value={appointment.houseTimezone} />
           <Row label="User timezone" value={appointment.userTimezone} />
           <Row
-            label="Duration"
+            label="Internal scheduling duration"
             value={`${appointment.durationMinutesSnapshot} minutes`}
           />
           <Row
@@ -159,6 +181,15 @@ function AppointmentDetail() {
             label="Reschedules"
             value={String(appointment.rescheduleCount)}
           />
+          <Row
+            label="Video status"
+            value={
+              activePrayerRoomMedia
+                ? `ACTIVE - ${appointment.prayerRoomMedia?.mimeType ?? 'video'}`
+                : 'No active recording attached'
+            }
+          />
+          <Row label="Prayer Room status" value={prayerRoomStatus} />
           {appointment.reservationExpiresAt ? (
             <Row
               label="Reservation expires (UTC)"
@@ -441,13 +472,13 @@ function AppointmentDetail() {
                     }
                     className="rounded-md border border-line-strong px-4 py-2 text-ink hover:border-gold-deep disabled:opacity-40"
                   >
-                    Reschedule
+                    {scheduled ? 'Reschedule' : 'Schedule appointment'}
                   </button>
                 </div>
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || !scheduled}
                     onClick={() =>
                       void run(() => complete({ data: { id: appointment.id } }))
                     }
@@ -457,7 +488,7 @@ function AppointmentDetail() {
                   </button>
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || !scheduled}
                     onClick={() =>
                       void run(() => noShow({ data: { id: appointment.id } }))
                     }

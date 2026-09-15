@@ -101,10 +101,14 @@ function PrayerRoomPage() {
               <Row label="Sacred House" value={status.houseName} />
               <Row
                 label="Date and time"
-                value={formatUtcSqlInTimezone(
-                  status.startsAtUtc,
-                  status.userTimezone,
-                )}
+                value={
+                  status.startsAtUtc
+                    ? formatUtcSqlInTimezone(
+                        status.startsAtUtc,
+                        status.userTimezone,
+                      )
+                    : 'Awaiting scheduling'
+                }
               />
               <Row label="Timezone" value={status.userTimezone} />
             </dl>
@@ -294,7 +298,7 @@ function PrayerRoomBody({
   > = {
     LOCKED: {
       heading: 'Not open yet',
-      body: 'Your Prayer Room opens at the time of your appointment. If you reschedule, it moves with it.',
+      body: 'Your Prayer Room opens at the admin-assigned scheduled time. If the appointment is still awaiting scheduling, it remains locked.',
     },
     PREPARING: {
       heading: 'Being prepared',

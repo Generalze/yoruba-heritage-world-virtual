@@ -10,13 +10,11 @@ import { buildMockWebhook } from '@/providers/payments/mock'
 import { listAvailableProviders } from '@/providers/payments/registry'
 import {
   cancelAppointment,
-  computeAvailableSlots,
   createReservation,
   expireStaleReservations,
   getUserAppointmentByPublicId,
   getUserAppointments,
   loadBookableService,
-  rescheduleAppointment,
   AppointmentError,
 } from './appointments'
 import { getPublishedServiceBySlug } from './catalogue'
@@ -79,10 +77,6 @@ const slugSchema = z
   .min(1)
   .max(120)
   .regex(/^[a-z0-9-]+$/)
-const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
-const utcSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, 'Invalid UTC timestamp.')
 const publicIdSchema = z.string().uuid()
 
 // --- Booking page -----------------------------------------------------------
@@ -139,26 +133,10 @@ export const getBookingContextFn = createServerFn({ method: 'GET' })
     }
   })
 
-export const getBookingSlotsFn = createServerFn({ method: 'GET' })
-  .validator(
-    z.object({
-      serviceSlug: slugSchema,
-      fromDate: dateSchema,
-      toDate: dateSchema,
-    }),
-  )
-  .handler(async ({ data }) => {
-    await requireUser()
-    const service = await getPublishedServiceBySlug(data.serviceSlug)
-    if (!service) throw new AppointmentError('Service not found.')
-    return computeAvailableSlots(service.id, data.fromDate, data.toDate)
-  })
-
 export const createReservationFn = createServerFn({ method: 'POST' })
   .validator(
     z.object({
       serviceSlug: slugSchema,
-      startsAtUtc: utcSchema,
       privateRequestNote: z.string().max(1500).optional(),
     }),
   )
@@ -174,7 +152,6 @@ export const createReservationFn = createServerFn({ method: 'POST' })
     if (!service) throw new AppointmentError('Service not found.')
     return createReservation(user.id, requestContext(), {
       serviceId: service.id,
-      startsAtUtc: data.startsAtUtc,
       privateRequestNote: data.privateRequestNote ?? null,
     })
   })
@@ -300,24 +277,15 @@ export const getMyAppointmentFn = createServerFn({ method: 'GET' })
     }
   })
 
-/** Reschedule slot preview: the service is derived from the OWNED
- * appointment server-side — the browser never names it. */
 export const getRescheduleSlotsFn = createServerFn({ method: 'GET' })
   .validator(
     z.object({
       publicId: publicIdSchema,
-      fromDate: dateSchema,
-      toDate: dateSchema,
     }),
   )
-  .handler(async ({ data }) => {
-    const user = await requireUser()
-    const appointment = await requireOwnedAppointment(user.id, data.publicId)
-    return computeAvailableSlots(
-      appointment.serviceId,
-      data.fromDate,
-      data.toDate,
-    )
+  .handler(async () => {
+    await requireUser()
+    throw new AppointmentError('Appointment scheduling is handled by admin.')
   })
 
 export const cancelMyAppointmentFn = createServerFn({ method: 'POST' })
@@ -340,17 +308,10 @@ export const cancelMyAppointmentFn = createServerFn({ method: 'POST' })
   })
 
 export const rescheduleMyAppointmentFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ publicId: publicIdSchema, newStartsAtUtc: utcSchema }))
-  .handler(async ({ data }) => {
-    const user = await requireUser()
-    const appointment = await requireOwnedAppointment(user.id, data.publicId)
-    await rescheduleAppointment(
-      { userId: user.id, isOperator: false },
-      requestContext(),
-      appointment.id,
-      data.newStartsAtUtc,
-    )
-    return { ok: true }
+  .validator(z.object({ publicId: publicIdSchema }))
+  .handler(async () => {
+    await requireUser()
+    throw new AppointmentError('Appointment scheduling is handled by admin.')
   })
 
 /** "I have read this guidance" (never compliance certification).

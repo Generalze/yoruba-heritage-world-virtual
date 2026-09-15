@@ -347,7 +347,11 @@ export async function computeAvailableSlots(
   return candidates.filter(
     (slot) =>
       !blocking.some(
-        (b) => b.startsAtUtc < slot.endsAtUtc && b.endsAtUtc > slot.startsAtUtc,
+        (b) =>
+          b.startsAtUtc != null &&
+          b.endsAtUtc != null &&
+          b.startsAtUtc < slot.endsAtUtc &&
+          b.endsAtUtc > slot.startsAtUtc,
       ),
   )
 }
@@ -357,24 +361,26 @@ export async function computeAvailableSlots(
 export interface CreatedReservation {
   appointmentId: number
   publicId: string
-  startsAtUtc: string
-  endsAtUtc: string
+  startsAtUtc: string | null
+  endsAtUtc: string | null
   reservationExpiresAt: string
 }
 
 /**
  * Creates a PENDING_PAYMENT reservation for the acting user. Requires
  * Step 4 booking eligibility (active account, complete profile,
- * consents, 18+ in the user's timezone). The requested start must be a
- * structurally valid slot; the overlap check and insert happen under
- * the House lock.
+ * consents, 18+ in the user's timezone). Customer reservations are not
+ * scheduled here; admin assigns the appointment time after verified
+ * payment confirms the appointment.
  */
 export async function createReservation(
   userId: number,
   ctx: RequestContext,
   input: {
     serviceId: number
-    startsAtUtc: string
+    /** Legacy internal callers may still pass this. Public customer
+     * booking actions do not accept or forward it. */
+    startsAtUtc?: string
     privateRequestNote?: string | null
   },
   nowMs: number = Date.now(),
@@ -386,15 +392,8 @@ export async function createReservation(
     )
   }
 
-  // Fast-fail pre-checks; everything structural is re-validated
-  // authoritatively under the House lock below.
-  const preBookable = await loadBookableService(input.serviceId)
-  await getOrCreateBookingSettings(preBookable.sacredHouseId)
-
-  const startMs = sqlToUtcMs(input.startsAtUtc)
-  if (Number.isNaN(startMs)) throw new AppointmentError('Invalid start time.')
-  const requestedStartSql = utcMsToSql(startMs)
-  const nowSql = utcMsToSql(nowMs)
+  const bookable = await loadBookableService(input.serviceId)
+  const settings = await getOrCreateBookingSettings(bookable.sacredHouseId)
 
   // Snapshot the user's timezone at reservation time. Eligibility just
   // validated one exists; if a concurrent profile change removed it,
@@ -419,75 +418,130 @@ export async function createReservation(
     throw new AppointmentError('The request note is too long.')
   }
 
-  const { appointmentId, endSql, expiresSql } = await getDb().transaction(
-    async (tx) => {
-      // House concurrency lock: serializes interval allocation AND
-      // schedule-configuration changes for this House.
-      await lockHouseScheduling(tx, preBookable.sacredHouseId)
+  if (input.startsAtUtc != null) {
+    const startMs = sqlToUtcMs(input.startsAtUtc)
+    if (Number.isNaN(startMs)) throw new AppointmentError('Invalid start time.')
+    const requestedStartSql = utcMsToSql(startMs)
+    const nowSql = utcMsToSql(nowMs)
+    const { appointmentId, endSql, expiresSql } = await getDb().transaction(
+      async (tx) => {
+        await lockHouseScheduling(tx, bookable.sacredHouseId)
 
-      // Authoritative revalidation under the lock: bookability,
-      // booking_enabled, availability windows, exceptions, lead/advance
-      // limits and slot alignment against CURRENT serialized state.
-      const bookable = await loadBookableService(input.serviceId, tx)
-      const config = await readScheduleConfig(bookable.sacredHouseId, tx)
-      const tz = config.settings.schedulingTimezone
-      const local = utcMsToLocal(tz, startMs)
-      const candidates = await structuralSlots(
-        bookable,
-        config,
-        local.date,
-        local.date,
-        nowMs,
-      )
-      if (!candidates.some((slot) => slot.startsAtUtc === requestedStartSql)) {
-        throw new AppointmentError('That time is not available.')
-      }
-      const end = utcMsToSql(startMs + bookable.durationMinutes * 60_000)
-      const holdExpiresSql = utcMsToSql(
-        nowMs + config.settings.reservationHoldMinutes * 60_000,
-      )
-
-      const conflicts = await tx
-        .select({ id: appointments.id })
-        .from(appointments)
-        .where(
-          and(
-            eq(appointments.sacredHouseId, bookable.sacredHouseId),
-            lt(appointments.startsAtUtc, end),
-            gt(appointments.endsAtUtc, requestedStartSql),
-            BLOCKING(nowSql),
-          ),
+        const lockedBookable = await loadBookableService(input.serviceId, tx)
+        const config = await readScheduleConfig(
+          lockedBookable.sacredHouseId,
+          tx,
         )
-        .limit(1)
-      if (conflicts.length > 0) {
-        throw new AppointmentError('That time has just been taken.')
-      }
-      const inserted = await tx.insert(appointments).values({
+        const tz = config.settings.schedulingTimezone
+        const local = utcMsToLocal(tz, startMs)
+        const candidates = await structuralSlots(
+          lockedBookable,
+          config,
+          local.date,
+          local.date,
+          nowMs,
+        )
+        if (
+          !candidates.some((slot) => slot.startsAtUtc === requestedStartSql)
+        ) {
+          throw new AppointmentError('That time is not available.')
+        }
+        const end = utcMsToSql(
+          startMs + lockedBookable.durationMinutes * 60_000,
+        )
+        const holdExpiresSql = utcMsToSql(
+          nowMs + config.settings.reservationHoldMinutes * 60_000,
+        )
+        const conflicts = await tx
+          .select({ id: appointments.id })
+          .from(appointments)
+          .where(
+            and(
+              eq(appointments.sacredHouseId, lockedBookable.sacredHouseId),
+              lt(appointments.startsAtUtc, end),
+              gt(appointments.endsAtUtc, requestedStartSql),
+              BLOCKING(nowSql),
+            ),
+          )
+          .limit(1)
+        if (conflicts.length > 0) {
+          throw new AppointmentError('That time has just been taken.')
+        }
+        const inserted = await tx.insert(appointments).values({
+          publicId,
+          userId,
+          serviceId: lockedBookable.serviceId,
+          sacredHouseId: lockedBookable.sacredHouseId,
+          status: 'PENDING_PAYMENT',
+          startsAtUtc: requestedStartSql,
+          endsAtUtc: end,
+          userTimezone,
+          houseTimezone: tz,
+          reservationExpiresAt: holdExpiresSql,
+          serviceNameSnapshot: lockedBookable.serviceName,
+          serviceCodeSnapshot: lockedBookable.serviceCode,
+          houseNameSnapshot: lockedBookable.houseName,
+          durationMinutesSnapshot: lockedBookable.durationMinutes,
+          priceMinorSnapshot: lockedBookable.priceMinor,
+          currencySnapshot: lockedBookable.currency,
+          privateRequestNote: note,
+        })
+        return {
+          appointmentId: inserted[0].insertId,
+          endSql: end,
+          expiresSql: holdExpiresSql,
+        }
+      },
+    )
+
+    await recordAuditEvent({
+      actorUserId: userId,
+      action: 'appointment.reserved',
+      entityType: 'appointment',
+      entityId: String(appointmentId),
+      metadata: {
         publicId,
-        userId,
-        serviceId: bookable.serviceId,
         sacredHouseId: bookable.sacredHouseId,
-        status: 'PENDING_PAYMENT',
+        serviceId: bookable.serviceId,
         startsAtUtc: requestedStartSql,
-        endsAtUtc: end,
-        userTimezone,
-        houseTimezone: tz,
-        reservationExpiresAt: holdExpiresSql,
-        serviceNameSnapshot: bookable.serviceName,
-        serviceCodeSnapshot: bookable.serviceCode,
-        houseNameSnapshot: bookable.houseName,
-        durationMinutesSnapshot: bookable.durationMinutes,
-        priceMinorSnapshot: bookable.priceMinor,
-        currencySnapshot: bookable.currency,
-        privateRequestNote: note,
-      })
-      return {
-        appointmentId: inserted[0].insertId,
-        endSql: end,
-        expiresSql: holdExpiresSql,
-      }
-    },
+        endsAtUtc: endSql,
+      },
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    })
+
+    return {
+      appointmentId,
+      publicId,
+      startsAtUtc: requestedStartSql,
+      endsAtUtc: endSql,
+      reservationExpiresAt: expiresSql,
+    }
+  }
+
+  const expiresSql = utcMsToSql(
+    nowMs + settings.reservationHoldMinutes * 60_000,
   )
+  const inserted = await getDb().insert(appointments).values({
+    publicId,
+    userId,
+    serviceId: bookable.serviceId,
+    sacredHouseId: bookable.sacredHouseId,
+    status: 'PENDING_PAYMENT',
+    startsAtUtc: null,
+    endsAtUtc: null,
+    userTimezone,
+    houseTimezone: settings.schedulingTimezone,
+    reservationExpiresAt: expiresSql,
+    serviceNameSnapshot: bookable.serviceName,
+    serviceCodeSnapshot: bookable.serviceCode,
+    houseNameSnapshot: bookable.houseName,
+    durationMinutesSnapshot: bookable.durationMinutes,
+    priceMinorSnapshot: bookable.priceMinor,
+    currencySnapshot: bookable.currency,
+    privateRequestNote: note,
+  })
+  const appointmentId = inserted[0].insertId
 
   await recordAuditEvent({
     actorUserId: userId,
@@ -496,10 +550,9 @@ export async function createReservation(
     entityId: String(appointmentId),
     metadata: {
       publicId,
-      sacredHouseId: preBookable.sacredHouseId,
-      serviceId: preBookable.serviceId,
-      startsAtUtc: requestedStartSql,
-      endsAtUtc: endSql,
+      sacredHouseId: bookable.sacredHouseId,
+      serviceId: bookable.serviceId,
+      scheduling: 'ADMIN_ASSIGNED_AFTER_PAYMENT',
     },
     ipAddress: ctx.ipAddress,
     userAgent: ctx.userAgent,
@@ -508,8 +561,8 @@ export async function createReservation(
   return {
     appointmentId,
     publicId,
-    startsAtUtc: requestedStartSql,
-    endsAtUtc: endSql,
+    startsAtUtc: null,
+    endsAtUtc: null,
     reservationExpiresAt: expiresSql,
   }
 }
@@ -569,26 +622,27 @@ export async function confirmReservationUnderLock(
   if (!row.reservationExpiresAt || row.reservationExpiresAt <= inLockNowSql) {
     throw new AppointmentError('This reservation has expired.')
   }
-  // Defensive overlap re-check: an unexpired hold's interval cannot
-  // have been reallocated, so a conflict here means invariants broke
-  // upstream — refuse rather than double-book.
-  const conflicts = await tx
-    .select({ id: appointments.id })
-    .from(appointments)
-    .where(
-      and(
-        eq(appointments.sacredHouseId, row.sacredHouseId),
-        lt(appointments.startsAtUtc, row.endsAtUtc),
-        gt(appointments.endsAtUtc, row.startsAtUtc),
-        BLOCKING(inLockNowSql),
-        sql`${appointments.id} != ${appointmentId}`,
-      ),
-    )
-    .limit(1)
-  if (conflicts.length > 0) {
-    throw new AppointmentError(
-      'This reservation can no longer be confirmed — its time has been reallocated.',
-    )
+  if (row.startsAtUtc != null && row.endsAtUtc != null) {
+    // Defensive overlap re-check for legacy timed holds. New bookings
+    // intentionally confirm without a schedule; admin assigns time later.
+    const conflicts = await tx
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.sacredHouseId, row.sacredHouseId),
+          lt(appointments.startsAtUtc, row.endsAtUtc),
+          gt(appointments.endsAtUtc, row.startsAtUtc),
+          BLOCKING(inLockNowSql),
+          sql`${appointments.id} != ${appointmentId}`,
+        ),
+      )
+      .limit(1)
+    if (conflicts.length > 0) {
+      throw new AppointmentError(
+        'This reservation can no longer be confirmed — its time has been reallocated.',
+      )
+    }
   }
   const result = await tx
     .update(appointments)
@@ -741,7 +795,7 @@ export async function cancelAppointment(
     throw new AppointmentError('This appointment can no longer be cancelled.')
   }
 
-  if (!actor.isOperator && row.status === 'CONFIRMED') {
+  if (!actor.isOperator && row.status === 'CONFIRMED' && row.startsAtUtc) {
     const settings = await getOrCreateBookingSettings(row.sacredHouseId)
     const cutoffMs =
       sqlToUtcMs(row.startsAtUtc) - settings.cancellationCutoffMinutes * 60_000
@@ -768,7 +822,9 @@ export async function cancelAppointment(
       and(
         eq(appointments.id, appointmentId),
         eq(appointments.status, row.status),
-        eq(appointments.startsAtUtc, row.startsAtUtc),
+        ...(row.startsAtUtc
+          ? [eq(appointments.startsAtUtc, row.startsAtUtc)]
+          : []),
       ),
     )
   if (result[0].affectedRows !== 1) {
@@ -794,16 +850,17 @@ export async function cancelAppointment(
 }
 
 /**
- * Reschedules a CONFIRMED appointment. The authoritative appointment
+ * Schedules/reschedules a CONFIRMED appointment. The authoritative appointment
  * state, ownership, cutoff, destination validity and reschedule_count
  * are all re-read and validated UNDER the House lock — a stale
  * pre-lock read can never modify a record that meanwhile became
  * CANCELLED/COMPLETED/NO_SHOW.
  *
- * Admin override applies to the reschedule CUTOFF only. Admin does NOT
- * bypass booking_enabled, availability windows, exceptions, alignment,
- * duration fit, minimum lead or maximum advance — structural
- * validation always uses the real `nowMs`.
+ * Scheduling is operator-only. Customers cannot choose or move appointment
+ * date/time; a CONFIRMED appointment with no startsAtUtc is awaiting admin
+ * scheduling. Admin does NOT bypass booking_enabled, availability windows,
+ * exceptions, alignment, duration fit, minimum lead or maximum advance —
+ * structural validation always uses the real `nowMs`.
  */
 export async function rescheduleAppointment(
   actor: CancelActor,
@@ -817,6 +874,8 @@ export async function rescheduleAppointment(
   const preRead = await loadAppointment(appointmentId)
   if (actor.isOperator) {
     await requirePermission(actor.userId, 'appointments.manage')
+  } else {
+    throw new AppointmentError('Appointment scheduling is handled by admin.')
   }
   await getOrCreateBookingSettings(preRead.sacredHouseId)
 
@@ -837,26 +896,13 @@ export async function rescheduleAppointment(
         .for('update')
     ).at(0)
     if (!row) throw new AppointmentError('Appointment not found.')
-    if (!actor.isOperator && row.userId !== actor.userId) {
-      throw new AppointmentError('Appointment not found.')
-    }
     if (row.status !== 'CONFIRMED') {
       throw new AppointmentError(
-        'Only confirmed appointments can be rescheduled. Release and rebook a pending reservation instead.',
+        'Only confirmed appointments can be scheduled.',
       )
     }
 
     const config = await readScheduleConfig(row.sacredHouseId, tx)
-    if (!actor.isOperator) {
-      const cutoffMs =
-        sqlToUtcMs(row.startsAtUtc) -
-        config.settings.rescheduleCutoffMinutes * 60_000
-      if (nowMs > cutoffMs) {
-        throw new AppointmentError(
-          'This appointment is too close to its start time to reschedule online. Please contact support.',
-        )
-      }
-    }
 
     // Destination validity uses the BOOKED duration snapshot and the
     // real clock — no admin lead/advance bypass.
@@ -942,6 +988,9 @@ export async function completeAppointment(
   if (row.status !== 'CONFIRMED') {
     throw new AppointmentError('Only confirmed appointments can be completed.')
   }
+  if (!row.startsAtUtc) {
+    throw new AppointmentError('Only scheduled appointments can be completed.')
+  }
   // Atomic compare-and-set pinned to the validated basis (status AND
   // start time, matching cancelAppointment): cannot overwrite a
   // simultaneous CANCELLED/NO_SHOW, and cannot land on an occurrence a
@@ -980,6 +1029,11 @@ export async function markNoShow(
   if (row.status !== 'CONFIRMED') {
     throw new AppointmentError(
       'Only confirmed appointments can be marked as no-show.',
+    )
+  }
+  if (!row.startsAtUtc) {
+    throw new AppointmentError(
+      'Only scheduled appointments can be marked as no-show.',
     )
   }
   // Atomic compare-and-set pinned to the validated basis (status AND

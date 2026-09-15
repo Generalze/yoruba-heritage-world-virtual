@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
-import { and, asc, desc, eq, gte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { getDb } from '@/db'
 import {
@@ -129,33 +129,39 @@ export interface AdminOverview {
     count: number
     to: string
   }>
-  generation:
-    | {
-        total: number
-        failed: number
-        active: number
-        ready: number
-        statusCounts: Array<{ status: GenerationJobStatus; count: number }>
-        recentFailures: Array<{
-          publicId: string
-          serviceName: string
-          houseName: string
-          lastErrorCode: string | null
-          updatedAt: Date
-        }>
-      }
-    | null
-  upcomingAppointments:
-    | {
-        count: number
-        next: Array<{
-          publicId: string
-          startsAtUtc: string
-          serviceName: string
-          houseName: string
-        }>
-      }
-    | null
+  generation: {
+    total: number
+    failed: number
+    active: number
+    ready: number
+    statusCounts: Array<{ status: GenerationJobStatus; count: number }>
+    recentFailures: Array<{
+      publicId: string
+      serviceName: string
+      houseName: string
+      lastErrorCode: string | null
+      updatedAt: Date
+    }>
+  } | null
+  upcomingAppointments: {
+    count: number
+    next: Array<{
+      publicId: string
+      startsAtUtc: string
+      serviceName: string
+      houseName: string
+    }>
+  } | null
+  appointmentsNeedingScheduling: {
+    count: number
+    next: Array<{
+      id: number
+      publicId: string
+      serviceName: string
+      houseName: string
+      confirmedAt: Date
+    }>
+  } | null
 }
 
 async function getReviewQueues(
@@ -265,10 +271,11 @@ async function getUpcomingAppointments(): Promise<
     .where(
       and(
         eq(appointments.status, 'CONFIRMED'),
+        isNotNull(appointments.startsAtUtc),
         gte(appointments.startsAtUtc, nowSql),
       ),
     )
-  const next = await getDb()
+  const nextRows = await getDb()
     .select({
       publicId: appointments.publicId,
       startsAtUtc: appointments.startsAtUtc,
@@ -279,10 +286,54 @@ async function getUpcomingAppointments(): Promise<
     .where(
       and(
         eq(appointments.status, 'CONFIRMED'),
+        isNotNull(appointments.startsAtUtc),
         gte(appointments.startsAtUtc, nowSql),
       ),
     )
     .orderBy(asc(appointments.startsAtUtc))
+    .limit(5)
+  const next = nextRows
+    .filter((row): row is typeof row & { startsAtUtc: string } => {
+      return row.startsAtUtc != null
+    })
+    .map((row) => ({
+      publicId: row.publicId,
+      startsAtUtc: row.startsAtUtc,
+      serviceName: row.serviceName,
+      houseName: row.houseName,
+    }))
+
+  return { count: asCount(countRows[0]?.count), next }
+}
+
+async function getAppointmentsNeedingScheduling(): Promise<
+  NonNullable<AdminOverview['appointmentsNeedingScheduling']>
+> {
+  const countRows = await getDb()
+    .select({ count: sql<number>`count(*)` })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.status, 'CONFIRMED'),
+        isNull(appointments.startsAtUtc),
+      ),
+    )
+  const next = await getDb()
+    .select({
+      id: appointments.id,
+      publicId: appointments.publicId,
+      serviceName: appointments.serviceNameSnapshot,
+      houseName: appointments.houseNameSnapshot,
+      confirmedAt: appointments.updatedAt,
+    })
+    .from(appointments)
+    .where(
+      and(
+        eq(appointments.status, 'CONFIRMED'),
+        isNull(appointments.startsAtUtc),
+      ),
+    )
+    .orderBy(asc(appointments.updatedAt))
     .limit(5)
 
   return { count: asCount(countRows[0]?.count), next }
@@ -303,12 +354,23 @@ export const getAdminOverviewFn = createServerFn({ method: 'GET' }).handler(
       'media.approve',
     ])
 
-    const [reviewQueues, generation, upcomingAppointments] = await Promise.all([
+    const [
+      reviewQueues,
+      generation,
+      upcomingAppointments,
+      appointmentsNeedingScheduling,
+    ] = await Promise.all([
       canSeeReviewQueues ? getReviewQueues(permissions) : [],
       canViewAppointments ? getGenerationOverview() : null,
       canViewAppointments ? getUpcomingAppointments() : null,
+      canViewAppointments ? getAppointmentsNeedingScheduling() : null,
     ])
 
-    return { reviewQueues, generation, upcomingAppointments }
+    return {
+      reviewQueues,
+      generation,
+      upcomingAppointments,
+      appointmentsNeedingScheduling,
+    }
   },
 )

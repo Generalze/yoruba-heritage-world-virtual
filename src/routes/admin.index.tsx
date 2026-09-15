@@ -53,7 +53,86 @@ function AdminDashboard() {
           }
           tone="neutral"
         />
+        <SummaryPanel
+          label="Needs scheduling"
+          value={String(overview.appointmentsNeedingScheduling?.count ?? 0)}
+          detail={
+            overview.appointmentsNeedingScheduling
+              ? 'Confirmed appointments without an assigned time'
+              : 'Requires appointment operations access'
+          }
+          tone={
+            (overview.appointmentsNeedingScheduling?.count ?? 0) > 0
+              ? 'attention'
+              : 'neutral'
+          }
+        />
       </div>
+
+      {overview.appointmentsNeedingScheduling ? (
+        <section className="mt-6 min-w-0 rounded-lg border border-line bg-surface-raised p-5">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-semibold">Confirmed - Needs Scheduling</h2>
+            <Link
+              to="/admin/appointments"
+              search={{ status: 'CONFIRMED' }}
+              className="text-sm font-medium text-gold-deep hover:underline"
+            >
+              Appointments
+            </Link>
+          </div>
+          {overview.appointmentsNeedingScheduling.next.length > 0 ? (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[640px] border-separate border-spacing-0 text-sm">
+                <thead>
+                  <tr className="text-left text-xs tracking-wider text-ink-soft uppercase">
+                    <th className="border-b border-line px-3 py-2">
+                      Appointment
+                    </th>
+                    <th className="border-b border-line px-3 py-2">
+                      Service / House
+                    </th>
+                    <th className="border-b border-line px-3 py-2">
+                      Confirmed
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overview.appointmentsNeedingScheduling.next.map(
+                    (appointment) => (
+                      <tr key={appointment.publicId}>
+                        <td className="border-b border-line px-3 py-2">
+                          <Link
+                            to="/admin/appointments/$id"
+                            params={{ id: appointment.id }}
+                            className="font-mono text-xs text-gold-deep hover:text-ink"
+                          >
+                            {appointment.publicId.slice(0, 8)}
+                          </Link>
+                        </td>
+                        <td className="border-b border-line px-3 py-2 text-xs">
+                          {appointment.serviceName}
+                          <br />
+                          <span className="text-ink-soft">
+                            {appointment.houseName}
+                          </span>
+                        </td>
+                        <td className="border-b border-line px-3 py-2 text-xs text-ink-soft">
+                          {formatDateTime(appointment.confirmedAt)}
+                        </td>
+                      </tr>
+                    ),
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-ink-soft">
+              No confirmed appointments are waiting for scheduling.
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         <section className="min-w-0 rounded-lg border border-line bg-surface-raised p-5">

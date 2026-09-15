@@ -155,6 +155,13 @@
       "when": 1789143064332,
       "tag": "0021_manual_prayer_room_media",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "5",
+      "when": 1790010000000,
+      "tag": "0022_admin_scheduled_appointments",
+      "breakpoints": true
     }
   ]
 }

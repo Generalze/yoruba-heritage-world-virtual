@@ -141,12 +141,19 @@ function AppointmentsList() {
             {rows.map((appointment) => (
               <tr key={appointment.id} className="border-b border-line">
                 <td className="py-3 pr-4 font-mono text-xs">
-                  {appointment.startsAtUtc}
+                  {appointment.startsAtUtc ?? 'Needs scheduling'}
                 </td>
                 <td className="py-3 pr-4">{appointment.serviceNameSnapshot}</td>
                 <td className="py-3 pr-4">{appointment.houseNameSnapshot}</td>
                 <td className="py-3 pr-4">
-                  <StatusBadge status={appointment.status} />
+                  {appointment.status === 'CONFIRMED' &&
+                  appointment.startsAtUtc == null ? (
+                    <span className="rounded-full border border-gold/40 bg-gold/10 px-2.5 py-1 text-xs font-semibold text-gold-deep">
+                      Confirmed - Needs Scheduling
+                    </span>
+                  ) : (
+                    <StatusBadge status={appointment.status} />
+                  )}
                 </td>
                 <td className="py-3 text-right">
                   <Link

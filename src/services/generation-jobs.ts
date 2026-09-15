@@ -1,6 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm'
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lte,
+  or,
+  sql,
+} from 'drizzle-orm'
 
 import { getDb } from '@/db'
 import {
@@ -210,6 +220,11 @@ export async function enqueuePrayerGenerationUnderTx(
       'Generation jobs are only created for CONFIRMED appointments.',
     )
   }
+  if (row.startsAtUtc == null) {
+    throw new GenerationJobError(
+      'Generation jobs require a scheduled appointment.',
+    )
+  }
   const guidanceSet = (
     await tx
       .select({
@@ -342,10 +357,7 @@ async function claimDueJob(
             ),
             or(
               isNull(prayerGenerationJobs.leaseExpiresAt),
-              lte(
-                prayerGenerationJobs.leaseExpiresAt,
-                toSqlDate(screeningNow),
-              ),
+              lte(prayerGenerationJobs.leaseExpiresAt, toSqlDate(screeningNow)),
             ),
           ),
         )
@@ -359,8 +371,7 @@ async function claimDueJob(
     // RECHECK eligibility against freshNow — the screening filter
     // above may have run against an instant that is now stale.
     if (
-      (candidate.nextAttemptAt != null &&
-        candidate.nextAttemptAt > freshNow) ||
+      (candidate.nextAttemptAt != null && candidate.nextAttemptAt > freshNow) ||
       (candidate.leaseExpiresAt != null && candidate.leaseExpiresAt > freshNow)
     ) {
       return null
@@ -562,8 +573,7 @@ export type GenerationJobPatch = Partial<
   typeof prayerGenerationJobs.$inferInsert
 >
 export type LockedGenerationJobPatch =
-  | GenerationJobPatch
-  | ((freshNow: Date) => GenerationJobPatch)
+  GenerationJobPatch | ((freshNow: Date) => GenerationJobPatch)
 
 function resolveLockedPatch(
   patch: LockedGenerationJobPatch | undefined,
@@ -1392,7 +1402,10 @@ async function ensureVisualTaskRow(
       .where(
         and(
           eq(prayerGenerationVisualTasks.generationJobId, jobId),
-          eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(
+            prayerGenerationVisualTasks.manifestSnapshotId,
+            manifestSnapshotId,
+          ),
           eq(prayerGenerationVisualTasks.taskId, task.taskId),
         ),
       )
@@ -1418,7 +1431,10 @@ async function ensureVisualTaskRow(
       .where(
         and(
           eq(prayerGenerationVisualTasks.generationJobId, jobId),
-          eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(
+            prayerGenerationVisualTasks.manifestSnapshotId,
+            manifestSnapshotId,
+          ),
           eq(prayerGenerationVisualTasks.taskId, task.taskId),
         ),
       )
@@ -1516,8 +1532,10 @@ export async function runVisualGenerationOnce(
     // static import of either here would create a cycle back to this
     // module. Dependency defaults are resolved from the SAME lazy
     // import, never a separate stale reference.
-    const { loadAndValidateGenerationManifest, loadGenerationManifestSnapshot } =
-      await import('./generation-storyboards')
+    const {
+      loadAndValidateGenerationManifest,
+      loadGenerationManifestSnapshot,
+    } = await import('./generation-storyboards')
     const {
       submitScene,
       pollScene,
@@ -1526,16 +1544,16 @@ export async function runVisualGenerationOnce(
     } = await import('./visual-generation')
     const doSubmit = dependencies.submitScene ?? submitScene
     const doPoll = dependencies.pollScene ?? pollScene
-    const { getVisualGenerationProvider } = await import(
-      '@/providers/visual-generation/registry'
-    )
+    const { getVisualGenerationProvider } =
+      await import('@/providers/visual-generation/registry')
     const activeProviderCode =
       dependencies.activeProviderCode ??
       (() => getVisualGenerationProvider().code)
 
     const validated = await loadAndValidateGenerationManifest(job.id)
     if (validated.status !== 'VALID') {
-      const reason = validated.status === 'INVALID' ? validated.reasons[0] : null
+      const reason =
+        validated.status === 'INVALID' ? validated.reasons[0] : null
       const structural =
         reason != null && STRUCTURAL_MANIFEST_FAILURES.includes(reason)
       const detail =
@@ -1925,7 +1943,10 @@ export async function runVisualGenerationOnce(
                 and(
                   eq(prayerGenerationVisualTasks.id, row.id),
                   eq(prayerGenerationVisualTasks.status, 'SUBMITTED'),
-                  eq(prayerGenerationVisualTasks.providerCode, reservedProvider),
+                  eq(
+                    prayerGenerationVisualTasks.providerCode,
+                    reservedProvider,
+                  ),
                   isNull(prayerGenerationVisualTasks.providerOperationId),
                 ),
               )
@@ -2024,10 +2045,7 @@ export async function runVisualGenerationOnce(
           // simply OUTSTANDING: this worker waits, and submits
           // nothing.
           const reservedAt = row.submittedAt?.getTime() ?? 0
-          if (
-            nowForPoll.getTime() - reservedAt <
-            RESERVATION_STALE_AFTER_MS
-          ) {
+          if (nowForPoll.getTime() - reservedAt < RESERVATION_STALE_AFTER_MS) {
             anyOutstanding = true
             continue
           }
@@ -2302,7 +2320,10 @@ export async function runVisualGenerationOnce(
       .where(
         and(
           eq(prayerGenerationVisualTasks.generationJobId, job.id),
-          eq(prayerGenerationVisualTasks.manifestSnapshotId, manifestSnapshotId),
+          eq(
+            prayerGenerationVisualTasks.manifestSnapshotId,
+            manifestSnapshotId,
+          ),
         ),
       )
     // Against the RE-validated manifest, not the one read at the top of
@@ -2372,7 +2393,11 @@ export async function runVisualGenerationOnce(
     )
     if (outcome === 'LOST') return { status: 'LEASE_LOST', jobId: job.id }
     return outcome === 'FAILED'
-      ? { status: 'FAILED', jobId: job.id, errorCode: 'VISUAL_GENERATION_ERROR' }
+      ? {
+          status: 'FAILED',
+          jobId: job.id,
+          errorCode: 'VISUAL_GENERATION_ERROR',
+        }
       : {
           status: 'RETRY_SCHEDULED',
           jobId: job.id,
@@ -2736,8 +2761,10 @@ export async function runAudioGenerationOnce(
     // static import of either here would create a cycle back to this
     // module. Dependency defaults are resolved from the SAME lazy
     // import, never a separate stale reference.
-    const { loadAndValidateGenerationManifest, loadGenerationManifestSnapshot } =
-      await import('./generation-storyboards')
+    const {
+      loadAndValidateGenerationManifest,
+      loadGenerationManifestSnapshot,
+    } = await import('./generation-storyboards')
     const {
       submitSpeech,
       pollSpeech,
@@ -2760,7 +2787,8 @@ export async function runAudioGenerationOnce(
 
     const validated = await loadAndValidateGenerationManifest(job.id)
     if (validated.status !== 'VALID') {
-      const reason = validated.status === 'INVALID' ? validated.reasons[0] : null
+      const reason =
+        validated.status === 'INVALID' ? validated.reasons[0] : null
       const structural =
         reason != null && STRUCTURAL_MANIFEST_FAILURES.includes(reason)
       const detail =
@@ -3325,10 +3353,7 @@ export async function runAudioGenerationOnce(
           // A LIVE RESERVATION IS NOT AN UNKNOWN OUTCOME — another
           // worker may still be inside the provider call.
           const reservedAt = row.submittedAt?.getTime() ?? 0
-          if (
-            nowForPoll.getTime() - reservedAt <
-            RESERVATION_STALE_AFTER_MS
-          ) {
+          if (nowForPoll.getTime() - reservedAt < RESERVATION_STALE_AFTER_MS) {
             anyOutstanding = true
             continue
           }

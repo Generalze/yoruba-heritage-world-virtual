@@ -60,10 +60,10 @@ export interface PrayerRoomStatus {
    * page already shows its owner. */
   serviceName: string
   houseName: string
-  startsAtUtc: string
+  startsAtUtc: string | null
   /** The Prayer Room opens exactly at the CURRENT appointment start, so
    * a reschedule moves it automatically. */
-  opensAtUtc: string
+  opensAtUtc: string | null
   userTimezone: string
 }
 
@@ -112,7 +112,7 @@ interface OwnedAppointmentRow {
   id: number
   publicId: string
   status: string
-  startsAtUtc: string
+  startsAtUtc: string | null
   userTimezone: string
   serviceNameSnapshot: string
   houseName: string
@@ -260,6 +260,9 @@ async function proveAccess(
   if (!appointment) return { ok: false, state: 'UNAVAILABLE' }
   if (!PLAYABLE_APPOINTMENT_STATUSES.includes(appointment.status)) {
     return { ok: false, state: 'UNAVAILABLE' }
+  }
+  if (appointment.startsAtUtc == null) {
+    return { ok: false, state: 'LOCKED' }
   }
   const manualMedia = manualMediaFromAppointment(appointment)
   if (manualMedia?.status === 'ACTIVE') {
